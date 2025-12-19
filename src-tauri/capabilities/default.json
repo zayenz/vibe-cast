@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for all windows",
+  "windows": ["main", "viz"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:event:default",
+    "core:webview:default",
+    "core:window:default"
+  ]
+}
