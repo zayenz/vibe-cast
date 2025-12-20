@@ -25,7 +25,11 @@ pub async fn start_server(app_handle: AppHandle, port: u16) {
 
     // Get the path to the frontend assets
     let dist_path = if cfg!(debug_assertions) {
-        std::env::current_dir().unwrap().join("dist")
+        let mut path = std::env::current_dir().unwrap();
+        if path.ends_with("src-tauri") {
+            path = path.parent().unwrap().to_path_buf();
+        }
+        path.join("dist")
     } else {
         let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         resource_path.join("dist")

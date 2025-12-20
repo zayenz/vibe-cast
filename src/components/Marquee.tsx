@@ -33,6 +33,7 @@ export const Marquee: React.FC = () => {
       <AnimatePresence>
         {displayMessage && (
           <motion.div
+            key={messageTimestamp}
             initial={{ x: '100%' }}
             animate={{ x: '-100%' }}
             exit={{ opacity: 0 }}
