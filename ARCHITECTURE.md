@@ -42,8 +42,9 @@ Each window (Control Plane and Visualizer) runs in its own webview context with 
 
 2.  **API-Based Sync (Mobile Remote)**:
     -   The Rust backend maintains an `AppStateSync` struct that mirrors the current application state.
-    -   The mobile remote fetches initial state via `GET /api/state` on load.
+    -   The mobile remote fetches state via `GET /api/state` on load and polls every 3 seconds to stay in sync.
     -   Commands from the remote are sent via `POST /api/command` and broadcast as `remote-command` events.
+    -   Note: The remote uses polling because it runs in a mobile browser and cannot receive Tauri events.
 
 3.  **Audio Data Flow**:
     -   Audio is captured via `cpal` and processed with `realfft` in Rust.

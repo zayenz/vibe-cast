@@ -11,22 +11,55 @@ export const RemoteControl: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch initial state from the server
+  // Fetch state from server and poll for updates
   useEffect(() => {
-    fetch('/api/state')
-      .then(res => {
+    let isInitialLoad = true;
+    let abortController: AbortController | null = null;
+
+    const fetchState = async () => {
+      // Cancel any in-flight request to prevent stale data from overwriting fresh data
+      if (abortController) {
+        abortController.abort();
+      }
+      abortController = new AbortController();
+
+      try {
+        const res = await fetch('/api/state', { signal: abortController.signal });
         if (!res.ok) throw new Error('Failed to fetch state');
-        return res.json();
-      })
-      .then((state: AppState) => {
+        const state: AppState = await res.json();
         setAppState(state);
-        setLoading(false);
-      })
-      .catch(err => {
+        if (isInitialLoad) {
+          setLoading(false);
+          isInitialLoad = false;
+        }
+        setError(null);
+      } catch (err) {
+        // Ignore abort errors - they're expected when we cancel stale requests
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to fetch state:', err);
-        setError('Could not connect to visualizer');
-        setLoading(false);
-      });
+        if (isInitialLoad) {
+          // Only show error on initial load
+          setError('Could not connect to visualizer');
+          setLoading(false);
+          isInitialLoad = false;
+        }
+      }
+    };
+
+    // Initial fetch
+    fetchState();
+
+    // Poll for updates every 3 seconds
+    const pollInterval = setInterval(fetchState, 3000);
+
+    return () => {
+      clearInterval(pollInterval);
+      if (abortController) {
+        abortController.abort();
+      }
+    };
   }, []);
 
   // Derive current values from fetched state
