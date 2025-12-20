@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "activeVisualization": "fireplace",
+  "enabledVisualizations": ["fireplace", "techno"],
+  "commonSettings": {
+    "intensity": 1.0,
+    "dim": 1.0
+  },
+  "visualizationSettings": {
+    "fireplace": {
+      "emberCount": 15,
+      "flameCount": 12,
+      "flameHeight": 1.0,
+      "glowColor": "#ea580c",
+      "showLogs": true
+    },
+    "techno": {
+      "barCount": 48,
+      "sphereScale": 1.0,
+      "sphereDistort": 0.5,
+      "colorScheme": "rainbow",
+      "showSphere": true,
+      "showBars": true
+    }
+  },
+  "messages": [
+    {
+      "id": "1",
+      "text": "Hello World!",
+      "textStyle": "scrolling-capitals"
+    },
+    {
+      "id": "2",
+      "text": "Keep it calm...",
+      "textStyle": "fade"
+    },
+    {
+      "id": "3",
+      "text": "TECHNO TIME",
+      "textStyle": "scrolling-capitals"
+    }
+  ],
+  "defaultTextStyle": "scrolling-capitals",
+  "textStyleSettings": {
+    "scrolling-capitals": {
+      "duration": 10,
+      "fontSize": 8,
+      "color": "#ffffff",
+      "glowIntensity": 0.5,
+      "position": "top"
+    },
+    "fade": {
+      "displayDuration": 5,
+      "fadeInDuration": 0.5,
+      "fadeOutDuration": 0.5,
+      "fontSize": 5,
+      "color": "#ffffff",
+      "uppercase": false,
+      "fontWeight": "bold",
+      "blurAmount": 0
+    }
+  }
+}

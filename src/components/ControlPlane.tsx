@@ -3,12 +3,26 @@ import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { QRCodeSVG } from 'qrcode.react';
-import { Flame, Music, Send, Monitor, Smartphone, MessageSquare, Settings2, Loader2 } from 'lucide-react';
+import { 
+  Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
+  Settings2, Loader2, Sliders, Save, Upload,
+  ChevronDown, ChevronUp, Trash2
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
+import { visualizationRegistry, getVisualization } from '../plugins/visualizations';
+import { textStyleRegistry } from '../plugins/textStyles';
+import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
+import { MessageConfig, AppConfiguration } from '../plugins/types';
 
 // API base for Tauri windows - they need to hit the Axum server directly
 const API_BASE = 'http://localhost:8080';
+
+// Icon map for visualizations
+const iconMap: Record<string, React.ReactNode> = {
+  'Flame': <Flame size={32} />,
+  'Music': <Music size={32} />,
+};
 
 export const ControlPlane: React.FC = () => {
   // SSE-based state - single source of truth
@@ -17,13 +31,20 @@ export const ControlPlane: React.FC = () => {
   // Local UI state
   const [newMessage, setNewMessage] = useState('');
   const [serverInfo, setServerInfo] = useState<{ ip: string; port: number } | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [expandedMessage, setExpandedMessage] = useState<string | null>(null);
 
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
   
   // Derive state values (with defaults while loading)
-  const mode = state?.mode ?? 'fireplace';
+  const activeVisualization = state?.activeVisualization ?? 'fireplace';
+  const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
+  const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
+  const visualizationSettings = state?.visualizationSettings ?? {};
   const messages = state?.messages ?? [];
+  const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
+  const textStyleSettings = state?.textStyleSettings ?? {};
 
   // Fetch server info from Tauri on mount
   useEffect(() => {
@@ -57,9 +78,71 @@ export const ControlPlane: React.FC = () => {
 
   const handleAddMessage = () => {
     if (newMessage.trim()) {
-      sendCommand('set-messages', [...messages, newMessage.trim()]);
+      const newMsg: MessageConfig = {
+        id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+        text: newMessage.trim(),
+        textStyle: defaultTextStyle,
+      };
+      sendCommand('set-messages', [...messages, newMsg]);
       setNewMessage('');
     }
+  };
+
+  const handleDeleteMessage = (id: string) => {
+    sendCommand('set-messages', messages.filter(m => m.id !== id));
+    if (expandedMessage === id) setExpandedMessage(null);
+  };
+
+  const handleUpdateMessageStyle = (id: string, textStyle: string) => {
+    sendCommand('set-messages', messages.map(m => 
+      m.id === id ? { ...m, textStyle } : m
+    ));
+  };
+
+  const handleTriggerMessage = (msg: MessageConfig) => {
+    sendCommand('trigger-message', msg);
+  };
+
+  const handleSaveConfig = async () => {
+    // Create configuration object
+    const config: AppConfiguration = {
+      version: 1,
+      activeVisualization,
+      enabledVisualizations,
+      commonSettings,
+      visualizationSettings,
+      messages,
+      defaultTextStyle,
+      textStyleSettings,
+    };
+    
+    // Download as JSON file
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `visualizer-config-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleLoadConfig = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const text = await file.text();
+        try {
+          const config = JSON.parse(text) as AppConfiguration;
+          sendCommand('load-configuration', config);
+        } catch (err) {
+          console.error('Failed to parse config file:', err);
+        }
+      }
+    };
+    input.click();
   };
 
   const remoteUrl = serverInfo ? `http://${serverInfo.ip}:${serverInfo.port}` : '';
@@ -77,6 +160,8 @@ export const ControlPlane: React.FC = () => {
     );
   }
 
+  const activePlugin = getVisualization(activeVisualization);
+
   return (
     <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
       {/* Dynamic Background */}
@@ -87,7 +172,7 @@ export const ControlPlane: React.FC = () => {
 
       <div className="relative z-10 max-w-7xl mx-auto px-8 py-12">
         {/* Header */}
-        <header className="flex justify-between items-end mb-16">
+        <header className="flex justify-between items-end mb-12">
           <div>
             <motion.div 
               initial={{ opacity: 0, y: -20 }}
@@ -99,73 +184,145 @@ export const ControlPlane: React.FC = () => {
                 {isConnected ? 'System Active' : 'Reconnecting...'}
               </span>
             </motion.div>
-            <h1 className="text-6xl font-black tracking-tight bg-linear-to-b from-white to-zinc-500 bg-clip-text text-transparent">
+            <h1 className="text-5xl font-black tracking-tight bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent">
               VISUALIZER
             </h1>
           </div>
           
-          <button 
-            onClick={toggleViz}
-            className="group relative px-8 py-4 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-2xl transition-all active:scale-95 overflow-hidden"
-          >
-            <div className="absolute inset-0 bg-linear-to-tr from-orange-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <div className="relative flex items-center gap-3 font-bold text-sm">
-              <Monitor size={18} className="text-orange-500" />
-              Toggle Stage
-            </div>
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Config buttons */}
+            <button 
+              onClick={handleSaveConfig}
+              className="p-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-xl transition-all active:scale-95"
+              title="Save Configuration"
+            >
+              <Save size={18} className="text-zinc-400" />
+            </button>
+            <button 
+              onClick={handleLoadConfig}
+              className="p-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-xl transition-all active:scale-95"
+              title="Load Configuration"
+            >
+              <Upload size={18} className="text-zinc-400" />
+            </button>
+            
+            <button 
+              onClick={toggleViz}
+              className="group relative px-6 py-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-xl transition-all active:scale-95 overflow-hidden"
+            >
+              <div className="absolute inset-0 bg-gradient-to-tr from-orange-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative flex items-center gap-3 font-bold text-sm">
+                <Monitor size={18} className="text-orange-500" />
+                Toggle Stage
+              </div>
+            </button>
+          </div>
         </header>
 
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-12 gap-6">
           {/* Main Controls */}
-          <div className="col-span-12 lg:col-span-8 space-y-8">
+          <div className="col-span-12 lg:col-span-8 space-y-6">
+            {/* Visualization Selection */}
             <section>
-              <div className="flex items-center gap-3 mb-8">
-                <Settings2 size={18} className="text-zinc-500" />
-                <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Environment Control</h2>
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <Settings2 size={18} className="text-zinc-500" />
+                  <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Visualization</h2>
+                </div>
+                <button
+                  onClick={() => setShowSettings(!showSettings)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
+                    showSettings ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <Sliders size={14} />
+                  Settings
+                </button>
               </div>
               
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <EnvironmentCard 
-                  active={mode === 'fireplace'}
-                  onClick={() => sendCommand('set-mode', 'fireplace')}
-                  icon={<Flame size={32} />}
-                  title="Fireplace"
-                  description="Procedural ambient warmth"
-                  color="orange"
-                  disabled={isPending}
-                />
-                <EnvironmentCard 
-                  active={mode === 'techno'}
-                  onClick={() => sendCommand('set-mode', 'techno')}
-                  icon={<Music size={32} />}
-                  title="Techno"
-                  description="Audio-reactive 3D stage"
-                  color="blue"
-                  disabled={isPending}
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {visualizationRegistry.filter(v => enabledVisualizations.includes(v.id)).map((viz) => (
+                  <VisualizationCard 
+                    key={viz.id}
+                    active={activeVisualization === viz.id}
+                    onClick={() => sendCommand('set-active-visualization', viz.id)}
+                    icon={iconMap[viz.icon] || <Settings2 size={32} />}
+                    title={viz.name}
+                    description={viz.description}
+                    disabled={isPending}
+                  />
+                ))}
               </div>
             </section>
 
+            {/* Settings Panel */}
+            <AnimatePresence>
+              {showSettings && (
+                <motion.section
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 space-y-6">
+                    {/* Common Settings */}
+                    <div>
+                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                        Common Settings
+                      </h3>
+                      <CommonSettings
+                        intensity={commonSettings.intensity}
+                        dim={commonSettings.dim}
+                        onIntensityChange={(v) => sendCommand('set-common-settings', { ...commonSettings, intensity: v })}
+                        onDimChange={(v) => sendCommand('set-common-settings', { ...commonSettings, dim: v })}
+                      />
+                    </div>
+
+                    {/* Active Visualization Settings */}
+                    {activePlugin && activePlugin.settingsSchema.length > 0 && (
+                      <div>
+                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                          {activePlugin.name} Settings
+                        </h3>
+                        <SettingsRenderer
+                          schema={activePlugin.settingsSchema}
+                          values={visualizationSettings[activeVisualization] || {}}
+                          onChange={(key, value) => {
+                            const newSettings = {
+                              ...visualizationSettings,
+                              [activeVisualization]: {
+                                ...(visualizationSettings[activeVisualization] || {}),
+                                [key]: value,
+                              }
+                            };
+                            sendCommand('set-visualization-settings', newSettings);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </motion.section>
+              )}
+            </AnimatePresence>
+
             {/* Remote Info Section */}
             <section className="relative group">
-              <div className="absolute -inset-px bg-linear-to-r from-orange-500/20 via-zinc-800 to-blue-500/20 rounded-[2rem] opacity-50 group-hover:opacity-100 transition-opacity" />
-              <div className="relative bg-zinc-950 rounded-[2rem] p-8 flex flex-col md:flex-row items-center gap-10">
-                <div className="bg-white p-4 rounded-2xl shadow-2xl shrink-0">
+              <div className="absolute -inset-px bg-gradient-to-r from-orange-500/20 via-zinc-800 to-blue-500/20 rounded-2xl opacity-50 group-hover:opacity-100 transition-opacity" />
+              <div className="relative bg-zinc-950 rounded-2xl p-6 flex flex-col md:flex-row items-center gap-8">
+                <div className="bg-white p-3 rounded-xl shadow-2xl shrink-0">
                   {remoteUrl ? (
-                    <QRCodeSVG value={remoteUrl} size={160} level="H" />
+                    <QRCodeSVG value={remoteUrl} size={120} level="H" />
                   ) : (
-                    <div className="w-40 h-40 bg-zinc-100 animate-pulse rounded-lg" />
+                    <div className="w-28 h-28 bg-zinc-100 animate-pulse rounded-lg" />
                   )}
                 </div>
                 <div className="flex-1 text-center md:text-left">
-                  <div className="flex items-center justify-center md:justify-start gap-2 mb-4">
-                    <Smartphone size={20} className="text-orange-500" />
-                    <h3 className="text-xl font-bold">Mobile Remote</h3>
+                  <div className="flex items-center justify-center md:justify-start gap-2 mb-3">
+                    <Smartphone size={18} className="text-orange-500" />
+                    <h3 className="text-lg font-bold">Mobile Remote</h3>
                   </div>
-                  <p className="text-zinc-400 mb-6 leading-relaxed text-sm max-w-md">
-                    Control the entire experience from your phone. Scan the QR code to open the 
-                    instant remote interface on your local network.
+                  <p className="text-zinc-400 mb-4 leading-relaxed text-sm max-w-md">
+                    Control from your phone. Scan the QR code to open the remote.
                   </p>
                   <div className="inline-flex items-center gap-3 bg-black border border-zinc-800 px-4 py-2 rounded-xl">
                     <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
@@ -178,13 +335,13 @@ export const ControlPlane: React.FC = () => {
 
           {/* Sidebar - Messages */}
           <aside className="col-span-12 lg:col-span-4">
-            <div className="flex items-center gap-3 mb-8">
+            <div className="flex items-center gap-3 mb-6">
               <MessageSquare size={18} className="text-zinc-500" />
               <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
             </div>
 
-            <div className="bg-zinc-900/50 border border-zinc-800 rounded-[2rem] p-6 backdrop-blur-md flex flex-col h-[600px]">
-              <div className="flex gap-2 mb-6">
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur-md flex flex-col max-h-[700px]">
+              <div className="flex gap-2 mb-4">
                 <input
                   type="text"
                   value={newMessage}
@@ -194,7 +351,7 @@ export const ControlPlane: React.FC = () => {
                       handleAddMessage();
                     }
                   }}
-                  placeholder="New preset..."
+                  placeholder="New message..."
                   className="flex-1 bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:border-orange-500/50 outline-none transition-all"
                 />
                 <button
@@ -206,20 +363,66 @@ export const ControlPlane: React.FC = () => {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                 <AnimatePresence initial={false}>
-                  {messages.map((msg, i) => (
-                    <motion.button
-                      key={msg + i}
+                  {messages.map((msg) => (
+                    <motion.div
+                      key={msg.id}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
-                      onClick={() => sendCommand('trigger-message', msg)}
-                      disabled={isPending}
-                      className="w-full group relative px-5 py-4 bg-zinc-950 border border-zinc-800/50 rounded-xl hover:border-orange-500/30 transition-all text-left overflow-hidden disabled:opacity-50"
+                      exit={{ opacity: 0, x: 10 }}
+                      className="bg-zinc-950 border border-zinc-800/50 rounded-xl overflow-hidden"
                     >
-                      <div className="absolute inset-0 bg-linear-to-r from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                      <span className="relative z-10 text-sm font-medium text-zinc-300 group-hover:text-white transition-colors">{msg}</span>
-                    </motion.button>
+                      <div className="flex items-center gap-2 p-3">
+                        <button
+                          onClick={() => handleTriggerMessage(msg)}
+                          disabled={isPending}
+                          className="flex-1 text-left text-sm font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50 truncate"
+                        >
+                          {msg.text}
+                        </button>
+                        <button
+                          onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
+                          className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
+                        >
+                          {expandedMessage === msg.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      
+                      <AnimatePresence>
+                        {expandedMessage === msg.id && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="px-3 pb-3 border-t border-zinc-800/50"
+                          >
+                            <div className="pt-3">
+                              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                Text Style
+                              </label>
+                              <select
+                                value={msg.textStyle}
+                                onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                              >
+                                {textStyleRegistry.map((style) => (
+                                  <option key={style.id} value={style.id}>
+                                    {style.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
                   ))}
                 </AnimatePresence>
               </div>
@@ -231,38 +434,33 @@ export const ControlPlane: React.FC = () => {
   );
 };
 
-interface EnvironmentCardProps {
+interface VisualizationCardProps {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   title: string;
   description: string;
-  color: 'orange' | 'blue';
   disabled?: boolean;
 }
 
-const EnvironmentCard: React.FC<EnvironmentCardProps> = ({ 
-  active, onClick, icon, title, description, color, disabled 
+const VisualizationCard: React.FC<VisualizationCardProps> = ({ 
+  active, onClick, icon, title, description, disabled 
 }) => {
-  const colorClasses = color === 'orange' 
-    ? 'from-orange-600 to-red-600 shadow-orange-900/20' 
-    : 'from-blue-600 to-indigo-600 shadow-blue-900/20';
-  
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`relative p-8 rounded-[2rem] text-left transition-all duration-500 active:scale-[0.98] group overflow-hidden disabled:opacity-70 ${
+      className={`relative p-6 rounded-2xl text-left transition-all duration-300 active:scale-[0.98] group overflow-hidden disabled:opacity-70 ${
         active 
-          ? `bg-linear-to-br ${colorClasses} text-white shadow-2xl` 
+          ? 'bg-gradient-to-br from-orange-600 to-red-600 text-white shadow-2xl shadow-orange-900/30' 
           : 'bg-zinc-900/50 border border-zinc-800 text-zinc-400 hover:bg-zinc-800/50 hover:border-zinc-700'
       }`}
     >
-      <div className={`relative z-10 mb-6 p-3 w-fit rounded-2xl ${active ? 'bg-white/20' : 'bg-zinc-800 group-hover:scale-110 transition-transform'}`}>
+      <div className={`relative z-10 mb-4 p-2 w-fit rounded-xl ${active ? 'bg-white/20' : 'bg-zinc-800 group-hover:scale-110 transition-transform'}`}>
         {icon}
       </div>
       <div className="relative z-10">
-        <h3 className={`text-2xl font-black uppercase tracking-tight mb-1 ${active ? 'text-white' : 'text-zinc-200'}`}>
+        <h3 className={`text-xl font-black uppercase tracking-tight mb-1 ${active ? 'text-white' : 'text-zinc-200'}`}>
           {title}
         </h3>
         <p className={`text-xs ${active ? 'text-white/70' : 'text-zinc-500'}`}>
@@ -271,7 +469,7 @@ const EnvironmentCard: React.FC<EnvironmentCardProps> = ({
       </div>
       {active && (
         <motion.div 
-          layoutId="active-glow"
+          layoutId="viz-active-glow"
           className="absolute inset-0 bg-white/10 mix-blend-overlay" 
         />
       )}

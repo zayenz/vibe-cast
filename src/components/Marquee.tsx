@@ -1,3 +1,10 @@
+/**
+ * Legacy Marquee Component
+ * 
+ * This component is kept for backward compatibility.
+ * New code should use the TextStyleRenderer in VisualizerWindow instead.
+ */
+
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '../store';
@@ -14,7 +21,9 @@ export const Marquee: React.FC = () => {
       
       // Small delay to allow AnimatePresence to see the null state
       const nextTick = setTimeout(() => {
-        setDisplayMessage(activeMessage);
+        // Handle both new MessageConfig format and legacy string format
+        const text = typeof activeMessage === 'string' ? activeMessage : activeMessage.text;
+        setDisplayMessage(text);
       }, 50);
 
       const timer = setTimeout(() => {
@@ -49,6 +58,3 @@ export const Marquee: React.FC = () => {
     </div>
   );
 };
-
-
-

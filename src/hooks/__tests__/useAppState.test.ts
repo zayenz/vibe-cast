@@ -129,21 +129,26 @@ describe('useAppState', () => {
     expect(sse?.readyState).toBe(2); // CLOSED
   });
 
-  it('handles triggered_message in state', async () => {
+  it('handles triggeredMessage in state', async () => {
     const { result } = renderHook(() => useAppState());
     
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
-        mode: 'fireplace',
-        messages: ['Hello'],
-        triggered_message: 'Hello',
+        activeVisualization: 'fireplace',
+        enabledVisualizations: ['fireplace', 'techno'],
+        commonSettings: { intensity: 1.0, dim: 1.0 },
+        visualizationSettings: {},
+        messages: [{ id: '1', text: 'Hello', textStyle: 'scrolling-capitals' }],
+        triggeredMessage: { id: '1', text: 'Hello', textStyle: 'scrolling-capitals' },
+        defaultTextStyle: 'scrolling-capitals',
+        textStyleSettings: {},
       });
     });
 
     await waitFor(() => {
-      expect(result.current.state?.triggered_message).toBe('Hello');
+      expect(result.current.state?.triggeredMessage?.text).toBe('Hello');
     });
   });
 });

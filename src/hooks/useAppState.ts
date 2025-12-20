@@ -1,12 +1,31 @@
 import { useEffect, useState, useCallback } from 'react';
+import { 
+  CommonVisualizationSettings, 
+  MessageConfig,
+  DEFAULT_COMMON_SETTINGS,
+} from '../plugins/types';
 
 /**
  * Application state from the SSE stream
+ * Updated to match the new plugin-based architecture
  */
 export interface AppState {
-  mode: 'fireplace' | 'techno';
-  messages: string[];
-  triggered_message?: string | null;
+  // Visualization state
+  activeVisualization: string;
+  enabledVisualizations: string[];
+  commonSettings: CommonVisualizationSettings;
+  visualizationSettings: Record<string, Record<string, unknown>>;
+  
+  // Message state
+  messages: MessageConfig[];
+  triggeredMessage?: MessageConfig | null;
+  
+  // Text style state
+  defaultTextStyle: string;
+  textStyleSettings: Record<string, Record<string, unknown>>;
+  
+  // Legacy compatibility
+  mode?: 'fireplace' | 'techno';
 }
 
 /**
@@ -15,6 +34,48 @@ export interface AppState {
 interface UseAppStateOptions {
   /** Base URL for API calls. Defaults to '' for same-origin */
   apiBase?: string;
+}
+
+/**
+ * Parse SSE state into AppState, handling both legacy and new formats
+ */
+function parseSSEState(data: any): AppState {
+  // Handle new format
+  if (data.activeVisualization !== undefined) {
+    return {
+      activeVisualization: data.activeVisualization,
+      enabledVisualizations: data.enabledVisualizations ?? ['fireplace', 'techno'],
+      commonSettings: data.commonSettings ?? DEFAULT_COMMON_SETTINGS,
+      visualizationSettings: data.visualizationSettings ?? {},
+      messages: data.messages ?? [],
+      triggeredMessage: data.triggeredMessage ?? null,
+      defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
+      textStyleSettings: data.textStyleSettings ?? {},
+      // Legacy compatibility
+      mode: data.activeVisualization === 'techno' ? 'techno' : 'fireplace',
+    };
+  }
+  
+  // Handle legacy format
+  return {
+    activeVisualization: data.mode ?? 'fireplace',
+    enabledVisualizations: ['fireplace', 'techno'],
+    commonSettings: DEFAULT_COMMON_SETTINGS,
+    visualizationSettings: {},
+    messages: Array.isArray(data.messages) 
+      ? data.messages.map((m: any, i: number) => 
+          typeof m === 'string' 
+            ? { id: String(i), text: m, textStyle: 'scrolling-capitals' }
+            : m
+        )
+      : [],
+    triggeredMessage: data.triggered_message 
+      ? { id: 'triggered', text: data.triggered_message, textStyle: 'scrolling-capitals' }
+      : null,
+    defaultTextStyle: 'scrolling-capitals',
+    textStyleSettings: {},
+    mode: data.mode ?? 'fireplace',
+  };
 }
 
 /**
@@ -44,8 +105,9 @@ export function useAppState(options: UseAppStateOptions = {}) {
       eventSource.addEventListener('state', (event) => {
         if (!isMounted) return;
         try {
-          const data = JSON.parse(event.data) as AppState;
-          setState(data);
+          const data = JSON.parse(event.data);
+          const parsedState = parseSSEState(data);
+          setState(parsedState);
           setError(null);
           setIsConnected(true);
         } catch (e) {
@@ -112,4 +174,3 @@ export function useSendCommand(options: UseAppStateOptions = {}) {
 
   return { sendCommand, isPending };
 }
-
