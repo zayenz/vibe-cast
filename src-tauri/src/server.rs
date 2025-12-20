@@ -1,16 +1,23 @@
 use axum::{
     extract::State,
-    response::Html,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html,
+    },
     routing::{get, post},
     Json, Router,
 };
+use futures::{stream::Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio_stream::wrappers::BroadcastStream;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
-use crate::AppStateSync;
+use crate::{AppStateSync, BroadcastState};
 
 #[derive(Clone)]
 struct AppState {
@@ -46,6 +53,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .route("/api/command", post(handle_command))
         .route("/api/state", get(get_state))
         .route("/api/status", get(get_status))
+        .route("/api/events", get(state_events))
         .fallback_service(
             ServeDir::new(dist_path)
                 .append_index_html_on_directories(true)
@@ -62,8 +70,6 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
 }
 
 async fn handle_index() -> Html<&'static str> {
-    // In a real app, you'd read the index.html from dist
-    // For now, we'll assume ServeDir handles it if we point to the right place
     Html("<html><body><h1>Visualizer Remote</h1><p>If you see this, the static files are not yet built. Run <code>npm run build</code>.</p></body></html>")
 }
 
@@ -73,23 +79,46 @@ async fn handle_command(
 ) -> Json<serde_json::Value> {
     println!("Received command: {}", payload.command);
     
-    // Emit the command to the Tauri app
-    let _ = state.app_handle.emit("remote-command", payload);
+    // Update the canonical state
+    let triggered_message = match payload.command.as_str() {
+        "set-mode" => {
+            if let Some(mode) = payload.payload.as_ref().and_then(|p| p.as_str()) {
+                if let Ok(mut m) = state.app_state_sync.mode.lock() {
+                    *m = mode.to_string();
+                }
+            }
+            None
+        }
+        "trigger-message" => {
+            payload.payload.as_ref().and_then(|p| p.as_str()).map(|s| s.to_string())
+        }
+        "set-messages" => {
+            if let Some(messages) = payload.payload.as_ref().and_then(|p| p.as_array()) {
+                if let Ok(mut m) = state.app_state_sync.messages.lock() {
+                    *m = messages.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+            None
+        }
+        _ => None
+    };
+    
+    // Broadcast state update to all SSE subscribers
+    state.app_state_sync.broadcast(triggered_message.clone());
+    
+    // Also emit to Tauri windows (for Visualizer which uses Tauri events for audio sync)
+    let _ = state.app_handle.emit("remote-command", &payload);
 
     Json(serde_json::json!({ "status": "ok" }))
 }
 
 async fn get_state(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let mode = state.app_state_sync.mode.lock()
-        .map(|m| m.clone())
-        .unwrap_or_else(|_| "fireplace".to_string());
-    let messages = state.app_state_sync.messages.lock()
-        .map(|m| m.clone())
-        .unwrap_or_else(|_| vec![]);
-    
+    let current = state.app_state_sync.get_state();
     Json(serde_json::json!({
-        "mode": mode,
-        "messages": messages
+        "mode": current.mode,
+        "messages": current.messages
     }))
 }
 
@@ -97,3 +126,35 @@ async fn get_status() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "online" }))
 }
 
+/// SSE endpoint that streams state updates to clients
+async fn state_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // Subscribe to the broadcast channel
+    let rx = state.app_state_sync.state_tx.subscribe();
+    
+    // Send initial state immediately so clients don't have to wait
+    let initial_state = state.app_state_sync.get_state();
+    
+    // Convert broadcast receiver to a stream, mapping directly to SSE events
+    // filter_map skips lagged errors (when client is slower than broadcast rate)
+    let broadcast_stream = BroadcastStream::new(rx)
+        .filter_map(|result| async move { result.ok() })
+        .map(|broadcast_state: BroadcastState| -> Result<Event, Infallible> {
+            Ok(Event::default()
+                .event("state")
+                .data(serde_json::to_string(&broadcast_state).unwrap_or_default()))
+        });
+    
+    // Prepend with initial state
+    let initial_event = futures::stream::once(async move {
+        Ok(Event::default()
+            .event("state")
+            .data(serde_json::to_string(&initial_state).unwrap_or_default()))
+    });
+    
+    let combined_stream = initial_event.chain(broadcast_stream);
+    
+    Sse::new(combined_stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}

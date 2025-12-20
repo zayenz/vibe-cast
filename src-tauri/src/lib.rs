@@ -4,16 +4,29 @@ mod server;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, Emitter};
 use local_ip_address::local_ip;
+use tokio::sync::broadcast;
 use crate::audio::AudioState;
+
+/// Application state that gets broadcast via SSE
+#[derive(Clone, serde::Serialize, Debug)]
+pub struct BroadcastState {
+    pub mode: String,
+    pub messages: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triggered_message: Option<String>,
+}
 
 /// Shared application state for syncing between windows and the remote
 pub struct AppStateSync {
     pub mode: Mutex<String>,
     pub messages: Mutex<Vec<String>>,
+    /// Broadcast channel for SSE - sends full state on every change
+    pub state_tx: broadcast::Sender<BroadcastState>,
 }
 
 impl AppStateSync {
     pub fn new() -> Self {
+        let (state_tx, _) = broadcast::channel(64);
         Self {
             mode: Mutex::new("fireplace".to_string()),
             messages: Mutex::new(vec![
@@ -21,7 +34,32 @@ impl AppStateSync {
                 "Keep it calm...".to_string(),
                 "TECHNO TIME".to_string(),
             ]),
+            state_tx,
         }
+    }
+
+    /// Get current state snapshot
+    pub fn get_state(&self) -> BroadcastState {
+        let mode = self.mode.lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| "fireplace".to_string());
+        let messages = self.messages.lock()
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        
+        BroadcastState {
+            mode,
+            messages,
+            triggered_message: None,
+        }
+    }
+
+    /// Broadcast current state to all SSE subscribers
+    pub fn broadcast(&self, triggered_message: Option<String>) {
+        let mut state = self.get_state();
+        state.triggered_message = triggered_message;
+        // Ignore send errors (no subscribers)
+        let _ = self.state_tx.send(state);
     }
 }
 
@@ -49,6 +87,8 @@ fn emit_state_change(
     event_type: String, 
     payload: serde_json::Value
 ) {
+    let mut triggered_message = None;
+    
     // Update local state so the API can return current values
     match event_type.as_str() {
         "SET_MODE" => {
@@ -68,12 +108,15 @@ fn emit_state_change(
             }
         }
         "TRIGGER_MESSAGE" => {
-            // No state update needed for trigger - it's a one-time event
+            triggered_message = payload.as_str().map(|s| s.to_string());
         }
         _ => {}
     }
     
-    // Emit to all windows
+    // Broadcast state change to all SSE subscribers
+    state.broadcast(triggered_message);
+    
+    // Also emit to all Tauri windows (for Visualizer which uses Tauri events)
     let _ = handle.emit("state-changed", serde_json::json!({
         "type": event_type,
         "payload": payload

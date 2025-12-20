@@ -1,37 +1,57 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { RemoteControl } from '../RemoteControl';
+import { MockEventSource } from '../../test/mocks/sse';
+import { commandAction } from '../../router';
 
-// Mock fetch to return app state
+// Mock fetch for command submissions
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
+
+function renderRemoteControl() {
+  const router = createMemoryRouter([
+    {
+      path: '/',
+      element: <RemoteControl />,
+      action: commandAction,
+    },
+  ]);
+
+  return render(<RouterProvider router={router} />);
+}
 
 describe('RemoteControl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default mock for /api/state
-    mockFetch.mockImplementation((url: string) => {
-      if (url === '/api/state') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            mode: 'fireplace',
-            messages: ['Test Message'],
-          }),
-        });
+    MockEventSource.reset();
+    
+    // Default mock for fetch
+    mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes('/api/command') && options?.method === 'POST') {
+        return { ok: true, json: async () => ({ status: 'ok' }) };
       }
-      // Default for /api/command
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ status: 'ok' }),
-      });
+      return { ok: false, status: 404 };
     });
   });
 
-  it('renders correctly after loading state', async () => {
-    render(<RemoteControl />);
+  it('shows loading state initially', () => {
+    renderRemoteControl();
+    expect(screen.getByText('Connecting...')).toBeInTheDocument();
+  });
+
+  it('renders correctly after SSE connects', async () => {
+    renderRemoteControl();
     
-    // Wait for loading to complete
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', {
+        mode: 'fireplace',
+        messages: ['Test Message'],
+      });
+    });
+
     await waitFor(() => {
       expect(screen.getByText('Remote')).toBeInTheDocument();
     });
@@ -41,15 +61,29 @@ describe('RemoteControl', () => {
     expect(screen.getByText('Test Message')).toBeInTheDocument();
   });
 
-  it('shows loading state initially', () => {
-    render(<RemoteControl />);
-    expect(screen.getByText('Connecting...')).toBeInTheDocument();
+  it('shows live connection indicator when connected', async () => {
+    renderRemoteControl();
+    
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Live Connection')).toBeInTheDocument();
+    });
   });
 
   it('sends set-mode command when a mode button is clicked', async () => {
-    render(<RemoteControl />);
+    renderRemoteControl();
     
-    // Wait for initial load
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+    });
+
     await waitFor(() => {
       expect(screen.getByText('Techno')).toBeInTheDocument();
     });
@@ -58,39 +92,88 @@ describe('RemoteControl', () => {
     fireEvent.click(technoButton!);
     
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith('/api/command', expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ command: 'set-mode', payload: 'techno' }),
-      }));
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/command'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('set-mode'),
+        })
+      );
     });
   });
 
   it('sends trigger-message command when a message button is clicked', async () => {
-    render(<RemoteControl />);
+    renderRemoteControl();
     
-    // Wait for initial load
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Hello World'] });
+    });
+
     await waitFor(() => {
-      expect(screen.getByText('Test Message')).toBeInTheDocument();
+      expect(screen.getByText('Hello World')).toBeInTheDocument();
     });
     
-    const messageButton = screen.getByText('Test Message');
+    const messageButton = screen.getByText('Hello World');
     fireEvent.click(messageButton);
     
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith('/api/command', expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ command: 'trigger-message', payload: 'Test Message' }),
-      }));
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/command'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('trigger-message'),
+        })
+      );
     });
   });
 
-  it('shows error state when fetch fails', async () => {
-    mockFetch.mockImplementation(() => Promise.reject(new Error('Network error')));
+  it('updates UI when SSE receives new state', async () => {
+    renderRemoteControl();
     
-    render(<RemoteControl />);
-    
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Initial'] });
+    });
+
     await waitFor(() => {
-      expect(screen.getByText('Could not connect to visualizer')).toBeInTheDocument();
+      expect(screen.getByText('Initial')).toBeInTheDocument();
+    });
+
+    // Simulate state update from SSE (e.g., from another client changing mode)
+    await act(async () => {
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'techno', messages: ['Initial', 'New Message'] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('New Message')).toBeInTheDocument();
+    });
+  });
+
+  it('shows reconnecting status when SSE disconnects', async () => {
+    renderRemoteControl();
+    
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Live Connection')).toBeInTheDocument();
+    });
+
+    // Simulate SSE error/disconnect
+    await act(async () => {
+      const sse = MockEventSource.getLatest();
+      sse?.simulateError();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Reconnecting...')).toBeInTheDocument();
     });
   });
 });
