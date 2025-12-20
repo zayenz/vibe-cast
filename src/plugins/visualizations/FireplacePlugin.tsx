@@ -65,11 +65,14 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  const emberCount = (customSettings.emberCount as number) ?? 15;
-  const flameCount = (customSettings.flameCount as number) ?? 12;
-  const flameHeight = (customSettings.flameHeight as number) ?? 1.0;
-  const glowColor = (customSettings.glowColor as string) ?? '#ea580c';
-  const showLogs = (customSettings.showLogs as boolean) ?? true;
+  // Ensure proper type conversion and provide defaults
+  const emberCount = Math.round(Number(customSettings.emberCount) || 15);
+  const flameCount = Math.round(Number(customSettings.flameCount) || 12);
+  const flameHeight = Number(customSettings.flameHeight) || 1.0;
+  const glowColor = String(customSettings.glowColor || '#ea580c');
+  const showLogs = Boolean(customSettings.showLogs !== false && customSettings.showLogs !== 'false');
+  
+  console.log('FireplaceVisualization settings:', { emberCount, flameCount, flameHeight, glowColor, showLogs });
 
   // Apply intensity smoothing to audio data
   // Lower intensity = more smoothing = reactive to larger trends
@@ -122,15 +125,15 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
         
         {/* Flames container */}
         <div className="absolute bottom-12 left-1/2 -translate-x-1/2 w-96 h-128 flex items-end justify-center gap-1 overflow-hidden">
-          {[...Array(flameCount)].map((_, i) => (
-            <FlamePart key={i} intensity={smoothedIntensity} flameHeight={flameHeight} />
+          {Array.from({ length: flameCount }, (_, i) => (
+            <FlamePart key={`flame-${i}-${flameCount}`} intensity={smoothedIntensity} flameHeight={flameHeight} />
           ))}
         </div>
 
         {/* Embers */}
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 w-80 h-80 pointer-events-none">
-          {[...Array(emberCount)].map((_, i) => (
-            <Ember key={i} />
+          {Array.from({ length: emberCount }, (_, i) => (
+            <Ember key={`ember-${i}-${emberCount}`} />
           ))}
         </div>
 

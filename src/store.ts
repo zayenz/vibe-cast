@@ -44,6 +44,7 @@ export interface AppState {
   setEnabledVisualizations: (ids: string[], sync?: boolean) => void;
   setCommonSettings: (settings: Partial<CommonVisualizationSettings>, sync?: boolean) => void;
   setVisualizationSetting: (vizId: string, key: string, value: unknown, sync?: boolean) => void;
+  setVisualizationSettings: (settings: Record<string, Record<string, unknown>>, sync?: boolean) => void;
   
   setMessages: (messages: MessageConfig[], sync?: boolean) => void;
   addMessage: (text: string, sync?: boolean) => void;
@@ -158,6 +159,14 @@ export const useStore = create<AppState>((set, get) => ({
     }));
     if (sync) {
       syncState('SET_VISUALIZATION_SETTINGS', get().visualizationSettings);
+    }
+  },
+
+  setVisualizationSettings: (settings, sync = true) => {
+    console.log('Setting visualization settings:', settings);
+    set({ visualizationSettings: settings });
+    if (sync) {
+      syncState('SET_VISUALIZATION_SETTINGS', settings);
     }
   },
 

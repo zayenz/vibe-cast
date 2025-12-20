@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
-import { MessageConfig, CommonVisualizationSettings } from '../plugins/types';
+import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } from '../plugins/types';
 
 /**
  * Text Style Renderer Component
@@ -70,17 +70,31 @@ const VisualizationRenderer: React.FC<{
     if (!fallback) return <div className="w-full h-full bg-black" />;
     
     const VizComponent = fallback.component;
+    // Merge stored settings with defaults from schema
+    const defaultSettings = getDefaultsFromSchema(fallback.settingsSchema);
+    const storedSettings = visualizationSettings['fireplace'] || {};
+    const customSettings = { ...defaultSettings, ...storedSettings };
+    
     return (
       <VizComponent
         audioData={audioData}
         commonSettings={commonSettings}
-        customSettings={visualizationSettings['fireplace'] || {}}
+        customSettings={customSettings}
       />
     );
   }
 
   const VizComponent = plugin.component;
-  const customSettings = visualizationSettings[visualizationId] || {};
+  // Merge stored settings with defaults from schema
+  const defaultSettings = getDefaultsFromSchema(plugin.settingsSchema);
+  const storedSettings = visualizationSettings[visualizationId] || {};
+  const customSettings = { ...defaultSettings, ...storedSettings };
+  
+  console.log(`VisualizationRenderer [${visualizationId}]:`, {
+    storedSettings,
+    defaultSettings,
+    customSettings,
+  });
 
   return (
     <VizComponent
@@ -108,6 +122,7 @@ export const VisualizerWindow: React.FC = () => {
   const triggerMessage = useStore((state) => state.triggerMessage);
   const setCommonSettings = useStore((state) => state.setCommonSettings);
   const setVisualizationSetting = useStore((state) => state.setVisualizationSetting);
+  const setVisualizationSettings = useStore((state) => state.setVisualizationSettings);
   const setTextStyleSetting = useStore((state) => state.setTextStyleSetting);
   const loadConfiguration = useStore((state) => state.loadConfiguration);
   
@@ -143,6 +158,12 @@ export const VisualizerWindow: React.FC = () => {
         case 'set-common-settings':
           setCommonSettings(payload, false);
           break;
+        case 'set-visualization-settings':
+          console.log('VisualizerWindow: Received set-visualization-settings', payload);
+          if (payload && typeof payload === 'object') {
+            setVisualizationSettings(payload as Record<string, Record<string, unknown>>, false);
+          }
+          break;
         case 'load-configuration':
           loadConfiguration(payload, false);
           break;
@@ -177,11 +198,9 @@ export const VisualizerWindow: React.FC = () => {
           break;
         case 'SET_VISUALIZATION_SETTINGS':
           // Full replacement of visualization settings
-          Object.entries(payload || {}).forEach(([vizId, settings]) => {
-            Object.entries(settings as Record<string, unknown>).forEach(([key, value]) => {
-              setVisualizationSetting(vizId, key, value, false);
-            });
-          });
+          if (payload && typeof payload === 'object') {
+            setVisualizationSettings(payload as Record<string, Record<string, unknown>>, false);
+          }
           break;
         case 'SET_TEXT_STYLE_SETTINGS':
           // Full replacement of text style settings
@@ -210,6 +229,7 @@ export const VisualizerWindow: React.FC = () => {
     triggerMessage,
     setCommonSettings,
     setVisualizationSetting,
+    setVisualizationSettings,
     setTextStyleSetting,
     loadConfiguration,
   ]);

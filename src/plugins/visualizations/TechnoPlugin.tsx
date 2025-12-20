@@ -176,8 +176,8 @@ const FrequencyBars: React.FC<FrequencyBarsProps> = ({
 
   return (
     <group ref={barsRef} position={[startX, -3, 0]}>
-      {Array.from({ length: barCount }).map((_, i) => (
-        <mesh key={i} position={[i * barSpacing, 0, 0]}>
+      {Array.from({ length: barCount }, (_, i) => (
+        <mesh key={`bar-${i}-${barCount}`} position={[i * barSpacing, 0, 0]}>
           <boxGeometry args={[barWidth, 1, barWidth]} />
           <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.5} />
         </mesh>
@@ -196,12 +196,15 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  const barCount = (customSettings.barCount as number) ?? 48;
-  const sphereScale = (customSettings.sphereScale as number) ?? 1.0;
-  const sphereDistort = (customSettings.sphereDistort as number) ?? 0.5;
-  const colorScheme = (customSettings.colorScheme as string) ?? 'rainbow';
-  const showSphere = (customSettings.showSphere as boolean) ?? true;
-  const showBars = (customSettings.showBars as boolean) ?? true;
+  // Ensure proper type conversion and provide defaults
+  const barCount = Math.round(Number(customSettings.barCount) || 48);
+  const sphereScale = Number(customSettings.sphereScale) || 1.0;
+  const sphereDistort = Number(customSettings.sphereDistort) || 0.5;
+  const colorScheme = String(customSettings.colorScheme || 'rainbow');
+  const showSphere = Boolean(customSettings.showSphere !== false && customSettings.showSphere !== 'false');
+  const showBars = Boolean(customSettings.showBars !== false && customSettings.showBars !== 'false');
+  
+  console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars });
 
   // Apply dim as a CSS filter
   const dimStyle = {
