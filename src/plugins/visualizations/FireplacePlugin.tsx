@@ -27,7 +27,7 @@ const settingsSchema: SettingDefinition[] = [
     type: 'range',
     id: 'flameCount',
     label: 'Flame Count',
-    min: 6,
+    min: 0,
     max: 20,
     step: 1,
     default: 12,
@@ -123,12 +123,14 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
           style={{ backgroundColor: glowColor }}
         />
         
-        {/* Flames container */}
-        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 w-96 h-128 flex items-end justify-center gap-1 overflow-hidden">
-          {Array.from({ length: flameCount }, (_, i) => (
-            <FlamePart key={`flame-${i}-${flameCount}`} intensity={smoothedIntensity} flameHeight={flameHeight} />
-          ))}
-        </div>
+        {/* Flames container - only render if flameCount > 0 */}
+        {flameCount > 0 && (
+          <div className="absolute bottom-12 left-1/2 -translate-x-1/2 w-96 h-128 flex items-end justify-center gap-1 overflow-hidden">
+            {Array.from({ length: flameCount }, (_, i) => (
+              <FlamePart key={`flame-${i}-${flameCount}`} intensity={smoothedIntensity} flameHeight={flameHeight} />
+            ))}
+          </div>
+        )}
 
         {/* Embers */}
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 w-80 h-80 pointer-events-none">

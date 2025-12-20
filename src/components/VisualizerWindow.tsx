@@ -7,15 +7,14 @@ import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } fro
 
 /**
  * Text Style Renderer Component
- * Renders the active message using the appropriate text style plugin
+ * Renders a single message using the appropriate text style plugin
  */
 const TextStyleRenderer: React.FC<{
-  message: MessageConfig | null;
+  message: MessageConfig;
   messageTimestamp: number;
   textStyleSettings: Record<string, Record<string, unknown>>;
-}> = ({ message, messageTimestamp, textStyleSettings }) => {
-  if (!message) return null;
-
+  onComplete: () => void;
+}> = ({ message, messageTimestamp, textStyleSettings, onComplete }) => {
   const textStylePlugin = getTextStyle(message.textStyle);
   if (!textStylePlugin) {
     // Fallback to scrolling-capitals if style not found
@@ -33,6 +32,7 @@ const TextStyleRenderer: React.FC<{
         message={message.text}
         messageTimestamp={messageTimestamp}
         settings={settings}
+        onComplete={onComplete}
       />
     );
   }
@@ -48,6 +48,7 @@ const TextStyleRenderer: React.FC<{
       message={message.text}
       messageTimestamp={messageTimestamp}
       settings={settings}
+      onComplete={onComplete}
     />
   );
 };
@@ -111,8 +112,7 @@ export const VisualizerWindow: React.FC = () => {
   const audioData = useStore((state) => state.audioData);
   const commonSettings = useStore((state) => state.commonSettings);
   const visualizationSettings = useStore((state) => state.visualizationSettings);
-  const activeMessage = useStore((state) => state.activeMessage);
-  const messageTimestamp = useStore((state) => state.messageTimestamp);
+  const activeMessages = useStore((state) => state.activeMessages);
   const textStyleSettings = useStore((state) => state.textStyleSettings);
   
   // Actions
@@ -120,6 +120,7 @@ export const VisualizerWindow: React.FC = () => {
   const setActiveVisualization = useStore((state) => state.setActiveVisualization);
   const setMessages = useStore((state) => state.setMessages);
   const triggerMessage = useStore((state) => state.triggerMessage);
+  const clearMessage = useStore((state) => state.clearMessage);
   const setCommonSettings = useStore((state) => state.setCommonSettings);
   const setVisualizationSetting = useStore((state) => state.setVisualizationSetting);
   const setVisualizationSettings = useStore((state) => state.setVisualizationSettings);
@@ -213,6 +214,10 @@ export const VisualizerWindow: React.FC = () => {
         case 'LOAD_CONFIGURATION':
           loadConfiguration(payload, false);
           break;
+        case 'CLEAR_MESSAGE':
+          // Clear message by timestamp (handled locally, no sync needed)
+          clearMessage(payload as number, false);
+          break;
       }
     });
 
@@ -227,6 +232,7 @@ export const VisualizerWindow: React.FC = () => {
     setActiveVisualization, 
     setMessages, 
     triggerMessage,
+    clearMessage,
     setCommonSettings,
     setVisualizationSetting,
     setVisualizationSettings,
@@ -242,11 +248,16 @@ export const VisualizerWindow: React.FC = () => {
         commonSettings={commonSettings}
         visualizationSettings={visualizationSettings}
       />
-      <TextStyleRenderer
-        message={activeMessage}
-        messageTimestamp={messageTimestamp}
-        textStyleSettings={textStyleSettings}
-      />
+      {/* Render all active messages - they can coexist */}
+      {activeMessages.map(({ message, timestamp }) => (
+        <TextStyleRenderer
+          key={timestamp}
+          message={message}
+          messageTimestamp={timestamp}
+          textStyleSettings={textStyleSettings}
+          onComplete={() => clearMessage(timestamp, false)}
+        />
+      ))}
     </div>
   );
 };

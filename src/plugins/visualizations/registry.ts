@@ -8,6 +8,8 @@
 import { VisualizationPlugin, getDefaultsFromSchema } from '../types';
 import { FireplacePlugin } from './FireplacePlugin';
 import { TechnoPlugin } from './TechnoPlugin';
+import { WavesPlugin } from './WavesPlugin';
+import { ParticlesPlugin } from './ParticlesPlugin';
 
 /**
  * All registered visualization plugins
@@ -15,6 +17,8 @@ import { TechnoPlugin } from './TechnoPlugin';
 export const visualizationRegistry: VisualizationPlugin[] = [
   FireplacePlugin,
   TechnoPlugin,
+  WavesPlugin,
+  ParticlesPlugin,
 ];
 
 /**

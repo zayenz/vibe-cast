@@ -4,6 +4,8 @@
 
 export { FireplacePlugin } from './FireplacePlugin';
 export { TechnoPlugin } from './TechnoPlugin';
+export { WavesPlugin } from './WavesPlugin';
+export { ParticlesPlugin } from './ParticlesPlugin';
 export { 
   visualizationRegistry, 
   getVisualization, 

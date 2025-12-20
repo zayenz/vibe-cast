@@ -6,7 +6,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
-  ChevronDown, ChevronUp, Trash2
+  ChevronDown, ChevronUp, Trash2, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
@@ -91,6 +91,18 @@ export const ControlPlane: React.FC = () => {
   const handleDeleteMessage = (id: string) => {
     sendCommand('set-messages', messages.filter(m => m.id !== id));
     if (expandedMessage === id) setExpandedMessage(null);
+  };
+
+  const handleMoveMessage = (id: string, direction: 'up' | 'down') => {
+    const index = messages.findIndex(m => m.id === id);
+    if (index === -1) return;
+
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= messages.length) return;
+
+    const newMessages = [...messages];
+    [newMessages[index], newMessages[newIndex]] = [newMessages[newIndex], newMessages[index]];
+    sendCommand('set-messages', newMessages);
   };
 
   const handleUpdateMessageStyle = (id: string, textStyle: string) => {
@@ -278,6 +290,43 @@ export const ControlPlane: React.FC = () => {
                       />
                     </div>
 
+                    {/* Visualization Selection */}
+                    <div>
+                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                        Visible Visualizations
+                      </h3>
+                      <div className="space-y-2">
+                        {visualizationRegistry.map((viz) => {
+                          const isEnabled = enabledVisualizations.includes(viz.id);
+                          return (
+                            <label
+                              key={viz.id}
+                              className="flex items-center gap-3 p-3 bg-zinc-950 border border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700 transition-colors"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isEnabled}
+                                onChange={(e) => {
+                                  const newEnabled = e.target.checked
+                                    ? [...enabledVisualizations, viz.id]
+                                    : enabledVisualizations.filter(id => id !== viz.id);
+                                  sendCommand('set-enabled-visualizations', newEnabled);
+                                }}
+                                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-0 focus:ring-2"
+                              />
+                              <div className="flex items-center gap-2 flex-1">
+                                {iconMap[viz.icon] || <Settings2 size={18} />}
+                                <div>
+                                  <div className="text-sm font-medium text-zinc-200">{viz.name}</div>
+                                  <div className="text-xs text-zinc-500">{viz.description}</div>
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     {/* Active Visualization Settings */}
                     {activePlugin && activePlugin.settingsSchema.length > 0 && (
                       <div>
@@ -300,6 +349,38 @@ export const ControlPlane: React.FC = () => {
                         />
                       </div>
                     )}
+
+                    {/* Text Style Settings */}
+                    <div>
+                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                        Text Style Settings
+                      </h3>
+                      <div className="space-y-4">
+                        {textStyleRegistry.map((style) => (
+                          <div key={style.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                            <h4 className="text-sm font-medium text-zinc-300 mb-3">{style.name}</h4>
+                            {style.settingsSchema.length > 0 ? (
+                              <SettingsRenderer
+                                schema={style.settingsSchema}
+                                values={textStyleSettings[style.id] || {}}
+                                onChange={(key, value) => {
+                                  const newSettings = {
+                                    ...textStyleSettings,
+                                    [style.id]: {
+                                      ...(textStyleSettings[style.id] || {}),
+                                      [key]: value,
+                                    }
+                                  };
+                                  sendCommand('set-text-style-settings', newSettings);
+                                }}
+                              />
+                            ) : (
+                              <p className="text-xs text-zinc-500">No settings available</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </motion.section>
               )}
@@ -381,6 +462,24 @@ export const ControlPlane: React.FC = () => {
                         >
                           {msg.text}
                         </button>
+                        <div className="flex flex-col gap-0.5">
+                          <button
+                            onClick={() => handleMoveMessage(msg.id, 'up')}
+                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
+                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Move up"
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleMoveMessage(msg.id, 'down')}
+                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
+                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Move down"
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                        </div>
                         <button
                           onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
                           className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
@@ -390,6 +489,7 @@ export const ControlPlane: React.FC = () => {
                         <button
                           onClick={() => handleDeleteMessage(msg.id)}
                           className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
+                          title="Delete message"
                         >
                           <Trash2 size={16} />
                         </button>

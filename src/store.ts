@@ -23,8 +23,9 @@ export interface AppState {
   
   // Message state
   messages: MessageConfig[];
-  activeMessage: MessageConfig | null;
-  messageTimestamp: number;
+  activeMessages: Array<{ message: MessageConfig; timestamp: number }>;
+  activeMessage: MessageConfig | null; // Legacy - kept for compatibility
+  messageTimestamp: number; // Legacy - kept for compatibility
   
   // Text style state
   defaultTextStyle: string;
@@ -51,6 +52,7 @@ export interface AppState {
   updateMessage: (id: string, updates: Partial<MessageConfig>, sync?: boolean) => void;
   removeMessage: (id: string, sync?: boolean) => void;
   triggerMessage: (message: MessageConfig, sync?: boolean) => void;
+  clearMessage: (timestamp: number, sync?: boolean) => void;
   
   setDefaultTextStyle: (id: string, sync?: boolean) => void;
   setTextStyleSetting: (styleId: string, key: string, value: unknown, sync?: boolean) => void;
@@ -109,8 +111,9 @@ export const useStore = create<AppState>((set, get) => ({
   visualizationSettings: defaults.visualizationSettings ?? getDefaultVisualizationSettings(),
   
   messages: defaults.messages ?? [],
-  activeMessage: null,
-  messageTimestamp: 0,
+  activeMessages: [],
+  activeMessage: null, // Legacy compatibility
+  messageTimestamp: 0, // Legacy compatibility
   
   defaultTextStyle: defaults.defaultTextStyle ?? 'scrolling-capitals',
   textStyleSettings: defaults.textStyleSettings ?? getDefaultTextStyleSettings(),
@@ -214,9 +217,32 @@ export const useStore = create<AppState>((set, get) => ({
 
   triggerMessage: (message, sync = true) => {
     console.log(`Triggering message: ${message.text}, sync=${sync}`);
-    set({ activeMessage: message, messageTimestamp: Date.now() });
+    const timestamp = Date.now();
+    set(state => ({
+      activeMessages: [...state.activeMessages, { message, timestamp }],
+      // Legacy compatibility
+      activeMessage: message,
+      messageTimestamp: timestamp,
+    }));
     if (sync) {
       syncState('TRIGGER_MESSAGE', message);
+    }
+  },
+
+  clearMessage: (timestamp, sync = true) => {
+    set(state => {
+      const newActiveMessages = state.activeMessages.filter(m => m.timestamp !== timestamp);
+      // Legacy compatibility - clear if no active messages
+      const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
+      const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
+      return {
+        activeMessages: newActiveMessages,
+        activeMessage: legacyMessage,
+        messageTimestamp: legacyTimestamp,
+      };
+    });
+    if (sync) {
+      syncState('CLEAR_MESSAGE', timestamp);
     }
   },
 

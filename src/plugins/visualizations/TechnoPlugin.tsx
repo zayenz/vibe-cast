@@ -67,6 +67,21 @@ const settingsSchema: SettingDefinition[] = [
     label: 'Show Frequency Bars',
     default: true,
   },
+  {
+    type: 'range',
+    id: 'sphereOpacity',
+    label: 'Sphere Opacity',
+    min: 0,
+    max: 1,
+    step: 0.1,
+    default: 1.0,
+  },
+  {
+    type: 'color',
+    id: 'sphereColor',
+    label: 'Sphere Color',
+    default: '#ffffff',
+  },
 ];
 
 // ============================================================================
@@ -78,6 +93,8 @@ interface AudioReactiveSphereProps {
   intensity: number;
   sphereScale: number;
   sphereDistort: number;
+  sphereOpacity: number;
+  sphereColor: string;
 }
 
 const AudioReactiveSphere: React.FC<AudioReactiveSphereProps> = ({
@@ -85,6 +102,8 @@ const AudioReactiveSphere: React.FC<AudioReactiveSphereProps> = ({
   intensity,
   sphereScale,
   sphereDistort,
+  sphereOpacity,
+  sphereColor,
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
 
@@ -108,14 +127,16 @@ const AudioReactiveSphere: React.FC<AudioReactiveSphereProps> = ({
   return (
     <Sphere ref={meshRef} args={[1, 128, 128]}>
       <MeshDistortMaterial
-        color="#ffffff"
+        color={sphereColor}
         speed={1.5}
         distort={sphereDistort}
         radius={1}
-        emissive="#ffffff"
+        emissive={sphereColor}
         emissiveIntensity={0.5}
         roughness={0}
         metalness={1}
+        transparent={sphereOpacity < 1}
+        opacity={sphereOpacity}
       />
     </Sphere>
   );
@@ -203,8 +224,10 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
   const colorScheme = String(customSettings.colorScheme || 'rainbow');
   const showSphere = Boolean(customSettings.showSphere !== false && customSettings.showSphere !== 'false');
   const showBars = Boolean(customSettings.showBars !== false && customSettings.showBars !== 'false');
+  const sphereOpacity = Number(customSettings.sphereOpacity) ?? 1.0;
+  const sphereColor = String(customSettings.sphereColor || '#ffffff');
   
-  console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars });
+  console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars, sphereOpacity, sphereColor });
 
   // Apply dim as a CSS filter
   const dimStyle = {
@@ -225,6 +248,8 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
             intensity={intensity}
             sphereScale={sphereScale}
             sphereDistort={sphereDistort}
+            sphereOpacity={sphereOpacity}
+            sphereColor={sphereColor}
           />
         )}
         {showBars && (

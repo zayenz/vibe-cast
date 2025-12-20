@@ -8,6 +8,8 @@
 import { TextStylePlugin, getDefaultsFromSchema } from '../types';
 import { ScrollingCapitalsPlugin } from './ScrollingCapitalsPlugin';
 import { FadePlugin } from './FadePlugin';
+import { TypewriterPlugin } from './TypewriterPlugin';
+import { BouncePlugin } from './BouncePlugin';
 
 /**
  * All registered text style plugins
@@ -15,6 +17,8 @@ import { FadePlugin } from './FadePlugin';
 export const textStyleRegistry: TextStylePlugin[] = [
   ScrollingCapitalsPlugin,
   FadePlugin,
+  TypewriterPlugin,
+  BouncePlugin,
 ];
 
 /**
