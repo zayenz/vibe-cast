@@ -72,7 +72,9 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
 
     stream.play().expect("Failed to play audio stream");
     
-    // Keep the stream alive
+    // Keep the stream alive for the app's lifetime.
+    // Note: cpal::Stream is not Send+Sync, so we can't store it in Tauri state.
+    // Using mem::forget is the standard workaround for long-running audio streams.
     std::mem::forget(stream);
 
     AudioState {

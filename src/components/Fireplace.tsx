@@ -65,12 +65,19 @@ export const Fireplace: React.FC = () => {
 };
 
 const FlamePart = ({ intensity }: { intensity: number }) => {
+  // Stable random values computed once per component instance
+  const randomValues = useMemo(() => ({
+    heightOffset: Math.random() * 10,
+    xOffset: (Math.random() - 0.5) * 15,
+    opacityOffset: Math.random() * 0.4,
+  }), []);
+
   return (
     <motion.div
       animate={{
-        height: `${60 + intensity * 40 + Math.random() * 10}%`,
-        x: (Math.random() - 0.5) * 15,
-        opacity: 0.6 + Math.random() * 0.4,
+        height: `${60 + intensity * 40 + randomValues.heightOffset}%`,
+        x: randomValues.xOffset,
+        opacity: 0.6 + randomValues.opacityOffset,
       }}
       transition={{
         duration: 0.15,
@@ -82,19 +89,27 @@ const FlamePart = ({ intensity }: { intensity: number }) => {
 };
 
 const Ember = () => {
+  // Stable random values computed once per component instance
+  const randomValues = useMemo(() => ({
+    initialX: (Math.random() - 0.5) * 200,
+    animateX: (Math.random() - 0.5) * 300,
+    duration: 2 + Math.random() * 2,
+    delay: Math.random() * 5,
+  }), []);
+
   return (
     <motion.div
-      initial={{ bottom: 0, opacity: 0, x: (Math.random() - 0.5) * 200 }}
+      initial={{ bottom: 0, opacity: 0, x: randomValues.initialX }}
       animate={{ 
         bottom: 400, 
         opacity: [0, 1, 0.8, 0],
-        x: (Math.random() - 0.5) * 300
+        x: randomValues.animateX
       }}
       transition={{
-        duration: 2 + Math.random() * 2,
+        duration: randomValues.duration,
         repeat: Infinity,
         ease: "linear",
-        delay: Math.random() * 5,
+        delay: randomValues.delay,
       }}
       className="absolute w-1 h-1 bg-orange-200 rounded-full blur-[1px]"
     />

@@ -34,6 +34,8 @@ export const ControlPlane: React.FC = () => {
         setMode(payload, false);
       } else if (type === 'TRIGGER_MESSAGE') {
         triggerMessage(payload, false);
+      } else if (type === 'SET_MESSAGES') {
+        setMessages(payload, false);
       }
     });
 
@@ -41,7 +43,7 @@ export const ControlPlane: React.FC = () => {
       unlistenRemote.then(u => u());
       unlistenState.then(u => u());
     };
-  }, [setServerInfo, setMode, triggerMessage]);
+  }, [setServerInfo, setMode, triggerMessage, setMessages]);
 
   const toggleViz = async () => {
     const allWindows = await getAllWebviewWindows();

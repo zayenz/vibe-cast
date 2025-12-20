@@ -1,14 +1,44 @@
-import React, { useState } from 'react';
-import { Flame, Music, Signal, ChevronRight } from 'lucide-react';
-import { useStore } from '../store';
+import React, { useState, useEffect } from 'react';
+import { Flame, Music, Signal, ChevronRight, Loader2 } from 'lucide-react';
+
+interface AppState {
+  mode: string;
+  messages: string[];
+}
 
 export const RemoteControl: React.FC = () => {
-  const { messages } = useStore();
-  const [currentMode, setCurrentMode] = useState<string>('fireplace');
+  const [appState, setAppState] = useState<AppState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch initial state from the server
+  useEffect(() => {
+    fetch('/api/state')
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to fetch state');
+        return res.json();
+      })
+      .then((state: AppState) => {
+        setAppState(state);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to fetch state:', err);
+        setError('Could not connect to visualizer');
+        setLoading(false);
+      });
+  }, []);
+
+  // Derive current values from fetched state
+  const currentMode = appState?.mode ?? 'fireplace';
+  const messages = appState?.messages ?? [];
 
   const sendCommand = async (command: string, payload: any) => {
     try {
-      if (command === 'set-mode') setCurrentMode(payload);
+      // Optimistically update local state
+      if (command === 'set-mode' && appState) {
+        setAppState({ ...appState, mode: payload });
+      }
       
       await fetch('/api/command', {
         method: 'POST',
@@ -19,6 +49,35 @@ export const RemoteControl: React.FC = () => {
       console.error('Failed to send command', e);
     }
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 size={32} className="animate-spin text-orange-500" />
+          <span className="text-zinc-500 text-sm">Connecting...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="text-center">
+          <p className="text-red-500 mb-4">{error}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-zinc-800 rounded-lg text-sm"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-12 selection:bg-orange-500/30 overflow-hidden">

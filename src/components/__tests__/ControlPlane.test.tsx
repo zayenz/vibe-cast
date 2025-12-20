@@ -15,6 +15,14 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
     hide: vi.fn(() => Promise.resolve()),
     show: vi.fn(() => Promise.resolve()),
   })),
+  getAllWebviewWindows: vi.fn(() => Promise.resolve([
+    { label: 'main' },
+    { label: 'viz', isVisible: vi.fn(() => Promise.resolve(true)), hide: vi.fn(), show: vi.fn(), setFocus: vi.fn() },
+  ])),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 // Mock the store
@@ -42,7 +50,7 @@ describe('ControlPlane', () => {
 
   it('renders correctly', () => {
     render(<ControlPlane />);
-    expect(screen.getByText('Visualizer Control')).toBeInTheDocument();
+    expect(screen.getByText('VISUALIZER')).toBeInTheDocument();
     expect(screen.getByText('Fireplace')).toBeInTheDocument();
     expect(screen.getByText('Techno')).toBeInTheDocument();
     expect(screen.getByText('http://127.0.0.1:1234')).toBeInTheDocument();

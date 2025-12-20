@@ -31,24 +31,49 @@ Visualizer is designed to provide immersive visualizations on secondary displays
 
 ## Communication & State Management
 
-### Current Implementation Issues
-- **Isolated State**: Each window (Control Plane and Visualizer) runs in its own webview context with its own Zustand store. Currently, state changes in one window are not reflected in the other.
-- **Visualizer Blank**: Because state isn't synced, the Visualizer window defaults to its initial state and doesn't respond to Control Plane interactions.
+### State Synchronization
 
-### Planned Improvements
-1.  **State Synchronization**:
-    -   Implement a "Single Source of Truth" strategy using Tauri events.
-    -   The Control Plane will emit events (e.g., `state-changed`) which the Visualizer window and backend will listen to.
-    -   The Zustand store will be updated in response to these events to ensure all windows stay in sync.
-2.  **Tailwind 4 Integration**:
-    -   Migrate to Tailwind 4 for more robust styling and modern UI components.
-    -   Leverage Tailwind 4's CSS-first approach for better performance and easier customization.
-3.  **Visualization Enhancements**:
-    -   Refactor `Fireplace` to use a consistent animation loop for smoother flickering.
-    -   Optimize `TechnoViz` for lower latency audio reactivity.
+Each window (Control Plane and Visualizer) runs in its own webview context with its own Zustand store. State is synchronized using a hybrid event-based architecture:
+
+1.  **Event-Based Sync (Tauri Windows)**:
+    -   State changes (mode, messages) are broadcast via Tauri's `emit` API using `state-changed` events.
+    -   Both Control Plane and Visualizer windows listen for these events and update their local Zustand stores accordingly.
+    -   The `sync` parameter on store actions (`setMode`, `setMessages`, `triggerMessage`) controls whether to emit events, preventing infinite loops.
+
+2.  **API-Based Sync (Mobile Remote)**:
+    -   The Rust backend maintains an `AppStateSync` struct that mirrors the current application state.
+    -   The mobile remote fetches initial state via `GET /api/state` on load.
+    -   Commands from the remote are sent via `POST /api/command` and broadcast as `remote-command` events.
+
+3.  **Audio Data Flow**:
+    -   Audio is captured via `cpal` and processed with `realfft` in Rust.
+    -   FFT data is emitted as `audio-data` events to the Visualizer window only.
+
+### Event Types
+
+| Event | Direction | Payload | Purpose |
+|-------|-----------|---------|---------|
+| `state-changed` | Backend → All Windows | `{ type, payload }` | Sync mode/messages |
+| `remote-command` | Backend → All Windows | `{ command, payload }` | Forward remote commands |
+| `audio-data` | Backend → Visualizer | `number[]` | FFT frequency data |
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/state` | GET | Get current mode and messages |
+| `/api/command` | POST | Send command from remote |
+| `/api/status` | GET | Health check |
 
 ## Tech Stack
+
 - **Framework**: Tauri v2
-- **Frontend**: React 19, Vite 7, Tailwind 4 (Planned), Zustand
+- **Frontend**: React 19, Vite 7, Tailwind 4, Zustand
 - **3D/Animation**: React Three Fiber, Three.js, Framer Motion
 - **Backend**: Rust, Axum, Tokio, Cpal, RealFFT
+
+## Performance Considerations
+
+- **Stable Animation Values**: The Fireplace component uses `useMemo` to compute random animation offsets once per component instance, avoiding re-computation on every render cycle.
+- **Audio Stream Lifecycle**: The audio capture stream uses `mem::forget` to keep it alive for the app's lifetime. This is intentional - cpal's `Stream` type is not `Send+Sync`, so it cannot be stored in Tauri's managed state. The stream runs indefinitely and is cleaned up when the process exits.
+- **Event Throttling**: Consider implementing throttling for high-frequency audio data events if performance issues occur on lower-end hardware.

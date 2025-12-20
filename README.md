@@ -51,9 +51,10 @@ graph TD
 - **Window Management**: Orchestrates multiple windows and ensures the Visualizer window is optimized for secondary displays.
 - **Audio Engine**: Uses `cpal` to capture audio from a loopback device and `realfft` to provide frequency data to the frontend at 60fps.
 - **LAN Server**: An integrated `axum` server that serves the mobile remote UI to devices on the same Wi-Fi network.
+- **State Synchronization**: Maintains shared application state (`AppStateSync`) for mode and messages, exposed via REST API for the mobile remote.
 
 ### Frontend (React)
-- **Zustand Store**: Centralized state management for mode switching, message queues, and audio data.
+- **Zustand Store**: Per-window state management synchronized via Tauri events for mode switching, message queues, and audio data.
 - **React Three Fiber**: Powers the high-performance 3D techno visualizations.
 - **Framer Motion**: Handles the smooth rolling message animations.
 

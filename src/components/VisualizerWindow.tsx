@@ -9,6 +9,7 @@ export const VisualizerWindow: React.FC = () => {
   const mode = useStore((state) => state.mode);
   const setAudioData = useStore((state) => state.setAudioData);
   const setMode = useStore((state) => state.setMode);
+  const setMessages = useStore((state) => state.setMessages);
   const triggerMessage = useStore((state) => state.triggerMessage);
 
   useEffect(() => {
@@ -36,6 +37,8 @@ export const VisualizerWindow: React.FC = () => {
         setMode(payload, false);
       } else if (type === 'TRIGGER_MESSAGE') {
         triggerMessage(payload, false);
+      } else if (type === 'SET_MESSAGES') {
+        setMessages(payload, false);
       }
     });
 
@@ -44,7 +47,7 @@ export const VisualizerWindow: React.FC = () => {
       unlistenRemote.then((u) => u());
       unlistenState.then((u) => u());
     };
-  }, [setAudioData, setMode, triggerMessage]);
+  }, [setAudioData, setMode, setMessages, triggerMessage]);
 
   return (
     <div className="w-screen h-screen bg-black relative">

@@ -10,7 +10,7 @@ interface AppState {
   serverInfo: { ip: string, port: number } | null;
   
   setMode: (mode: 'fireplace' | 'techno', sync?: boolean) => void;
-  setMessages: (messages: string[]) => void;
+  setMessages: (messages: string[], sync?: boolean) => void;
   triggerMessage: (message: string, sync?: boolean) => void;
   setAudioData: (data: number[]) => void;
   setServerInfo: (info: { ip: string, port: number }) => void;
@@ -32,7 +32,13 @@ export const useStore = create<AppState>((set) => ({
         .catch(err => console.error('Failed to invoke emit_state_change', err));
     }
   },
-  setMessages: (messages) => set({ messages }),
+  setMessages: (messages, sync = true) => {
+    set({ messages });
+    if (sync) {
+      invoke('emit_state_change', { eventType: 'SET_MESSAGES', payload: messages })
+        .catch(err => console.error('Failed to invoke emit_state_change', err));
+    }
+  },
   triggerMessage: (message, sync = true) => {
     console.log(`Triggering message: ${message}, sync=${sync}`);
     set({ activeMessage: message, messageTimestamp: Date.now() });

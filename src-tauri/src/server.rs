@@ -6,12 +6,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tower_http::{cors::CorsLayer, services::ServeDir};
+
+use crate::AppStateSync;
 
 #[derive(Clone)]
 struct AppState {
     app_handle: AppHandle,
+    app_state_sync: Arc<AppStateSync>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -20,8 +24,11 @@ struct RemoteCommand {
     payload: Option<serde_json::Value>,
 }
 
-pub async fn start_server(app_handle: AppHandle, port: u16) {
-    let state = AppState { app_handle: app_handle.clone() };
+pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSync>, port: u16) {
+    let state = AppState { 
+        app_handle: app_handle.clone(),
+        app_state_sync,
+    };
 
     // Get the path to the frontend assets
     let dist_path = if cfg!(debug_assertions) {
@@ -37,6 +44,7 @@ pub async fn start_server(app_handle: AppHandle, port: u16) {
 
     let app = Router::new()
         .route("/api/command", post(handle_command))
+        .route("/api/state", get(get_state))
         .route("/api/status", get(get_status))
         .fallback_service(
             ServeDir::new(dist_path)
@@ -69,6 +77,20 @@ async fn handle_command(
     let _ = state.app_handle.emit("remote-command", payload);
 
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn get_state(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let mode = state.app_state_sync.mode.lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "fireplace".to_string());
+    let messages = state.app_state_sync.messages.lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| vec![]);
+    
+    Json(serde_json::json!({
+        "mode": mode,
+        "messages": messages
+    }))
 }
 
 async fn get_status() -> Json<serde_json::Value> {
