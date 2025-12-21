@@ -13,8 +13,9 @@ const TextStyleRenderer: React.FC<{
   message: MessageConfig;
   messageTimestamp: number;
   textStyleSettings: Record<string, Record<string, unknown>>;
+  verticalOffset?: number;
   onComplete: () => void;
-}> = ({ message, messageTimestamp, textStyleSettings, onComplete }) => {
+}> = ({ message, messageTimestamp, textStyleSettings, verticalOffset = 0, onComplete }) => {
   const textStylePlugin = getTextStyle(message.textStyle);
   if (!textStylePlugin) {
     // Fallback to scrolling-capitals if style not found
@@ -32,6 +33,7 @@ const TextStyleRenderer: React.FC<{
         message={message.text}
         messageTimestamp={messageTimestamp}
         settings={settings}
+        verticalOffset={verticalOffset}
         onComplete={onComplete}
       />
     );
@@ -48,6 +50,7 @@ const TextStyleRenderer: React.FC<{
       message={message.text}
       messageTimestamp={messageTimestamp}
       settings={settings}
+      verticalOffset={verticalOffset}
       onComplete={onComplete}
     />
   );
@@ -250,16 +253,19 @@ export const VisualizerWindow: React.FC = () => {
         commonSettings={commonSettings}
         visualizationSettings={visualizationSettings}
       />
-      {/* Render all active messages - they can coexist */}
-      {activeMessages.map(({ message, timestamp }) => (
-        <TextStyleRenderer
-          key={timestamp}
-          message={message}
-          messageTimestamp={timestamp}
-          textStyleSettings={textStyleSettings}
-          onComplete={() => clearMessage(timestamp, false)}
-        />
-      ))}
+      {/* Render all active messages - they can coexist with higher z-index */}
+      <div className="absolute inset-0 pointer-events-none z-[100]">
+        {activeMessages.map(({ message, timestamp }, index) => (
+          <TextStyleRenderer
+            key={timestamp}
+            message={message}
+            messageTimestamp={timestamp}
+            textStyleSettings={textStyleSettings}
+            verticalOffset={index * 80} // Stack messages with 80px spacing
+            onComplete={() => clearMessage(timestamp, false)}
+          />
+        ))}
+      </div>
     </div>
   );
 };

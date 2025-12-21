@@ -5,9 +5,10 @@
  * Great for energetic, fun messages.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -22,6 +23,15 @@ const settingsSchema: SettingDefinition[] = [
     max: 10,
     step: 0.5,
     default: 4,
+  },
+  {
+    type: 'range',
+    id: 'fadeOutDuration',
+    label: 'Fade Out Duration (seconds)',
+    min: 0.3,
+    max: 2.0,
+    step: 0.1,
+    default: 0.8,
   },
   {
     type: 'range',
@@ -77,16 +87,21 @@ const BounceStyle: React.FC<TextStyleProps> = ({
   message,
   messageTimestamp,
   settings,
+  verticalOffset = 0,
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
+  const [isFadingOut, setIsFadingOut] = useState(false);
+  const completedRef = useRef(false);
+  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const displayDuration = (settings.displayDuration as number) ?? 4;
-  const bounceIntensity = (settings.bounceIntensity as number) || 1.0;
-  const fontSize = (settings.fontSize as number) ?? 6;
-  const color = (settings.color as string) ?? '#ffffff';
-  const glowIntensity = (settings.glowIntensity as number) || 0.6;
-  const position = (settings.position as string) ?? 'center';
+  const displayDuration = getNumberSetting(settings.displayDuration, 4, 2, 10);
+  const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.8, 0.3, 2.0);
+  const bounceIntensity = getNumberSetting(settings.bounceIntensity, 1.0, 0.5, 2.0);
+  const fontSize = getNumberSetting(settings.fontSize, 6, 3, 16);
+  const color = getStringSetting(settings.color, '#ffffff');
+  const glowIntensity = getNumberSetting(settings.glowIntensity, 0.6, 0, 1);
+  const position = getStringSetting(settings.position, 'center');
 
   // Calculate position classes
   const positionClass = {
@@ -101,54 +116,105 @@ const BounceStyle: React.FC<TextStyleProps> = ({
     ? `0 0 ${glowSize}px ${color}, 0 0 ${glowSize * 2}px ${color}40`
     : 'none';
 
+  const handleComplete = () => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    setDisplayMessage(null);
+    setIsFadingOut(false);
+    onComplete?.();
+  };
+
   useEffect(() => {
     if (message) {
-      // Force a reset if the same message is triggered again
-      setDisplayMessage(null);
+      // Reset completion flag
+      completedRef.current = false;
       
-      // Small delay to allow AnimatePresence to see the null state
-      const nextTick = setTimeout(() => {
-        setDisplayMessage(message);
-      }, 50);
+      // Immediately show the message
+      setDisplayMessage(message);
+      setIsFadingOut(false);
 
-      const timer = setTimeout(() => {
-        setDisplayMessage(null);
-        onComplete?.();
-      }, (displayDuration * 1000) + 50);
+      // Start fade out after display duration
+      const fadeOutTimer = setTimeout(() => {
+        setIsFadingOut(true);
+      }, displayDuration * 1000);
+
+      // Safety timeout: ensure message is removed even if animation doesn't complete
+      const totalDuration = (displayDuration + fadeOutDuration) * 1000;
+      const safetyBuffer = 1000; // 1 second buffer
+      safetyTimeoutRef.current = setTimeout(() => {
+        handleComplete();
+      }, totalDuration + safetyBuffer);
       
       return () => {
-        clearTimeout(nextTick);
-        clearTimeout(timer);
+        clearTimeout(fadeOutTimer);
+        if (safetyTimeoutRef.current) {
+          clearTimeout(safetyTimeoutRef.current);
+        }
       };
     }
-  }, [message, messageTimestamp, displayDuration, onComplete]);
+  }, [message, messageTimestamp, displayDuration, fadeOutDuration]);
+
+  // Handle fade-out completion
+  useEffect(() => {
+    if (isFadingOut && displayMessage) {
+      // Set a timer to remove the message after fade-out duration
+      const fadeOutCompleteTimer = setTimeout(() => {
+        handleComplete();
+      }, fadeOutDuration * 1000);
+
+      return () => {
+        clearTimeout(fadeOutCompleteTimer);
+      };
+    }
+  }, [isFadingOut, displayMessage, fadeOutDuration]);
+
+  const variants = {
+    hidden: { 
+      opacity: 0, 
+      scale: 0.3,
+      y: -100 * bounceIntensity,
+    },
+    visible: { 
+      opacity: 1, 
+      scale: 1,
+      y: 0,
+      transition: {
+        type: "spring" as const,
+        stiffness: 300,
+        damping: 20,
+        mass: 0.8,
+      },
+    },
+    fadingOut: { 
+      opacity: 0, 
+      scale: 0.5,
+      y: 50 * bounceIntensity,
+      transition: {
+        opacity: { duration: fadeOutDuration, ease: "easeOut" as const },
+        scale: { duration: fadeOutDuration, ease: "easeOut" as const },
+        y: { duration: fadeOutDuration, ease: "easeOut" as const },
+      },
+    },
+  };
 
   return (
-    <div className={`fixed ${positionClass} left-0 w-full flex items-center justify-center pointer-events-none z-50 px-8`}>
+    <div 
+      className={`fixed ${positionClass} left-0 w-full flex items-center justify-center pointer-events-none px-8`}
+      style={{ transform: `translateY(${verticalOffset}px)` }}
+    >
       <AnimatePresence>
         {displayMessage && (
           <motion.div
             key={messageTimestamp}
-            initial={{ 
-              opacity: 0, 
-              scale: 0.3,
-              y: -100 * bounceIntensity,
-            }}
-            animate={{ 
-              opacity: 1, 
-              scale: 1,
-              y: 0,
-            }}
-            exit={{ 
-              opacity: 0, 
-              scale: 0.5,
-              y: 50 * bounceIntensity,
-            }}
-            transition={{
-              type: "spring",
-              stiffness: 300,
-              damping: 20,
-              mass: 0.8,
+            initial="hidden"
+            animate={isFadingOut ? "fadingOut" : "visible"}
+            exit="fadingOut"
+            variants={variants}
+            onAnimationComplete={() => {
+              // Call handleComplete when fade-out animation completes
+              if (isFadingOut) {
+                handleComplete();
+              }
             }}
             className="text-center"
           >

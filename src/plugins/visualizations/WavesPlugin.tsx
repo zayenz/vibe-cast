@@ -5,9 +5,9 @@
  * Creates a calming, ocean-like visualization.
  */
 
-import React, { useMemo } from 'react';
-import { motion } from 'framer-motion';
+import React, { useMemo, useState, useEffect } from 'react';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -68,11 +68,11 @@ const WavesVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  const waveCount = Math.round(Number(customSettings.waveCount) || 4);
-  const waveSpeed = Number(customSettings.waveSpeed) || 1.0;
-  const waveHeight = Number(customSettings.waveHeight) || 1.0;
-  const waveColor = String(customSettings.waveColor || '#3b82f6');
-  const opacity = Number(customSettings.opacity) || 0.8;
+  const waveCount = Math.round(getNumberSetting(customSettings.waveCount, 4, 2, 8));
+  const waveSpeed = getNumberSetting(customSettings.waveSpeed, 1.0, 0.5, 3.0);
+  const waveHeight = getNumberSetting(customSettings.waveHeight, 1.0, 0.3, 2.0);
+  const waveColor = getStringSetting(customSettings.waveColor, '#3b82f6');
+  const opacity = getNumberSetting(customSettings.opacity, 0.8, 0.2, 1.0);
 
   // Calculate audio reactivity - use mid frequencies for wave amplitude
   const audioAmplitude = useMemo(() => {
@@ -134,36 +134,72 @@ interface WaveLayerProps {
 }
 
 const WaveLayer: React.FC<WaveLayerProps> = ({ baseY, amplitude, color, opacity, phase, speed }) => {
+  const [time, setTime] = useState(0);
+  const waveLength = 300; // Wavelength in pixels
+  const points = 120; // Number of points for smooth wave
+
+  // Animate time for wave movement
+  useEffect(() => {
+    let animationFrame: number;
+    let startTime = Date.now();
+    
+    const animate = () => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      setTime(elapsed * speed * 0.5); // Slower movement for smoother waves
+      animationFrame = requestAnimationFrame(animate);
+    };
+    
+    animate();
+    return () => cancelAnimationFrame(animationFrame);
+  }, [speed]);
+
+  // Generate wave path with animated sine wave
+  const wavePath = useMemo(() => {
+    const pathPoints: string[] = [];
+    const viewWidth = 1200;
+    const viewHeight = 200;
+    const centerY = viewHeight / 2;
+    
+    // Start from left edge, bottom
+    pathPoints.push(`M 0 ${viewHeight}`);
+    
+    // Generate wave points along the top
+    for (let i = 0; i <= points; i++) {
+      const x = (i / points) * viewWidth;
+      // Sine wave with phase offset and time-based animation
+      const waveX = (x / waveLength) * Math.PI * 2 + phase + time;
+      const y = centerY - Math.sin(waveX) * amplitude;
+      pathPoints.push(`L ${x} ${y}`);
+    }
+    
+    // Close the path to create fill
+    pathPoints.push(`L ${viewWidth} ${viewHeight}`);
+    pathPoints.push('Z');
+    
+    return pathPoints.join(' ');
+  }, [amplitude, phase, time, waveLength]);
+
   return (
-    <motion.div
+    <div
       className="absolute w-full"
       style={{
         top: `${baseY}%`,
-        height: `${amplitude * 2}px`,
+        height: `${amplitude * 2 + 100}px`,
         opacity,
-      }}
-      animate={{
-        x: [0, -100, 0],
-      }}
-      transition={{
-        duration: 10 / speed,
-        repeat: Infinity,
-        ease: 'linear',
-        delay: phase / (Math.PI * 2) * (10 / speed), // Use phase to offset animation start
+        transform: 'translateY(-50%)',
       }}
     >
       <svg
         viewBox="0 0 1200 200"
         preserveAspectRatio="none"
         className="w-full h-full"
-        style={{ transform: 'translateY(-50%)' }}
       >
         <path
-          d={`M 0,100 Q 300,${100 - amplitude * Math.sin(phase)} 600,100 T 1200,100 L 1200,200 L 0,200 Z`}
+          d={wavePath}
           fill={color}
         />
       </svg>
-    </motion.div>
+    </div>
   );
 };
 

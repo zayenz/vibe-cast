@@ -8,6 +8,7 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -65,12 +66,12 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  // Ensure proper type conversion and provide defaults
-  const emberCount = Math.round(Number(customSettings.emberCount) || 15);
-  const flameCount = Math.round(Number(customSettings.flameCount) || 12);
-  const flameHeight = Number(customSettings.flameHeight) || 1.0;
-  const glowColor = String(customSettings.glowColor || '#ea580c');
-  const showLogs = Boolean(customSettings.showLogs !== false && customSettings.showLogs !== 'false');
+  // Use utility functions to properly handle 0, false, and empty string as valid values
+  const emberCount = Math.round(getNumberSetting(customSettings.emberCount, 15, 5, 30));
+  const flameCount = Math.round(getNumberSetting(customSettings.flameCount, 12, 0, 20));
+  const flameHeight = getNumberSetting(customSettings.flameHeight, 1.0, 0.5, 2.0);
+  const glowColor = getStringSetting(customSettings.glowColor, '#ea580c');
+  const showLogs = getBooleanSetting(customSettings.showLogs, true);
   
   console.log('FireplaceVisualization settings:', { emberCount, flameCount, flameHeight, glowColor, showLogs });
 

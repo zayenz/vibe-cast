@@ -5,9 +5,10 @@
  * A calm, minimal approach to message display.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -94,18 +95,22 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   message,
   messageTimestamp,
   settings,
+  verticalOffset = 0,
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
+  const [isFadingOut, setIsFadingOut] = useState(false);
+  const completedRef = useRef(false);
+  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const displayDuration = (settings.displayDuration as number) ?? 5;
-  const fadeInDuration = (settings.fadeInDuration as number) || 0.5;
-  const fadeOutDuration = (settings.fadeOutDuration as number) || 0.5;
-  const fontSize = (settings.fontSize as number) ?? 5;
-  const color = (settings.color as string) ?? '#ffffff';
-  const uppercase = (settings.uppercase as boolean) ?? false;
-  const fontWeight = (settings.fontWeight as string) ?? 'bold';
-  const blurAmount = (settings.blurAmount as number) || 0;
+  const displayDuration = getNumberSetting(settings.displayDuration, 5, 2, 15);
+  const fadeInDuration = getNumberSetting(settings.fadeInDuration, 0.5, 0.2, 3);
+  const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.5, 0.2, 3);
+  const fontSize = getNumberSetting(settings.fontSize, 5, 2, 12);
+  const color = getStringSetting(settings.color, '#ffffff');
+  const uppercase = getBooleanSetting(settings.uppercase, false);
+  const fontWeight = getStringSetting(settings.fontWeight, 'bold');
+  const blurAmount = getNumberSetting(settings.blurAmount, 0, 0, 20);
 
   // Map font weight to CSS
   const fontWeightMap: Record<string, number> = {
@@ -116,47 +121,98 @@ const FadeStyle: React.FC<TextStyleProps> = ({
     black: 900,
   };
 
+  const handleComplete = () => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    setDisplayMessage(null);
+    setIsFadingOut(false);
+    onComplete?.();
+  };
+
   useEffect(() => {
     if (message) {
-      // Force a reset if the same message is triggered again
-      setDisplayMessage(null);
+      // Reset completion flag
+      completedRef.current = false;
       
-      // Small delay to allow AnimatePresence to see the null state
-      const nextTick = setTimeout(() => {
-        setDisplayMessage(message);
-      }, 50);
+      // Immediately show the message (no artificial delay)
+      setDisplayMessage(message);
+      setIsFadingOut(false);
 
+      // Start fade out after fade in + display duration
+      const fadeOutTimer = setTimeout(() => {
+        setIsFadingOut(true);
+      }, (fadeInDuration + displayDuration) * 1000);
+
+      // Safety timeout: ensure message is removed even if animation doesn't complete
       const totalDuration = (fadeInDuration + displayDuration + fadeOutDuration) * 1000;
-      const timer = setTimeout(() => {
-        setDisplayMessage(null);
-        onComplete?.();
-      }, totalDuration + 50);
+      const safetyBuffer = 1000; // 1 second buffer
+      safetyTimeoutRef.current = setTimeout(() => {
+        handleComplete();
+      }, totalDuration + safetyBuffer);
       
       return () => {
-        clearTimeout(nextTick);
-        clearTimeout(timer);
+        clearTimeout(fadeOutTimer);
+        if (safetyTimeoutRef.current) {
+          clearTimeout(safetyTimeoutRef.current);
+        }
       };
     }
-  }, [message, messageTimestamp, displayDuration, fadeInDuration, fadeOutDuration, onComplete]);
+  }, [message, messageTimestamp, displayDuration, fadeInDuration, fadeOutDuration]);
+
+  // Handle fade-out completion
+  useEffect(() => {
+    if (isFadingOut && displayMessage) {
+      // Set a timer to remove the message after fade-out duration
+      const fadeOutCompleteTimer = setTimeout(() => {
+        handleComplete();
+      }, fadeOutDuration * 1000);
+
+      return () => {
+        clearTimeout(fadeOutCompleteTimer);
+      };
+    }
+  }, [isFadingOut, displayMessage, fadeOutDuration]);
+
+  const variants = {
+    hidden: { opacity: 0, scale: 0.95 },
+    visible: { 
+      opacity: 1, 
+      scale: 1,
+      transition: {
+        opacity: { duration: fadeInDuration, ease: "easeOut" as const },
+        scale: { duration: fadeInDuration, ease: "easeOut" as const },
+      },
+    },
+    fadingOut: { 
+      opacity: 0, 
+      scale: 1.05,
+      transition: {
+        opacity: { duration: fadeOutDuration, ease: "easeOut" as const },
+        scale: { duration: fadeOutDuration, ease: "easeOut" as const },
+      },
+    },
+  };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-50">
+    <div 
+      className="fixed inset-0 flex items-center justify-center pointer-events-none"
+      style={{ 
+        transform: `translateY(${verticalOffset}px)`,
+      }}
+    >
       <AnimatePresence>
         {displayMessage && (
           <motion.div
             key={messageTimestamp}
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.05 }}
-            transition={{
-              opacity: { 
-                duration: fadeInDuration,
-                ease: "easeOut",
-              },
-              scale: {
-                duration: fadeInDuration,
-                ease: "easeOut",
-              },
+            initial="hidden"
+            animate={isFadingOut ? "fadingOut" : "visible"}
+            exit="fadingOut"
+            variants={variants}
+            onAnimationComplete={() => {
+              // Call handleComplete when fade-out animation completes
+              if (isFadingOut) {
+                handleComplete();
+              }
             }}
             className="text-center px-8 py-4 rounded-lg max-w-[80vw]"
             style={{
@@ -164,7 +220,7 @@ const FadeStyle: React.FC<TextStyleProps> = ({
               backgroundColor: blurAmount > 0 ? 'rgba(0,0,0,0.3)' : undefined,
             }}
           >
-            <motion.span 
+            <span 
               className="block"
               style={{ 
                 fontSize: `${fontSize}rem`,
@@ -173,16 +229,9 @@ const FadeStyle: React.FC<TextStyleProps> = ({
                 textTransform: uppercase ? 'uppercase' : 'none',
                 letterSpacing: uppercase ? '-0.02em' : 'normal',
               }}
-              initial={{ opacity: 1 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{
-                duration: fadeOutDuration,
-                delay: displayDuration,
-              }}
             >
               {displayMessage}
-            </motion.span>
+            </span>
           </motion.div>
         )}
       </AnimatePresence>

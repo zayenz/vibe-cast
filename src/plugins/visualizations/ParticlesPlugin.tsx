@@ -8,6 +8,7 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -74,12 +75,12 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  const particleCount = Math.round(Number(customSettings.particleCount) || 80);
-  const particleSize = Number(customSettings.particleSize) || 3;
-  const speed = Number(customSettings.speed) || 1.5;
-  const particleColor = String(customSettings.particleColor || '#f59e0b');
-  const colorful = Boolean(customSettings.colorful !== false && customSettings.colorful !== 'false');
-  const spread = Number(customSettings.spread) || 1.5;
+  const particleCount = Math.round(getNumberSetting(customSettings.particleCount, 80, 20, 200));
+  const particleSize = getNumberSetting(customSettings.particleSize, 3, 1, 10);
+  const speed = getNumberSetting(customSettings.speed, 1.5, 0.5, 3.0);
+  const particleColor = getStringSetting(customSettings.particleColor, '#f59e0b');
+  const colorful = getBooleanSetting(customSettings.colorful, true);
+  const spread = getNumberSetting(customSettings.spread, 1.5, 0.5, 3.0);
 
   // Calculate audio reactivity
   const audioIntensity = useMemo(() => {
@@ -88,17 +89,21 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
   }, [audioData, intensity]);
 
   // Generate stable particle configurations
+  // Use viewport-relative positioning to ensure particles are visible
   const particles = useMemo(() => {
     return Array.from({ length: particleCount }, (_, i) => {
+      // Distribute particles across the viewport
       const angle = (i / particleCount) * Math.PI * 2;
-      const distance = (Math.random() * 0.5 + 0.5) * spread * 100;
-      const initialX = 50 + Math.cos(angle) * distance;
-      const initialY = 50 + Math.sin(angle) * distance;
+      const distance = (Math.random() * 0.3 + 0.2) * spread; // 20-50% of viewport
+      const centerX = 0.5; // Center of viewport (50%)
+      const centerY = 0.5;
+      const initialX = centerX + Math.cos(angle) * distance;
+      const initialY = centerY + Math.sin(angle) * distance;
       
       return {
         id: i,
-        initialX,
-        initialY,
+        initialX: Math.max(0.1, Math.min(0.9, initialX)), // Clamp to 10-90% of viewport
+        initialY: Math.max(0.1, Math.min(0.9, initialY)),
         duration: 3 + Math.random() * 2,
         delay: Math.random() * 2,
         color: colorful 
@@ -146,26 +151,37 @@ const Particle: React.FC<ParticleProps> = ({
   size,
   audioIntensity,
 }) => {
-  // Random target position
-  const targetX = useMemo(() => initialX + (Math.random() - 0.5) * 100, [initialX]);
-  const targetY = useMemo(() => initialY + (Math.random() - 0.5) * 100, [initialY]);
+  // Random target position within viewport bounds (as percentage)
+  const targetX = useMemo(() => {
+    const offset = (Math.random() - 0.5) * 0.3; // Max 15% movement
+    return Math.max(0.05, Math.min(0.95, initialX + offset));
+  }, [initialX]);
+  
+  const targetY = useMemo(() => {
+    const offset = (Math.random() - 0.5) * 0.3;
+    return Math.max(0.05, Math.min(0.95, initialY + offset));
+  }, [initialY]);
+
+  // Ensure minimum visible size
+  const finalSize = Math.max(2, size);
 
   return (
     <motion.div
       className="absolute rounded-full"
       style={{
-        left: `${initialX}%`,
-        top: `${initialY}%`,
-        width: `${size}px`,
-        height: `${size}px`,
+        left: `${initialX * 100}%`,
+        top: `${initialY * 100}%`,
+        width: `${finalSize}px`,
+        height: `${finalSize}px`,
         backgroundColor: color,
-        boxShadow: `0 0 ${size * 2}px ${color}`,
+        boxShadow: `0 0 ${finalSize * 2}px ${color}`,
+        transform: 'translate(-50%, -50%)', // Center the particle on its position
       }}
       animate={{
-        x: [0, targetX - initialX, 0],
-        y: [0, targetY - initialY, 0],
-        opacity: [0, 1, 0.8, 0],
-        scale: [0.5, 1 + audioIntensity, 0.5],
+        x: [(targetX - initialX) * 100 + '%', (initialX - targetX) * 100 + '%', (targetX - initialX) * 100 + '%'],
+        y: [(targetY - initialY) * 100 + '%', (initialY - targetY) * 100 + '%', (targetY - initialY) * 100 + '%'],
+        opacity: [0.3, 1, 0.8, 0.3],
+        scale: [0.8, 1 + audioIntensity * 0.5, 0.8],
       }}
       transition={{
         duration,

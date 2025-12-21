@@ -10,6 +10,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { MeshDistortMaterial, Sphere, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -124,15 +125,18 @@ const AudioReactiveSphere: React.FC<AudioReactiveSphereProps> = ({
     meshRef.current.rotation.y = state.clock.getElapsedTime() * 0.2 + lowFreq * 1;
   });
 
+  // Convert hex color to RGB for Three.js
+  const colorValue = new THREE.Color(sphereColor);
+  
   return (
     <Sphere ref={meshRef} args={[1, 128, 128]}>
       <MeshDistortMaterial
-        color={sphereColor}
+        color={colorValue}
         speed={1.5}
         distort={sphereDistort}
         radius={1}
-        emissive={sphereColor}
-        emissiveIntensity={0.5}
+        emissive={colorValue}
+        emissiveIntensity={0.5 * sphereOpacity}
         roughness={0}
         metalness={1}
         transparent={sphereOpacity < 1}
@@ -217,15 +221,15 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { intensity, dim } = commonSettings;
-  // Ensure proper type conversion and provide defaults
-  const barCount = Math.round(Number(customSettings.barCount) || 48);
-  const sphereScale = Number(customSettings.sphereScale) || 1.0;
-  const sphereDistort = Number(customSettings.sphereDistort) || 0.5;
-  const colorScheme = String(customSettings.colorScheme || 'rainbow');
-  const showSphere = Boolean(customSettings.showSphere !== false && customSettings.showSphere !== 'false');
-  const showBars = Boolean(customSettings.showBars !== false && customSettings.showBars !== 'false');
-  const sphereOpacity = Number(customSettings.sphereOpacity) || 1.0;
-  const sphereColor = String(customSettings.sphereColor || '#ffffff');
+  // Use utility functions to properly handle 0, false, and empty string as valid values
+  const barCount = Math.round(getNumberSetting(customSettings.barCount, 48, 16, 96));
+  const sphereScale = getNumberSetting(customSettings.sphereScale, 1.0, 0.5, 2.0);
+  const sphereDistort = getNumberSetting(customSettings.sphereDistort, 0.5, 0.1, 1.0);
+  const colorScheme = getStringSetting(customSettings.colorScheme, 'rainbow');
+  const showSphere = getBooleanSetting(customSettings.showSphere, true);
+  const showBars = getBooleanSetting(customSettings.showBars, true);
+  const sphereOpacity = getNumberSetting(customSettings.sphereOpacity, 1.0, 0, 1);
+  const sphereColor = getStringSetting(customSettings.sphereColor, '#ffffff');
   
   console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars, sphereOpacity, sphereColor });
 

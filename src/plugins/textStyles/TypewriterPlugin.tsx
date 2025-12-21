@@ -8,6 +8,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -71,17 +72,17 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
   message,
   messageTimestamp,
   settings,
+  verticalOffset = 0,
   onComplete,
 }) => {
   const [displayedText, setDisplayedText] = useState('');
-  const [showCursor, setShowCursor] = useState(true);
 
-  const typingSpeed = (settings.typingSpeed as number) ?? 80;
-  const fontSize = (settings.fontSize as number) ?? 4;
-  const color = (settings.color as string) ?? '#ffffff';
-  const cursorColor = (settings.cursorColor as string) ?? '#00ff00';
-  const showCursorSetting = (settings.showCursor as boolean) ?? true;
-  const position = (settings.position as string) ?? 'center';
+  const typingSpeed = getNumberSetting(settings.typingSpeed, 80, 30, 200);
+  const fontSize = getNumberSetting(settings.fontSize, 4, 2, 12);
+  const color = getStringSetting(settings.color, '#ffffff');
+  const cursorColor = getStringSetting(settings.cursorColor, '#00ff00');
+  const showCursorSetting = getBooleanSetting(settings.showCursor, true);
+  const position = getStringSetting(settings.position, 'center');
 
   // Calculate position classes
   const positionClass = {
@@ -91,44 +92,50 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
   }[position] || 'top-1/2 -translate-y-1/2';
 
   useEffect(() => {
-    if (message) {
+    if (!message) {
       setDisplayedText('');
-      setShowCursor(true);
-      let currentIndex = 0;
-
-      const typeInterval = setInterval(() => {
-        if (currentIndex < message.length) {
-          setDisplayedText(message.slice(0, currentIndex + 1));
-          currentIndex++;
-        } else {
-          clearInterval(typeInterval);
-          // Wait a bit before calling onComplete
-          setTimeout(() => {
-            setShowCursor(false);
-            onComplete?.();
-          }, 1000);
-        }
-      }, typingSpeed);
-
-      return () => clearInterval(typeInterval);
+      return;
     }
-  }, [message, messageTimestamp, typingSpeed, onComplete]);
 
-  // Blink cursor
-  useEffect(() => {
-    if (!showCursorSetting || !message) return;
+    // Reset state when message changes
+    setDisplayedText('');
     
-    const blinkInterval = setInterval(() => {
-      setShowCursor(prev => !prev);
-    }, 530);
+    // Start with first character immediately
+    if (message.length > 0) {
+      setDisplayedText(message[0]);
+    }
+    
+    let currentIndex = 1;
+    let completeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    return () => clearInterval(blinkInterval);
-  }, [showCursorSetting, message]);
+    const typeInterval = setInterval(() => {
+      if (currentIndex < message.length) {
+        setDisplayedText(message.slice(0, currentIndex + 1));
+        currentIndex++;
+      } else {
+        clearInterval(typeInterval);
+        // Wait a bit before calling onComplete
+        completeTimer = setTimeout(() => {
+          onComplete?.();
+        }, 1000);
+      }
+    }, typingSpeed);
+
+    return () => {
+      clearInterval(typeInterval);
+      if (completeTimer) {
+        clearTimeout(completeTimer);
+      }
+    };
+  }, [message, messageTimestamp, typingSpeed, onComplete]);
 
   if (!message) return null;
 
   return (
-    <div className={`fixed ${positionClass} left-0 w-full flex items-center justify-center pointer-events-none z-50 px-8`}>
+    <div 
+      className={`fixed ${positionClass} left-0 w-full flex items-center justify-center pointer-events-none px-8`}
+      style={{ transform: `translateY(${verticalOffset}px)` }}
+    >
       <div className="text-center">
         <span
           className="font-mono"
@@ -138,7 +145,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
           }}
         >
           {displayedText}
-          {showCursorSetting && showCursor && (
+          {showCursorSetting && (
             <motion.span
               animate={{ opacity: [1, 0, 1] }}
               transition={{ duration: 0.8, repeat: Infinity }}

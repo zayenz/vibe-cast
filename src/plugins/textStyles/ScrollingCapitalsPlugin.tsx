@@ -5,9 +5,10 @@
  * The classic marquee style.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
+import { getNumberSetting, getStringSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -68,15 +69,18 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   message,
   messageTimestamp,
   settings,
+  verticalOffset = 0,
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
+  const completedRef = useRef(false);
+  const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const duration = (settings.duration as number) ?? 10;
-  const fontSize = (settings.fontSize as number) ?? 8;
-  const color = (settings.color as string) ?? '#ffffff';
-  const glowIntensity = (settings.glowIntensity as number) || 0.5;
-  const position = (settings.position as string) ?? 'top';
+  const duration = getNumberSetting(settings.duration, 10, 5, 20);
+  const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
+  const color = getStringSetting(settings.color, '#ffffff');
+  const glowIntensity = getNumberSetting(settings.glowIntensity, 0.5, 0, 1);
+  const position = getStringSetting(settings.position, 'top');
 
   // Calculate position classes
   const positionClass = {
@@ -91,30 +95,54 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     ? `0 5px ${glowSize}px rgba(255, 255, 255, ${glowIntensity})`
     : 'none';
 
+  // Handle completion - only call once
+  const handleComplete = () => {
+    if (!completedRef.current) {
+      completedRef.current = true;
+      setDisplayMessage(null);
+      onComplete?.();
+      // Clear safety timeout if it exists
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current);
+        safetyTimeoutRef.current = null;
+      }
+    }
+  };
+
   useEffect(() => {
     if (message) {
-      // Force a reset if the same message is triggered again
-      setDisplayMessage(null);
+      // Reset completion flag
+      completedRef.current = false;
+      // Immediately show the message
+      setDisplayMessage(message);
       
-      // Small delay to allow AnimatePresence to see the null state
-      const nextTick = setTimeout(() => {
-        setDisplayMessage(message);
-      }, 50);
-
-      const timer = setTimeout(() => {
-        setDisplayMessage(null);
-        onComplete?.();
-      }, (duration * 1000) + 50); // Show for duration + delay
+      // Safety timeout: ensure message is cleared even if animation doesn't complete
+      // The animation goes from 100% to -100% (200% of viewport), but if text is longer
+      // than viewport, it needs additional time. Add buffer based on text length.
+      // Estimate: each character is roughly fontSize * 0.6rem wide
+      // For very long text, we need extra time beyond the base duration
+      const estimatedTextWidthRem = message.length * (fontSize * 0.6);
+      // Assume viewport is roughly 100rem wide (typical), so if text is longer, add buffer
+      const textWidthRatio = Math.max(1, estimatedTextWidthRem / 100);
+      const bufferTime = Math.max(3, textWidthRatio * 2); // At least 3 seconds, more for long text
+      safetyTimeoutRef.current = setTimeout(() => {
+        handleComplete();
+      }, (duration + bufferTime) * 1000);
       
       return () => {
-        clearTimeout(nextTick);
-        clearTimeout(timer);
+        if (safetyTimeoutRef.current) {
+          clearTimeout(safetyTimeoutRef.current);
+          safetyTimeoutRef.current = null;
+        }
       };
     }
-  }, [message, messageTimestamp, duration, onComplete]);
+  }, [message, messageTimestamp, duration, fontSize, onComplete]);
 
   return (
-    <div className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none z-50`}>
+    <div 
+      className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
+      style={{ transform: `translateY(${verticalOffset}px)` }}
+    >
       <AnimatePresence>
         {displayMessage && (
           <motion.div
@@ -123,6 +151,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
             animate={{ x: '-100%' }}
             exit={{ opacity: 0 }}
             transition={{ duration, ease: "linear" }}
+            onAnimationComplete={handleComplete}
             className="whitespace-nowrap"
           >
             <span 

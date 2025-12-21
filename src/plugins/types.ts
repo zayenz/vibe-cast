@@ -142,6 +142,9 @@ export interface TextStyleProps {
   /** Settings for this text style */
   settings: Record<string, unknown>;
   
+  /** Vertical offset for stacking multiple messages */
+  verticalOffset?: number;
+  
   /** Callback when the message display is complete */
   onComplete?: () => void;
 }

@@ -218,12 +218,19 @@ export const useStore = create<AppState>((set, get) => ({
   triggerMessage: (message, sync = true) => {
     console.log(`Triggering message: ${message.text}, sync=${sync}`);
     const timestamp = Date.now();
-    set(state => ({
-      activeMessages: [...state.activeMessages, { message, timestamp }],
-      // Legacy compatibility
-      activeMessage: message,
-      messageTimestamp: timestamp,
-    }));
+    set(state => {
+      // Limit to max 5 concurrent messages to prevent performance issues
+      const maxMessages = 5;
+      const newActiveMessages = [...state.activeMessages, { message, timestamp }];
+      const trimmedMessages = newActiveMessages.slice(-maxMessages);
+      
+      return {
+        activeMessages: trimmedMessages,
+        // Legacy compatibility
+        activeMessage: message,
+        messageTimestamp: timestamp,
+      };
+    });
     if (sync) {
       syncState('TRIGGER_MESSAGE', message);
     }
