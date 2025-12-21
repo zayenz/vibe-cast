@@ -56,17 +56,28 @@ export const ControlPlane: React.FC = () => {
   }, []);
 
   const toggleViz = async () => {
-    const allWindows = await getAllWebviewWindows();
-    const vizWindow = allWindows.find(w => w.label === 'viz');
-    
-    if (vizWindow) {
+    try {
+      const allWindows = await getAllWebviewWindows();
+      const vizWindow = allWindows.find(w => w.label === 'viz');
+      
+      if (!vizWindow) {
+        console.error('Viz window not found. Available windows:', allWindows.map(w => w.label));
+        return;
+      }
+      
       const visible = await vizWindow.isVisible();
+      console.log('Viz window visible:', visible);
+      
       if (visible) {
         await vizWindow.hide();
+        console.log('Viz window hidden');
       } else {
         await vizWindow.show();
         await vizWindow.setFocus();
+        console.log('Viz window shown and focused');
       }
+    } catch (error) {
+      console.error('Error toggling viz window:', error);
     }
   };
 
