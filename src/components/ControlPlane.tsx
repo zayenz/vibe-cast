@@ -96,10 +96,11 @@ export const ControlPlane: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const [serverInfo, setServerInfo] = useState<{ ip: string; port: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'visualizations' | 'text-styles'>('visualizations');
   const [expandedMessage, setExpandedMessage] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [draggedMessageId, setDraggedMessageId] = useState<string | null>(null);
+  const [showTextStylePresetsManager, setShowTextStylePresetsManager] = useState(false);
+  const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
 
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
@@ -138,6 +139,13 @@ export const ControlPlane: React.FC = () => {
       clearTimeout(timer);
     };
   }, [hasState]); // Use boolean instead of state object
+
+  // Default "current" text preset for newly created messages
+  useEffect(() => {
+    if (!newMessageTextStylePresetId && textStylePresets.length > 0) {
+      setNewMessageTextStylePresetId(textStylePresets[0].id);
+    }
+  }, [newMessageTextStylePresetId, textStylePresets]);
 
   // CRITICAL: NO early returns - always render the same structure
   // Use defaults if state is not available yet - always have values to render
@@ -185,10 +193,14 @@ export const ControlPlane: React.FC = () => {
 
   const handleAddMessage = () => {
     if (newMessage.trim()) {
+      const preset = newMessageTextStylePresetId
+        ? textStylePresets.find((p) => p.id === newMessageTextStylePresetId)
+        : null;
       const newMsg: MessageConfig = {
         id: Date.now().toString(36) + Math.random().toString(36).substr(2),
         text: newMessage.trim(),
-        textStyle: defaultTextStyle,
+        textStyle: preset?.textStyleId ?? defaultTextStyle,
+        textStylePreset: preset?.id || undefined,
       };
       sendCommand('set-messages', [...messages, newMsg]);
       setNewMessage('');
@@ -465,7 +477,10 @@ export const ControlPlane: React.FC = () => {
                     .filter(p => p.enabled !== false)
                     .map((preset) => {
                       const viz = getVisualization(preset.visualizationId);
-                      const isActive = preset.id === activeVisualizationPreset;
+                      // If we don't have an explicit active preset yet, fall back to the active visualization id
+                      const isActive =
+                        preset.id === activeVisualizationPreset ||
+                        (!activeVisualizationPreset && preset.visualizationId === activeVisualization);
                       return (
                   <VisualizationCard 
                           key={preset.id}
@@ -505,78 +520,37 @@ export const ControlPlane: React.FC = () => {
                       />
                     </div>
 
-                    {/* Tabs */}
-                    <div className="flex gap-2 border-b border-zinc-800">
-                      <button
-                        onClick={() => setSettingsTab('visualizations')}
-                        className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
-                          settingsTab === 'visualizations'
-                            ? 'border-orange-500 text-orange-500'
-                            : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                        }`}
-                      >
-                        Visualizations
-                      </button>
-                      <button
-                        onClick={() => setSettingsTab('text-styles')}
-                        className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
-                          settingsTab === 'text-styles'
-                            ? 'border-orange-500 text-orange-500'
-                            : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                        }`}
-                      >
-                        Text Styles
-                      </button>
-                    </div>
+                    {/* Visualization Presets Manager */}
+                    <div className="space-y-6">
+                      <div>
+                        <VisualizationPresetsManager
+                          presets={visualizationPresets}
+                          activePresetId={activeVisualizationPreset}
+                          onAddPreset={handleAddPreset}
+                          onUpdatePreset={handleUpdatePreset}
+                          onDeletePreset={handleDeletePreset}
+                          onSetActivePreset={handleSetActivePreset}
+                        />
+                      </div>
 
-                    {/* Tab Content */}
-                    {settingsTab === 'visualizations' && (
-                      <div className="space-y-6">
-                        {/* Visualization Presets Manager */}
+                      {/* Active Preset Settings */}
+                      {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
                         <div>
-                          <VisualizationPresetsManager
-                            presets={visualizationPresets}
-                            activePresetId={activeVisualizationPreset}
-                            onAddPreset={handleAddPreset}
-                            onUpdatePreset={handleUpdatePreset}
-                            onDeletePreset={handleDeletePreset}
-                            onSetActivePreset={handleSetActivePreset}
+                          <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                            {activePreset.name} Settings
+                          </h3>
+                          <SettingsRenderer
+                            schema={activePlugin.settingsSchema}
+                            values={activePreset.settings}
+                            onChange={(key, value) => {
+                              handleUpdatePreset(activePreset.id, {
+                                settings: { ...activePreset.settings, [key]: value },
+                              });
+                            }}
                           />
                         </div>
-
-                        {/* Active Preset Settings */}
-                        {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
-                      <div>
-                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                              {activePreset.name} Settings
-                        </h3>
-                        <SettingsRenderer
-                          schema={activePlugin.settingsSchema}
-                              values={activePreset.settings}
-                          onChange={(key, value) => {
-                                handleUpdatePreset(activePreset.id, {
-                                  settings: { ...activePreset.settings, [key]: value },
-                                });
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {settingsTab === 'text-styles' && (
-                      <div className="space-y-6">
-                        {/* Text Style Presets Manager */}
-                    <div>
-                          <TextStylePresetsManager
-                            presets={textStylePresets}
-                            onAddPreset={handleAddTextStylePreset}
-                            onUpdatePreset={handleUpdateTextStylePreset}
-                            onDeletePreset={handleDeleteTextStylePreset}
-                          />
-                          </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </motion.section>
               )}
@@ -624,6 +598,60 @@ export const ControlPlane: React.FC = () => {
                   <Send size={18} />
                 </button>
               </div>
+
+              {/* New message style preset (current preset) */}
+              <div className="mb-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold tracking-[0.2em] text-zinc-500 uppercase">
+                    Text Style Preset (new messages)
+                  </label>
+                  <button
+                    onClick={() => setShowTextStylePresetsManager((v) => !v)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
+                      showTextStylePresetsManager
+                        ? 'bg-orange-500 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                    }`}
+                    title="Manage text style presets"
+                  >
+                    <Sliders size={14} />
+                    Presets
+                  </button>
+                </div>
+                <select
+                  value={newMessageTextStylePresetId}
+                  onChange={(e) => setNewMessageTextStylePresetId(e.target.value)}
+                  className="w-full bg-black border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-200 focus:border-orange-500/50 outline-none transition-all"
+                >
+                  <option value="">Default ({defaultTextStyle})</option>
+                  {textStylePresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Text style presets manager (in Messages sidebar) */}
+              <AnimatePresence>
+                {showTextStylePresetsManager && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mb-4 border border-zinc-800 rounded-xl overflow-hidden"
+                  >
+                    <div className="p-4 bg-zinc-950">
+                      <TextStylePresetsManager
+                        presets={textStylePresets}
+                        onAddPreset={handleAddTextStylePreset}
+                        onUpdatePreset={handleUpdateTextStylePreset}
+                        onDeletePreset={handleDeleteTextStylePreset}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                 <AnimatePresence initial={false}>
@@ -675,6 +703,17 @@ export const ControlPlane: React.FC = () => {
                                   : 'bg-zinc-600'
                               }`} />
                               <span>{msg.text}</span>
+                              {/* Style indicator */}
+                              <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-500 border border-zinc-800 bg-zinc-900/40 rounded px-1.5 py-0.5">
+                                {(() => {
+                                  const preset = msg.textStylePreset
+                                    ? textStylePresets.find(p => p.id === msg.textStylePreset)
+                                    : null;
+                                  if (preset) return preset.name;
+                                  const style = getTextStyle(msg.textStyle);
+                                  return style?.name ?? msg.textStyle;
+                                })()}
+                              </span>
                               {isAnimating && (
                                 <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
                               )}
@@ -754,13 +793,18 @@ export const ControlPlane: React.FC = () => {
                                 <select
                                   value={msg.textStylePreset || ''}
                                   onChange={(e) => {
+                                    const nextPresetId = e.target.value || '';
+                                    const nextPreset = nextPresetId
+                                      ? textStylePresets.find((p) => p.id === nextPresetId)
+                                      : null;
+
                                     const updates: Partial<MessageConfig> = {
-                                      textStylePreset: e.target.value || undefined,
+                                      textStylePreset: nextPreset?.id || undefined,
+                                      // If switching style basis, clear per-message overrides to avoid mismatched schemas
+                                      styleOverrides: undefined,
+                                      // Keep a sensible fallback styleId on the message itself
+                                      textStyle: nextPreset?.textStyleId ?? defaultTextStyle,
                                     };
-                                    if (!e.target.value) {
-                                      // If no preset, use default text style
-                                      updates.textStyle = defaultTextStyle;
-                                    }
                                     sendCommand('set-messages', messages.map(m => 
                                       m.id === msg.id ? { ...m, ...updates } : m
                                     ));
@@ -850,26 +894,62 @@ export const ControlPlane: React.FC = () => {
                                 }
 
                                 const presetSettings = preset?.settings || textStyleSettings[styleId] || {};
+                                const overridesEnabled = msg.styleOverrides != null;
                                 const overrides = msg.styleOverrides || {};
                                 const mergedSettings = { ...presetSettings, ...overrides };
 
                                 return (
                                   <div>
-                                    <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                                      Style Overrides
-                                    </label>
-                                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-                                      <SettingsRenderer
-                                        schema={textStyle.settingsSchema}
-                                        values={mergedSettings}
-                                        onChange={(key, value) => {
-                                          const newOverrides = { ...overrides, [key]: value };
-                                          sendCommand('set-messages', messages.map(m => 
-                                            m.id === msg.id ? { ...m, styleOverrides: newOverrides } : m
-                                          ));
-                                        }}
-                                      />
+                                    <div className="flex items-center justify-between mb-2">
+                                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                                        Per-message settings
+                                      </label>
+                                      <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-2 text-xs text-zinc-400">
+                                          <input
+                                            type="checkbox"
+                                            checked={overridesEnabled}
+                                            onChange={(e) => {
+                                              const enabled = e.target.checked;
+                                              sendCommand('set-messages', messages.map(m =>
+                                                m.id === msg.id
+                                                  ? { ...m, styleOverrides: enabled ? {} : undefined }
+                                                  : m
+                                              ));
+                                            }}
+                                            className="accent-orange-500"
+                                          />
+                                          Override
+                                        </label>
+                                        {overridesEnabled && (
+                                          <button
+                                            onClick={() => {
+                                              sendCommand('set-messages', messages.map(m =>
+                                                m.id === msg.id ? { ...m, styleOverrides: {} } : m
+                                              ));
+                                            }}
+                                            className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
+                                            title="Reset overrides to preset/default"
+                                          >
+                                            Reset
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
+                                    {overridesEnabled && (
+                                      <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                                        <SettingsRenderer
+                                          schema={textStyle.settingsSchema}
+                                          values={mergedSettings}
+                                          onChange={(key, value) => {
+                                            const newOverrides = { ...overrides, [key]: value };
+                                            sendCommand('set-messages', messages.map(m => 
+                                              m.id === msg.id ? { ...m, styleOverrides: newOverrides } : m
+                                            ));
+                                          }}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })()}

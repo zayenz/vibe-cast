@@ -10,7 +10,7 @@ import {
   DEFAULT_COMMON_SETTINGS,
 } from './plugins/types';
 import { getDefaultVisualizationSettings, visualizationRegistry } from './plugins/visualizations';
-import { getDefaultTextStyleSettings } from './plugins/textStyles';
+import { getDefaultTextStyleSettings, textStyleRegistry } from './plugins/textStyles';
 import defaultConfig from './config/defaultConfig.json';
 
 // ============================================================================
@@ -146,12 +146,31 @@ function parseDefaultConfig(): Partial<AppState> {
   // If no text style presets exist, create defaults from existing settings
   if (textStylePresets.length === 0 && config.textStyleSettings) {
     Object.entries(config.textStyleSettings).forEach(([styleId, settings]) => {
+      const registryStyle = textStyleRegistry.find(s => s.id === styleId);
       textStylePresets.push({
         id: generateId(),
-        name: `${styleId.charAt(0).toUpperCase() + styleId.slice(1).replace(/-/g, ' ')} Default`,
+        // Default presets should read like the style name, not "Default"/"Preset"
+        name: registryStyle?.name ?? (styleId.charAt(0).toUpperCase() + styleId.slice(1).replace(/-/g, ' ')),
         textStyleId: styleId,
         settings,
       });
+    });
+  }
+
+  // Ensure one preset per registered text style exists (even if no textStyleSettings were present)
+  const existingTextStyleIds = new Set(textStylePresets.map(p => p.textStyleId));
+  if (Array.isArray(textStyleRegistry) && textStyleRegistry.length > 0) {
+    const defaultsByStyleId = getDefaultTextStyleSettings();
+    textStyleRegistry.forEach((style) => {
+      if (!existingTextStyleIds.has(style.id)) {
+        textStylePresets.push({
+          id: generateId(),
+          // Default presets should read like the style name, not "Default"/"Preset"
+          name: style.name,
+          textStyleId: style.id,
+          settings: config.textStyleSettings?.[style.id] || defaultsByStyleId[style.id] || {},
+        });
+      }
     });
   }
   

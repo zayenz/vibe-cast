@@ -5,7 +5,7 @@
  * Creates a retro, nostalgic feel.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
@@ -76,6 +76,12 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
   onComplete,
 }) => {
   const [displayedText, setDisplayedText] = useState('');
+  // IMPORTANT: parent often passes a new function each render; don't let that restart typing.
+  const onCompleteRef = useRef<TextStyleProps['onComplete']>(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   const typingSpeed = getNumberSetting(settings.typingSpeed, 80, 30, 200);
   const fontSize = getNumberSetting(settings.fontSize, 4, 2, 12);
@@ -116,7 +122,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
         clearInterval(typeInterval);
         // Wait a bit before calling onComplete
         completeTimer = setTimeout(() => {
-          onComplete?.();
+          onCompleteRef.current?.();
         }, 1000);
       }
     }, typingSpeed);
@@ -127,7 +133,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
         clearTimeout(completeTimer);
       }
     };
-  }, [message, messageTimestamp, typingSpeed, onComplete]);
+  }, [message, messageTimestamp, typingSpeed]);
 
   if (!message) return null;
 

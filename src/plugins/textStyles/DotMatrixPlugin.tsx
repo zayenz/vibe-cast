@@ -81,7 +81,7 @@ const settingsSchema: SettingDefinition[] = [
       { value: 'center', label: 'Center' },
       { value: 'bottom', label: 'Bottom' },
     ],
-    default: 'center',
+    default: 'top',
   },
 ];
 
@@ -164,7 +164,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   const bgColor = getStringSetting(settings.bgColor, '#000000');
   const fadeInDuration = getNumberSetting(settings.fadeInDuration, 1.0, 0.5, 3.0);
   const scrollSpeed = getNumberSetting(settings.scrollSpeed, 3, 1, 10);
-  const position = getStringSetting(settings.position, 'center');
+  const position = getStringSetting(settings.position, 'top');
 
   const positionClass = {
     top: 'top-20',
@@ -174,8 +174,17 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
 
   const charWidth = 5 * (dotSize + spacing) + spacing;
   const charHeight = 7 * (dotSize + spacing) + spacing;
-  const totalWidth = message.length * charWidth + window.innerWidth;
   const totalHeight = charHeight;
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 0
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const handleComplete = () => {
     if (!completedRef.current) {
@@ -204,11 +213,12 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
     const startTime = Date.now();
     const charsPerSecond = scrollSpeed;
     const pixelsPerChar = charWidth;
-    const totalScrollDistance = totalWidth;
+    // Scroll from off-screen right to off-screen left
+    const totalScrollDistance = viewportWidth + message.length * charWidth;
 
     const animate = () => {
       const elapsed = (Date.now() - startTime) / 1000;
-      const charsToShow = Math.min(Math.floor(elapsed * charsPerSecond), message.length);
+      const charsToShow = Math.min(Math.floor(elapsed * charsPerSecond) + 1, message.length);
       const scrollPx = Math.min(elapsed * charsPerSecond * pixelsPerChar, totalScrollDistance);
 
       setDisplayedChars(charsToShow);
@@ -229,7 +239,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isVisible, message, scrollSpeed, charWidth, totalWidth]);
+  }, [isVisible, message, scrollSpeed, charWidth, viewportWidth]);
 
   // Render dots on canvas
   useEffect(() => {
@@ -239,29 +249,38 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = totalWidth;
+    // Draw only the visible viewport to avoid huge canvases + centering issues.
+    canvas.width = Math.max(1, viewportWidth);
     canvas.height = totalHeight;
 
     // Clear with background color
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw characters
-    let xOffset = -scrollPosition;
-    
+    // Deterministic "density" mask (stable across frames; avoids flicker).
+    const shouldDrawDot = (i: number, row: number, col: number) => {
+      // simple hash → [0,1)
+      const h = ((i + 1) * 73856093) ^ ((row + 1) * 19349663) ^ ((col + 1) * 83492791);
+      const v = Math.abs(h % 1000) / 1000;
+      return v <= dotDensity;
+    };
+
+    // Draw characters: start off-screen right and move left
+    const startX = viewportWidth - scrollPosition;
+
     for (let i = 0; i < message.length; i++) {
       const char = message[i];
       const matrix = getCharMatrix(char);
-      const charX = xOffset + i * charWidth;
+      const charX = startX + i * charWidth;
 
       // Only draw if character is visible on screen
-      if (charX + charWidth > 0 && charX < window.innerWidth) {
+      if (charX + charWidth > 0 && charX < viewportWidth) {
         // Draw dots for this character
         for (let row = 0; row < 7; row++) {
           for (let col = 0; col < 5; col++) {
             if (matrix[row] && matrix[row][col] === 1) {
-              // Apply density - randomly skip some dots
-              if (Math.random() > dotDensity) continue;
+              // Apply density - deterministically skip some dots
+              if (!shouldDrawDot(i, row, col)) continue;
 
               const x = charX + col * (dotSize + spacing) + spacing;
               const y = row * (dotSize + spacing) + spacing;
@@ -277,10 +296,8 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
           }
         }
       }
-
-      xOffset += charWidth;
     }
-  }, [isVisible, message, scrollPosition, displayedChars, dotSize, spacing, dotColor, bgColor, dotDensity, charWidth, totalWidth, totalHeight]);
+  }, [isVisible, message, scrollPosition, displayedChars, dotSize, spacing, dotColor, bgColor, dotDensity, charWidth, totalHeight, viewportWidth]);
 
   if (!message || !isVisible) return null;
 
