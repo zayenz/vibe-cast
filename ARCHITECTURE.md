@@ -125,6 +125,21 @@ When state changes (via `/api/command` or Tauri invoke):
 - **3D/Animation**: React Three Fiber, Three.js, Framer Motion
 - **Backend**: Rust, Axum, Tokio, Cpal, RealFFT, tokio-stream
 
+## Recent Improvements
+
+### Multiple Active Messages
+The system now supports multiple messages displaying simultaneously. Each message manages its own lifecycle and calls `onComplete` when finished, allowing fade-style messages to coexist with scrolling messages.
+
+### Plugin Architecture Enhancements
+- **Visualization Plugins**: All visualizations are now plugins with configurable settings schemas.
+- **Text Style Plugins**: Text display styles are plugins with their own settings.
+- **Settings UI**: Automatic settings UI generation from plugin schemas.
+
+### Code Quality
+- **TypeScript Linting**: Modern ESLint configuration with strict TypeScript rules.
+- **Rust Clippy**: All Rust code passes Clippy with `-D warnings`.
+- **Type Safety**: Improved type safety throughout the codebase.
+
 ## Key Patterns
 
 ### useAppState Hook
@@ -179,7 +194,32 @@ npm test -- --run  # Single run
 ## Performance Considerations
 
 - **SSE over Polling**: The mobile remote now uses SSE instead of 3-second polling, providing instant updates with lower server load.
-- **Stable Animation Values**: The Fireplace component uses `useMemo` to compute random animation offsets once per component instance.
+- **Stable Animation Values**: Visualization components use `useMemo` to compute random animation offsets once per component instance.
 - **Audio Stream Lifecycle**: The audio capture stream uses `mem::forget` to keep it alive for the app's lifetime.
 - **Broadcast Channel Buffer**: The SSE broadcast channel has a buffer of 64 messages; slow clients may miss updates (which is acceptable since the next update contains full state).
 - **Visualizer on Tauri Events**: The Visualizer window uses Tauri IPC instead of SSE for audio data to handle 60fps updates efficiently.
+- **Multiple Message Rendering**: Messages are rendered independently, allowing efficient coexistence of different text styles.
+
+## Development
+
+### Linting and Code Quality
+
+The project uses modern linting tools to ensure code quality:
+
+- **TypeScript**: ESLint with TypeScript plugin for strict type checking
+- **Rust**: Clippy with `-D warnings` for all code
+- **Run linting**: `npm run lint` (TypeScript) and `cargo clippy` (Rust)
+
+### Adding New Visualizations
+
+1. Create a new plugin file in `src/plugins/visualizations/`
+2. Define a settings schema using `SettingDefinition[]`
+3. Export a `VisualizationPlugin` object
+4. Register in `src/plugins/visualizations/registry.ts`
+
+### Adding New Text Styles
+
+1. Create a new plugin file in `src/plugins/textStyles/`
+2. Define a settings schema using `SettingDefinition[]`
+3. Export a `TextStylePlugin` object
+4. Register in `src/plugins/textStyles/registry.ts`

@@ -48,8 +48,10 @@ export const ControlPlane: React.FC = () => {
 
   // Fetch server info from Tauri on mount
   useEffect(() => {
-    invoke('get_server_info').then((info: any) => {
+    invoke<{ ip: string; port: number }>('get_server_info').then((info) => {
       setServerInfo(info);
+    }).catch((err) => {
+      console.error('Failed to get server info:', err);
     });
   }, []);
 

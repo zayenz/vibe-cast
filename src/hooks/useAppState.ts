@@ -39,6 +39,7 @@ interface UseAppStateOptions {
 /**
  * Parse SSE state into AppState, handling both legacy and new formats
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseSSEState(data: any): AppState {
   // Handle new format
   if (data.activeVisualization !== undefined) {
@@ -63,10 +64,10 @@ function parseSSEState(data: any): AppState {
     commonSettings: DEFAULT_COMMON_SETTINGS,
     visualizationSettings: {},
     messages: Array.isArray(data.messages) 
-      ? data.messages.map((m: any, i: number) => 
+      ? data.messages.map((m: unknown, i: number) => 
           typeof m === 'string' 
             ? { id: String(i), text: m, textStyle: 'scrolling-capitals' }
-            : m
+            : m as MessageConfig
         )
       : [],
     triggeredMessage: data.triggered_message 

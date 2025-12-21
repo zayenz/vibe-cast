@@ -64,6 +64,12 @@ pub struct AppStateSync {
     pub state_tx: broadcast::Sender<BroadcastState>,
 }
 
+impl Default for AppStateSync {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppStateSync {
     pub fn new() -> Self {
         let (state_tx, _) = broadcast::channel(64);

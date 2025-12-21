@@ -1,8 +1,8 @@
 /**
- * Scrolling Capitals Text Style Plugin
+ * Bounce Text Style Plugin
  * 
- * Large uppercase text that scrolls across the screen from right to left.
- * The classic marquee style.
+ * Text bounces into view with a playful animation.
+ * Great for energetic, fun messages.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -16,21 +16,30 @@ import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 const settingsSchema: SettingDefinition[] = [
   {
     type: 'range',
-    id: 'duration',
-    label: 'Scroll Duration (seconds)',
-    min: 5,
-    max: 20,
-    step: 1,
-    default: 10,
+    id: 'displayDuration',
+    label: 'Display Duration (seconds)',
+    min: 2,
+    max: 10,
+    step: 0.5,
+    default: 4,
+  },
+  {
+    type: 'range',
+    id: 'bounceIntensity',
+    label: 'Bounce Intensity',
+    min: 0.5,
+    max: 2.0,
+    step: 0.1,
+    default: 1.0,
   },
   {
     type: 'range',
     id: 'fontSize',
     label: 'Font Size (rem)',
-    min: 4,
+    min: 3,
     max: 16,
     step: 0.5,
-    default: 8,
+    default: 6,
   },
   {
     type: 'color',
@@ -45,18 +54,18 @@ const settingsSchema: SettingDefinition[] = [
     min: 0,
     max: 1,
     step: 0.1,
-    default: 0.5,
+    default: 0.6,
   },
   {
     type: 'select',
     id: 'position',
-    label: 'Vertical Position',
+    label: 'Position',
     options: [
       { value: 'top', label: 'Top' },
       { value: 'center', label: 'Center' },
       { value: 'bottom', label: 'Bottom' },
     ],
-    default: 'top',
+    default: 'center',
   },
 ];
 
@@ -64,7 +73,7 @@ const settingsSchema: SettingDefinition[] = [
 // Component
 // ============================================================================
 
-const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
+const BounceStyle: React.FC<TextStyleProps> = ({
   message,
   messageTimestamp,
   settings,
@@ -72,23 +81,24 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
 
-  const duration = (settings.duration as number) ?? 10;
-  const fontSize = (settings.fontSize as number) ?? 8;
+  const displayDuration = (settings.displayDuration as number) ?? 4;
+  const bounceIntensity = (settings.bounceIntensity as number) || 1.0;
+  const fontSize = (settings.fontSize as number) ?? 6;
   const color = (settings.color as string) ?? '#ffffff';
-  const glowIntensity = (settings.glowIntensity as number) || 0.5;
-  const position = (settings.position as string) ?? 'top';
+  const glowIntensity = (settings.glowIntensity as number) || 0.6;
+  const position = (settings.position as string) ?? 'center';
 
   // Calculate position classes
   const positionClass = {
     top: 'top-20',
     center: 'top-1/2 -translate-y-1/2',
     bottom: 'bottom-20',
-  }[position] || 'top-20';
+  }[position] || 'top-1/2 -translate-y-1/2';
 
   // Text shadow based on glow intensity
-  const glowSize = 15 * glowIntensity;
+  const glowSize = 20 * glowIntensity;
   const textShadow = glowIntensity > 0 
-    ? `0 5px ${glowSize}px rgba(255, 255, 255, ${glowIntensity})`
+    ? `0 0 ${glowSize}px ${color}, 0 0 ${glowSize * 2}px ${color}40`
     : 'none';
 
   useEffect(() => {
@@ -104,30 +114,47 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       const timer = setTimeout(() => {
         setDisplayMessage(null);
         onComplete?.();
-      }, (duration * 1000) + 50); // Show for duration + delay
+      }, (displayDuration * 1000) + 50);
       
       return () => {
         clearTimeout(nextTick);
         clearTimeout(timer);
       };
     }
-  }, [message, messageTimestamp, duration, onComplete]);
+  }, [message, messageTimestamp, displayDuration, onComplete]);
 
   return (
-    <div className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none z-50`}>
+    <div className={`fixed ${positionClass} left-0 w-full flex items-center justify-center pointer-events-none z-50 px-8`}>
       <AnimatePresence>
         {displayMessage && (
           <motion.div
             key={messageTimestamp}
-            initial={{ x: '100%' }}
-            animate={{ x: '-100%' }}
-            exit={{ opacity: 0 }}
-            transition={{ duration, ease: "linear" }}
-            className="whitespace-nowrap"
+            initial={{ 
+              opacity: 0, 
+              scale: 0.3,
+              y: -100 * bounceIntensity,
+            }}
+            animate={{ 
+              opacity: 1, 
+              scale: 1,
+              y: 0,
+            }}
+            exit={{ 
+              opacity: 0, 
+              scale: 0.5,
+              y: 50 * bounceIntensity,
+            }}
+            transition={{
+              type: "spring",
+              stiffness: 300,
+              damping: 20,
+              mass: 0.8,
+            }}
+            className="text-center"
           >
-            <span 
-              className="font-black uppercase tracking-tighter"
-              style={{ 
+            <span
+              className="font-black uppercase tracking-tight"
+              style={{
                 fontSize: `${fontSize}rem`,
                 color,
                 textShadow,
@@ -146,10 +173,11 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 // Plugin Export
 // ============================================================================
 
-export const ScrollingCapitalsPlugin: TextStylePlugin = {
-  id: 'scrolling-capitals',
-  name: 'Scrolling Capitals',
-  description: 'Large uppercase text scrolling across the screen',
+export const BouncePlugin: TextStylePlugin = {
+  id: 'bounce',
+  name: 'Bounce',
+  description: 'Text bounces into view with playful animation',
   settingsSchema,
-  component: ScrollingCapitalsStyle,
+  component: BounceStyle,
 };
+

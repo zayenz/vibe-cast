@@ -34,6 +34,7 @@ function App() {
 
   useEffect(() => {
     // Check if we are running in a mobile browser (Remote Control)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isTauri = !!(window as any).__TAURI_INTERNALS__;
     
     if (!isTauri) {
@@ -46,7 +47,6 @@ function App() {
     const checkLabel = async () => {
       try {
         const label = await getCurrentWebviewWindow().label;
-        console.log('Detected window label:', label);
         setWindowLabel(label);
       } catch (e) {
         console.error('Failed to get window label:', e);

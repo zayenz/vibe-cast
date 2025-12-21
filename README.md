@@ -8,11 +8,20 @@ A high-performance, multi-window macOS application built with **Tauri v2** and *
   - **Control Plane**: A management interface for the main monitor.
   - **Visualizer**: A dedicated, borderless window for the secondary display.
 - **Immersive Visualizations**:
-  - **Fireplace**: A calm, procedurally animated fireplace.
-  - **Techno**: A dynamic, audio-reactive 3D environment built with React Three Fiber.
+  - **Fireplace**: A calm, procedurally animated fireplace with configurable flames, embers, and glow.
+  - **Techno**: A dynamic, audio-reactive 3D environment built with React Three Fiber with customizable sphere and frequency bars.
+  - **Waves**: Flowing audio-reactive wave patterns for a calming, ocean-like visualization.
+  - **Particles**: Dynamic particle system with customizable colors and spread.
 - **Audio Reactivity**: Real-time FFT analysis of system audio (e.g., Spotify) using Rust.
 - **iPhone Remote**: A web-based remote control served over the LAN, accessible via QR code.
-- **Rolling Messages**: Overlay smooth, marquee-style text messages on top of visualizations.
+- **Text Message Styles**: Multiple text display styles with full customization:
+  - **Scrolling Capitals**: Large uppercase text scrolling across the screen (classic marquee).
+  - **Fade**: Centered text that fades in and out with customizable timing and styling.
+  - **Typewriter**: Character-by-character typing effect with blinking cursor.
+  - **Bounce**: Playful bounce-in animation with glow effects.
+- **Message Management**: Create, reorder, and remove preset messages. Multiple messages can display simultaneously.
+- **Visualization Selection**: Choose which visualizations appear as quick-access buttons.
+- **Comprehensive Settings**: Per-visualization and per-text-style settings with real-time preview.
 
 ## 🏗️ Architecture
 

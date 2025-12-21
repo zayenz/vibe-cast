@@ -224,7 +224,7 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
   const colorScheme = String(customSettings.colorScheme || 'rainbow');
   const showSphere = Boolean(customSettings.showSphere !== false && customSettings.showSphere !== 'false');
   const showBars = Boolean(customSettings.showBars !== false && customSettings.showBars !== 'false');
-  const sphereOpacity = Number(customSettings.sphereOpacity) ?? 1.0;
+  const sphereOpacity = Number(customSettings.sphereOpacity) || 1.0;
   const sphereColor = String(customSettings.sphereColor || '#ffffff');
   
   console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars, sphereOpacity, sphereColor });

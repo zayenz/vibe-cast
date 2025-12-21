@@ -46,7 +46,7 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
                     // Process FFT
                     let mut indata = buffer.clone();
                     let mut outdata = fft.make_output_vec();
-                    if let Ok(_) = fft.process(&mut indata, &mut outdata) {
+                    if fft.process(&mut indata, &mut outdata).is_ok() {
                         // Calculate magnitudes and normalize
                         let magnitudes: Vec<f32> = outdata
                             .iter()

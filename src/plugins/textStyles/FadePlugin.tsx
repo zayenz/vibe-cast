@@ -99,13 +99,13 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
 
   const displayDuration = (settings.displayDuration as number) ?? 5;
-  const fadeInDuration = (settings.fadeInDuration as number) ?? 0.5;
-  const fadeOutDuration = (settings.fadeOutDuration as number) ?? 0.5;
+  const fadeInDuration = (settings.fadeInDuration as number) || 0.5;
+  const fadeOutDuration = (settings.fadeOutDuration as number) || 0.5;
   const fontSize = (settings.fontSize as number) ?? 5;
   const color = (settings.color as string) ?? '#ffffff';
   const uppercase = (settings.uppercase as boolean) ?? false;
   const fontWeight = (settings.fontWeight as string) ?? 'bold';
-  const blurAmount = (settings.blurAmount as number) ?? 0;
+  const blurAmount = (settings.blurAmount as number) || 0;
 
   // Map font weight to CSS
   const fontWeightMap: Record<string, number> = {

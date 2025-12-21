@@ -137,6 +137,7 @@ export const VisualizerWindow: React.FC = () => {
     });
 
     // Listen for remote commands
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const unlistenRemote = listen<{ command: string, payload?: any }>('remote-command', (event) => {
       console.log('Received remote-command:', event.payload);
       const { command, payload } = event.payload;
@@ -172,6 +173,7 @@ export const VisualizerWindow: React.FC = () => {
     });
 
     // Listen for state changes from other windows
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const unlistenState = listen<{ type: string, payload: any }>('state-changed', (event) => {
       console.log('Received state-changed:', event.payload);
       const { type, payload } = event.payload;
