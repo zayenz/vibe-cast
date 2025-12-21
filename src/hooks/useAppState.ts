@@ -59,7 +59,7 @@ function parseSSEState(data: any): AppState {
       activeVisualizationPreset: data.activeVisualizationPreset ?? null,
       messages: data.messages ?? [],
       triggeredMessage: data.triggeredMessage ?? null,
-      messageStats: data.messageStats ?? {},
+      messageStats: data.messageStats ?? (typeof data.messageStats === 'object' ? data.messageStats : {}),
       defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: data.textStyleSettings ?? {},
       textStylePresets: data.textStylePresets ?? [],

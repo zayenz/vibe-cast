@@ -9,7 +9,7 @@ import {
   MessageStats,
   DEFAULT_COMMON_SETTINGS,
 } from './plugins/types';
-import { getDefaultVisualizationSettings } from './plugins/visualizations';
+import { getDefaultVisualizationSettings, visualizationRegistry } from './plugins/visualizations';
 import { getDefaultTextStyleSettings } from './plugins/textStyles';
 import defaultConfig from './config/defaultConfig.json';
 
@@ -109,7 +109,28 @@ function parseDefaultConfig(): Partial<AppState> {
   const visualizationPresets: VisualizationPreset[] = config.visualizationPresets ?? [];
   const textStylePresets: TextStylePreset[] = config.textStylePresets ?? [];
   
-  // If no visualization presets exist, create defaults from existing settings
+  // Ensure one preset per visualization exists
+  // Use the statically imported registry (works in app + Vitest; avoids CJS require issues)
+  const existingVizIds = new Set(visualizationPresets.map(p => p.visualizationId));
+  if (Array.isArray(visualizationRegistry) && visualizationRegistry.length > 0) {
+    visualizationRegistry.forEach((viz) => {
+      if (!existingVizIds.has(viz.id)) {
+        const defaultSettings =
+          config.visualizationSettings?.[viz.id] ||
+          getDefaultVisualizationSettings()[viz.id] ||
+          {};
+        visualizationPresets.push({
+          id: generateId(),
+          name: `${viz.name} Default`,
+          visualizationId: viz.id,
+          settings: defaultSettings,
+          enabled: true,
+        });
+      }
+    });
+  }
+  
+  // If no presets exist at all, create from existing settings
   if (visualizationPresets.length === 0 && config.visualizationSettings) {
     Object.entries(config.visualizationSettings).forEach(([vizId, settings]) => {
       visualizationPresets.push({
@@ -117,6 +138,7 @@ function parseDefaultConfig(): Partial<AppState> {
         name: `${vizId.charAt(0).toUpperCase() + vizId.slice(1)} Default`,
         visualizationId: vizId,
         settings,
+        enabled: true,
       });
     });
   }

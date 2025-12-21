@@ -188,6 +188,9 @@ export interface VisualizationPreset {
   
   /** Settings for this preset */
   settings: Record<string, unknown>;
+  
+  /** Whether this preset should be shown in the UI (default: true) */
+  enabled?: boolean;
 }
 
 /**

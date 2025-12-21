@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
@@ -28,8 +28,18 @@ const iconMap: Record<string, React.ReactNode> = {
 };
 
 export const ControlPlane: React.FC = () => {
+  console.log('[ControlPlane] Component rendering');
+  
   // SSE-based state - single source of truth
   const { state, isConnected } = useAppState({ apiBase: API_BASE });
+  console.log('[ControlPlane] useAppState returned - state:', state, 'isConnected:', isConnected);
+  
+  // Loading state while SSE connects - but don't wait forever
+  // CRITICAL: This must be declared BEFORE any conditional returns to maintain hook order
+  const [showLoading, setShowLoading] = useState(true);
+  
+  // Use a simple boolean to track if state exists (always defined, never undefined)
+  const hasState = state !== null;
   
   // Store for preset management (local state for now, will sync via commands)
   const visualizationPresets = useStore((s) => s.visualizationPresets);
@@ -38,9 +48,43 @@ export const ControlPlane: React.FC = () => {
   const updateVisualizationPreset = useStore((s) => s.updateVisualizationPreset);
   const deleteVisualizationPreset = useStore((s) => s.deleteVisualizationPreset);
   const setActiveVisualizationPreset = useStore((s) => s.setActiveVisualizationPreset);
-  const messageStats = useStore((s) => s.messageStats);
+  // Get message stats from SSE state (source of truth)
+  // CRITICAL: Never call hooks conditionally.
+  // This must ALWAYS call useStore, otherwise hook order changes between renders when SSE state arrives.
+  const storeMessageStats = useStore((s) => s.messageStats);
+  const messageStats = state?.messageStats ?? storeMessageStats;
   const activeMessages = useStore((s) => s.activeMessages);
   const clearActiveMessage = useStore((s) => s.clearActiveMessage);
+  
+  // Sync messageStats from SSE to store
+  // CRITICAL: Use a ref to track the last synced value and only sync when state changes
+  // Use a stable boolean dependency instead of computing a string key during render
+  const messageStatsSyncedRef = useRef<string>('');
+  const hasMessageStats = state?.messageStats != null;
+  
+  // Sync messageStats in useEffect with stable boolean dependency
+  // CRITICAL: Only depend on hasMessageStats (always a boolean, never undefined)
+  // Access state?.messageStats inside the effect via closure, not in dependency array
+  useEffect(() => {
+    if (!state?.messageStats) {
+      if (messageStatsSyncedRef.current !== '') {
+        messageStatsSyncedRef.current = '';
+      }
+      return;
+    }
+    
+    try {
+      const messageStatsKey = JSON.stringify(state.messageStats);
+      if (messageStatsSyncedRef.current !== messageStatsKey) {
+        console.log('[ControlPlane] Syncing messageStats to store');
+        messageStatsSyncedRef.current = messageStatsKey;
+        useStore.setState({ messageStats: state.messageStats });
+      }
+    } catch (e) {
+      console.error('[ControlPlane] Error serializing messageStats:', e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMessageStats]); // ONLY hasMessageStats - state is accessed via closure
   
   // Store for text style presets
   const textStylePresets = useStore((s) => s.textStylePresets);
@@ -60,15 +104,6 @@ export const ControlPlane: React.FC = () => {
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
   
-  // Derive state values (with defaults while loading)
-  const activeVisualization = state?.activeVisualization ?? 'fireplace';
-  const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
-  const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
-  const visualizationSettings = state?.visualizationSettings ?? {};
-  const messages = state?.messages ?? [];
-  const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
-  const textStyleSettings = state?.textStyleSettings ?? {};
-  
   // Get active preset
   const activePreset = activeVisualizationPreset 
     ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
@@ -82,6 +117,37 @@ export const ControlPlane: React.FC = () => {
       console.error('Failed to get server info:', err);
     });
   }, []);
+
+  // Loading timeout effect - must be after all other hooks
+  useEffect(() => {
+    console.log('[ControlPlane] useEffect showLoading - state:', state, 'hasState:', hasState);
+    // Give SSE 2 seconds to connect, then show UI anyway
+    const timer = setTimeout(() => {
+      console.log('[ControlPlane] Loading timeout expired, showing UI');
+      setShowLoading(false);
+    }, 2000);
+    
+    if (state) {
+      console.log('[ControlPlane] State received, clearing loading timeout');
+      setShowLoading(false);
+      clearTimeout(timer);
+    }
+    
+    return () => {
+      console.log('[ControlPlane] Cleaning up loading timeout');
+      clearTimeout(timer);
+    };
+  }, [hasState]); // Use boolean instead of state object
+
+  // CRITICAL: NO early returns - always render the same structure
+  // Use defaults if state is not available yet - always have values to render
+  const activeVisualization = state?.activeVisualization ?? 'fireplace';
+  const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
+  const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
+  const visualizationSettings = state?.visualizationSettings ?? {};
+  const messages = state?.messages ?? [];
+  const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
+  const textStyleSettings = state?.textStyleSettings ?? {};
 
   const toggleViz = async () => {
     try {
@@ -248,17 +314,6 @@ export const ControlPlane: React.FC = () => {
   const remoteUrl = serverInfo ? `http://${serverInfo.ip}:${serverInfo.port}` : '';
   const isPending = fetcher.state !== 'idle';
 
-  // Loading state while SSE connects
-  if (!state) {
-    return (
-      <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 size={32} className="animate-spin text-orange-500" />
-          <span className="text-zinc-500 text-sm">Connecting to server...</span>
-        </div>
-      </div>
-    );
-  }
 
   const activePlugin = activePreset 
     ? getVisualization(activePreset.visualizationId)
@@ -309,8 +364,19 @@ export const ControlPlane: React.FC = () => {
     sendCommand('set-text-style-presets', filtered);
   };
 
+  // CRITICAL: NO early returns - always render the same structure
+  // Conditionally render loading state in JSX to maintain hook order
   return (
-    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
+    <>
+      {showLoading && !state ? (
+        <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 size={32} className="animate-spin text-orange-500" />
+            <span className="text-zinc-500 text-sm">Connecting to server...</span>
+          </div>
+        </div>
+      ) : (
+        <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
       {/* Dynamic Background */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-orange-600/10 blur-[120px] rounded-full mix-blend-screen" />
@@ -388,26 +454,30 @@ export const ControlPlane: React.FC = () => {
               </div>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {visualizationPresets.length === 0 ? (
+                {(!visualizationPresets || visualizationPresets.filter(p => p.enabled !== false).length === 0) ? (
                   <div className="col-span-2 text-center py-8 text-zinc-500 text-sm">
-                    No presets yet. Create one in Settings.
+                    {visualizationPresets?.length === 0 
+                      ? 'No enabled presets. Enable them in Settings.'
+                      : 'Loading presets...'}
                   </div>
                 ) : (
-                  visualizationPresets.map((preset) => {
-                    const viz = getVisualization(preset.visualizationId);
-                    const isActive = preset.id === activeVisualizationPreset;
-                    return (
-                      <VisualizationCard 
-                        key={preset.id}
-                        active={isActive}
-                        onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
-                        icon={viz ? (iconMap[viz.icon] || <Settings2 size={32} />) : <Settings2 size={32} />}
-                        title={preset.name}
-                        description={viz?.description || `${preset.visualizationId} preset`}
-                        disabled={isPending}
-                      />
-                    );
-                  })
+                  visualizationPresets
+                    .filter(p => p.enabled !== false)
+                    .map((preset) => {
+                      const viz = getVisualization(preset.visualizationId);
+                      const isActive = preset.id === activeVisualizationPreset;
+                      return (
+                  <VisualizationCard 
+                          key={preset.id}
+                          active={isActive}
+                          onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
+                          icon={viz ? (iconMap[viz.icon] || <Settings2 size={32} />) : <Settings2 size={32} />}
+                          title={preset.name}
+                          description={viz?.description || `${preset.visualizationId} preset`}
+                    disabled={isPending}
+                  />
+                      );
+                    })
                 )}
               </div>
             </section>
@@ -476,14 +546,14 @@ export const ControlPlane: React.FC = () => {
 
                         {/* Active Preset Settings */}
                         {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
-                          <div>
-                            <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                      <div>
+                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
                               {activePreset.name} Settings
-                            </h3>
-                            <SettingsRenderer
-                              schema={activePlugin.settingsSchema}
+                        </h3>
+                        <SettingsRenderer
+                          schema={activePlugin.settingsSchema}
                               values={activePreset.settings}
-                              onChange={(key, value) => {
+                          onChange={(key, value) => {
                                 handleUpdatePreset(activePreset.id, {
                                   settings: { ...activePreset.settings, [key]: value },
                                 });
@@ -497,14 +567,14 @@ export const ControlPlane: React.FC = () => {
                     {settingsTab === 'text-styles' && (
                       <div className="space-y-6">
                         {/* Text Style Presets Manager */}
-                        <div>
+                    <div>
                           <TextStylePresetsManager
                             presets={textStylePresets}
                             onAddPreset={handleAddTextStylePreset}
                             onUpdatePreset={handleUpdateTextStylePreset}
                             onDeletePreset={handleDeleteTextStylePreset}
                           />
-                        </div>
+                          </div>
                       </div>
                     )}
                   </div>
@@ -518,8 +588,8 @@ export const ControlPlane: React.FC = () => {
           <aside className="col-span-12 lg:col-span-4 order-2">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <MessageSquare size={18} className="text-zinc-500" />
-                <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
+              <MessageSquare size={18} className="text-zinc-500" />
+              <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
               </div>
               <button
                 onClick={() => setShowHistory(!showHistory)}
@@ -574,21 +644,36 @@ export const ControlPlane: React.FC = () => {
                           draggedMessageId === msg.id ? 'opacity-50' : ''
                         }`}
                       >
-                        <motion.div
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0, x: 10 }}
+                    <motion.div
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
                           className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
                             isAnimating ? 'border-orange-500/50 shadow-lg shadow-orange-500/20' : 'border-zinc-800/50'
                           }`}
-                        >
-                        <div className="flex items-center gap-2 p-3">
-                          <button
+                    >
+                      <div className="flex items-center gap-2 p-3">
+                          {/* Status indicator button */}
+                        <button
                             onClick={() => isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg)}
-                            disabled={isPending}
-                            className="flex-1 text-left text-sm font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50 truncate"
+                          disabled={isPending}
+                            className={`flex-1 text-left text-sm font-medium transition-colors disabled:opacity-50 truncate ${
+                              isAnimating 
+                                ? 'text-orange-500 hover:text-orange-400' 
+                                : triggerCount > 0
+                                ? 'text-zinc-200 hover:text-white'
+                                : 'text-zinc-300 hover:text-white'
+                            }`}
                           >
                             <div className="flex items-center gap-2">
+                              {/* Status indicator */}
+                              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                isAnimating 
+                                  ? 'bg-orange-500 animate-pulse' 
+                                  : triggerCount > 0
+                                  ? 'bg-green-500'
+                                  : 'bg-zinc-600'
+                              }`} />
                               <span>{msg.text}</span>
                               {isAnimating && (
                                 <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
@@ -606,38 +691,51 @@ export const ControlPlane: React.FC = () => {
                           >
                             {triggerCount}
                           </div>
-                          <div className="flex flex-col gap-0.5">
+                          {/* Clear button when animating */}
+                          {isAnimating && (
                             <button
-                              onClick={() => handleMoveMessage(msg.id, 'up')}
-                              disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
-                              className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                              title="Move up"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleClearActiveMessage(msg.id);
+                              }}
+                              className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
+                              title="Clear message"
                             >
-                              <ArrowUp size={14} />
-                            </button>
-                            <button
-                              onClick={() => handleMoveMessage(msg.id, 'down')}
-                              disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
-                              className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                              title="Move down"
-                            >
-                              <ArrowDown size={14} />
-                            </button>
-                          </div>
+                              Clear
+                        </button>
+                          )}
+                        <div className="flex flex-col gap-0.5">
                           <button
-                            onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
-                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
+                            onClick={() => handleMoveMessage(msg.id, 'up')}
+                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
+                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Move up"
                           >
-                            {expandedMessage === msg.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            <ArrowUp size={14} />
                           </button>
                           <button
-                            onClick={() => handleDeleteMessage(msg.id)}
-                            className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
-                            title="Delete message"
+                            onClick={() => handleMoveMessage(msg.id, 'down')}
+                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
+                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Move down"
                           >
-                            <Trash2 size={16} />
+                            <ArrowDown size={14} />
                           </button>
                         </div>
+                        <button
+                          onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
+                          className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
+                        >
+                          {expandedMessage === msg.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
+                          title="Delete message"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                       
                       <AnimatePresence>
                         {expandedMessage === msg.id && (
@@ -650,9 +748,9 @@ export const ControlPlane: React.FC = () => {
                             <div className="pt-3 space-y-4">
                               {/* Text Style Preset Selector */}
                               <div>
-                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
                                   Text Style Preset
-                                </label>
+                              </label>
                                 <select
                                   value={msg.textStylePreset || ''}
                                   onChange={(e) => {
@@ -678,17 +776,17 @@ export const ControlPlane: React.FC = () => {
                                 </select>
                                 {/* Fallback to text style if no preset */}
                                 {!msg.textStylePreset && (
-                                  <select
-                                    value={msg.textStyle}
-                                    onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
-                                  >
-                                    {textStyleRegistry.map((style) => (
-                                      <option key={style.id} value={style.id}>
-                                        {style.name}
-                                      </option>
-                                    ))}
-                                  </select>
+                              <select
+                                value={msg.textStyle}
+                                onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                              >
+                                {textStyleRegistry.map((style) => (
+                                  <option key={style.id} value={style.id}>
+                                    {style.name}
+                                  </option>
+                                ))}
+                              </select>
                                 )}
                               </div>
 
@@ -779,7 +877,7 @@ export const ControlPlane: React.FC = () => {
                           </motion.div>
                         )}
                       </AnimatePresence>
-                        </motion.div>
+                    </motion.div>
                       </div>
                     );
                   })}
@@ -872,6 +970,8 @@ export const ControlPlane: React.FC = () => {
         </div>
       </div>
     </div>
+      )}
+    </>
   );
 };
 

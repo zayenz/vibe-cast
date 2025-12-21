@@ -128,9 +128,9 @@ async fn handle_command(
         "trigger-message" => {
             if let Some(p) = &payload.payload {
                 // Handle both legacy (string) and new (MessageConfig) formats
-                if let Some(text) = p.as_str() {
+                let msg = if let Some(text) = p.as_str() {
                     // Legacy format - create a MessageConfig
-                    triggered_message = Some(MessageConfig {
+                    Some(MessageConfig {
                         id: "triggered".to_string(),
                         text: text.to_string(),
                         text_style: "scrolling-capitals".to_string(),
@@ -138,9 +138,60 @@ async fn handle_command(
                         style_overrides: None,
                         repeat_count: None,
                         speed: None,
-                    });
+                    })
                 } else if let Ok(msg) = serde_json::from_value::<MessageConfig>(p.clone()) {
-                    triggered_message = Some(msg);
+                    Some(msg)
+                } else {
+                    None
+                };
+                
+                if let Some(msg) = msg {
+                    triggered_message = Some(msg.clone());
+                    
+                    // Update message stats
+                    if let Ok(mut stats) = state.app_state_sync.message_stats.lock() {
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64;
+                        
+                        let current_stats: serde_json::Value = stats.get(&msg.id)
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({
+                                "messageId": msg.id,
+                                "triggerCount": 0,
+                                "lastTriggered": 0,
+                                "history": []
+                            }));
+                        
+                        let trigger_count = current_stats.get("triggerCount")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) + 1;
+                        
+                        let mut history = current_stats.get("history")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_else(|| vec![]);
+                        
+                        history.push(serde_json::json!({ "timestamp": timestamp }));
+                        // Keep last 50 entries
+                        if history.len() > 50 {
+                            history = history.into_iter().rev().take(50).rev().collect();
+                        }
+                        
+                        let new_stats = serde_json::json!({
+                            "messageId": msg.id,
+                            "triggerCount": trigger_count,
+                            "lastTriggered": timestamp,
+                            "history": history
+                        });
+                        
+                        if let Some(obj) = stats.as_object_mut() {
+                            obj.insert(msg.id.clone(), new_stats);
+                        } else {
+                            *stats = serde_json::json!({ msg.id: new_stats });
+                        }
+                    }
                 }
             }
         }

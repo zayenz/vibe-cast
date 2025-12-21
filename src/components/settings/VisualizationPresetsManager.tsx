@@ -207,6 +207,15 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                 ) : (
                   <>
                     <div className="flex items-center gap-3 p-3">
+                      <input
+                        type="checkbox"
+                        checked={preset.enabled !== false}
+                        onChange={(e) => {
+                          onUpdatePreset(preset.id, { enabled: e.target.checked });
+                        }}
+                        className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-zinc-900 cursor-pointer"
+                        title="Show in visualization list"
+                      />
                       <button
                         onClick={() => onSetActivePreset(isActive ? null : preset.id)}
                         className={`flex-1 text-left ${

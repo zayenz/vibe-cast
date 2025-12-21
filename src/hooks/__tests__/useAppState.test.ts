@@ -38,10 +38,15 @@ describe('useAppState', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.state).toEqual({
+      // Legacy SSE format: messages arrive as strings but are normalized to MessageConfig[]
+      expect(result.current.state).toEqual(expect.objectContaining({
         mode: 'fireplace',
-        messages: ['Hello', 'World'],
-      });
+        activeVisualization: 'fireplace',
+        messages: [
+          { id: '0', text: 'Hello', textStyle: 'scrolling-capitals' },
+          { id: '1', text: 'World', textStyle: 'scrolling-capitals' },
+        ],
+      }));
       expect(result.current.isConnected).toBe(true);
     });
   });
@@ -67,7 +72,9 @@ describe('useAppState', () => {
 
     await waitFor(() => {
       expect(result.current.state?.mode).toBe('techno');
-      expect(result.current.state?.messages).toEqual(['New']);
+      expect(result.current.state?.messages).toEqual([
+        { id: '0', text: 'New', textStyle: 'scrolling-capitals' },
+      ]);
     });
   });
 
