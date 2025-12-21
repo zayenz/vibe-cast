@@ -54,7 +54,7 @@ describe('ControlPlane', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('VISUALIZER')).toBeInTheDocument();
+      expect(screen.getByText('VIBECAST')).toBeInTheDocument();
     });
     
     expect(screen.getByText('Fireplace')).toBeInTheDocument();

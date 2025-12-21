@@ -70,7 +70,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
 }
 
 async fn handle_index() -> Html<&'static str> {
-    Html("<html><body><h1>Visualizer Remote</h1><p>If you see this, the static files are not yet built. Run <code>npm run build</code>.</p></body></html>")
+    Html("<html><body><h1>VibeCast Remote</h1><p>If you see this, the static files are not yet built. Run <code>npm run build</code>.</p></body></html>")
 }
 
 async fn handle_command(
@@ -233,7 +233,7 @@ async fn handle_command(
     // Broadcast state update to all SSE subscribers
     state.app_state_sync.broadcast(triggered_message.clone());
     
-    // Also emit to Tauri windows (for Visualizer which uses Tauri events for audio sync)
+    // Also emit to Tauri windows (for VibeCast which uses Tauri events for audio sync)
     let _ = state.app_handle.emit("remote-command", &payload);
 
     Json(serde_json::json!({ "status": "ok" }))

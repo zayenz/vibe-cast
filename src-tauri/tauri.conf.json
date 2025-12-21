@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Visualizer",
+  "productName": "VibeCast",
   "version": "0.1.0",
-  "identifier": "com.zayenz.visualizer",
+  "identifier": "com.zayenz.vibe-cast",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -20,7 +20,7 @@
       },
       {
         "label": "viz",
-        "title": "Visualizer",
+        "title": "VibeCast",
         "width": 1280,
         "height": 720,
         "fullscreen": false,

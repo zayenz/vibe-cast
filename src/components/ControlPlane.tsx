@@ -135,7 +135,7 @@ export const ControlPlane: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `visualizer-config-${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `vibecast-config-${new Date().toISOString().slice(0,10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -199,7 +199,7 @@ export const ControlPlane: React.FC = () => {
               </span>
             </motion.div>
             <h1 className="text-5xl font-black tracking-tight bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent">
-              VISUALIZER
+              VIBECAST
             </h1>
           </div>
           

@@ -301,7 +301,7 @@ fn emit_state_change(
     // Broadcast state change to all SSE subscribers
     state.broadcast(triggered_message.clone());
     
-    // Also emit to all Tauri windows (for Visualizer which uses Tauri events for audio sync)
+    // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
     let _ = handle.emit("state-changed", serde_json::json!({
         "type": event_type,
         "payload": payload_value
