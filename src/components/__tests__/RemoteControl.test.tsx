@@ -56,8 +56,9 @@ describe('RemoteControl', () => {
       expect(screen.getByText('Remote')).toBeInTheDocument();
     });
     
-    expect(screen.getByText('Fire')).toBeInTheDocument();
-    expect(screen.getByText('Techno')).toBeInTheDocument();
+    // Visualizations are driven by presets now
+    expect(screen.getByText('Fireplace Default')).toBeInTheDocument();
+    expect(screen.getByText('Techno Default')).toBeInTheDocument();
     expect(screen.getByText('Test Message')).toBeInTheDocument();
   });
 
@@ -71,11 +72,11 @@ describe('RemoteControl', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Live Connection')).toBeInTheDocument();
+      expect(screen.getByText('Live')).toBeInTheDocument();
     });
   });
 
-  it('sends set-mode command when a mode button is clicked', async () => {
+  it('sends set-active-visualization-preset command when a preset button is clicked', async () => {
     renderRemoteControl();
     
     await act(async () => {
@@ -85,10 +86,10 @@ describe('RemoteControl', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Techno')).toBeInTheDocument();
+      expect(screen.getByText('Techno Default')).toBeInTheDocument();
     });
     
-    const technoButton = screen.getByText('Techno').closest('button');
+    const technoButton = screen.getByText('Techno Default').closest('button');
     fireEvent.click(technoButton!);
     
     await waitFor(() => {
@@ -96,7 +97,7 @@ describe('RemoteControl', () => {
         expect.stringContaining('/api/command'),
         expect.objectContaining({
           method: 'POST',
-          body: expect.stringContaining('set-mode'),
+          body: expect.stringContaining('set-active-visualization-preset'),
         })
       );
     });
@@ -163,7 +164,7 @@ describe('RemoteControl', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Live Connection')).toBeInTheDocument();
+      expect(screen.getByText('Live')).toBeInTheDocument();
     });
 
     // Simulate SSE error/disconnect
