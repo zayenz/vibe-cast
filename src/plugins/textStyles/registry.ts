@@ -10,6 +10,7 @@ import { ScrollingCapitalsPlugin } from './ScrollingCapitalsPlugin';
 import { FadePlugin } from './FadePlugin';
 import { TypewriterPlugin } from './TypewriterPlugin';
 import { BouncePlugin } from './BouncePlugin';
+import { DotMatrixPlugin } from './DotMatrixPlugin';
 
 /**
  * All registered text style plugins
@@ -19,6 +20,7 @@ export const textStyleRegistry: TextStylePlugin[] = [
   FadePlugin,
   TypewriterPlugin,
   BouncePlugin,
+  DotMatrixPlugin,
 ];
 
 /**

@@ -170,6 +170,61 @@ export interface TextStylePlugin {
 }
 
 // ============================================================================
+// Preset Types
+// ============================================================================
+
+/**
+ * A named visualization preset with specific settings
+ */
+export interface VisualizationPreset {
+  /** Unique identifier for this preset */
+  id: string;
+  
+  /** Display name for this preset */
+  name: string;
+  
+  /** Base visualization plugin ID */
+  visualizationId: string;
+  
+  /** Settings for this preset */
+  settings: Record<string, unknown>;
+}
+
+/**
+ * A named text style preset with specific settings
+ */
+export interface TextStylePreset {
+  /** Unique identifier for this preset */
+  id: string;
+  
+  /** Display name for this preset */
+  name: string;
+  
+  /** Base text style plugin ID */
+  textStyleId: string;
+  
+  /** Settings for this preset */
+  settings: Record<string, unknown>;
+}
+
+/**
+ * Statistics for message usage
+ */
+export interface MessageStats {
+  /** Message ID this stats object belongs to */
+  messageId: string;
+  
+  /** Number of times this message has been triggered */
+  triggerCount: number;
+  
+  /** Timestamp of last trigger */
+  lastTriggered: number;
+  
+  /** History of trigger timestamps */
+  history: Array<{ timestamp: number }>;
+}
+
+// ============================================================================
 // Message Configuration
 // ============================================================================
 
@@ -183,11 +238,20 @@ export interface MessageConfig {
   /** The message text */
   text: string;
   
-  /** Text style plugin ID to use */
+  /** Text style plugin ID to use (legacy - kept for backward compatibility) */
   textStyle: string;
+  
+  /** Optional reference to a text style preset */
+  textStylePreset?: string;
   
   /** Optional per-message style setting overrides */
   styleOverrides?: Record<string, unknown>;
+  
+  /** How many times to show this message (default: 1) */
+  repeatCount?: number;
+  
+  /** Animation speed multiplier (default: 1.0) */
+  speed?: number;
 }
 
 // ============================================================================
@@ -201,17 +265,23 @@ export interface AppConfiguration {
   /** Configuration version for migration support */
   version: number;
   
-  /** Currently active visualization plugin ID */
-  activeVisualization: string;
+  /** Currently active visualization plugin ID (legacy - kept for backward compatibility) */
+  activeVisualization?: string;
   
-  /** List of visualization IDs shown as quick-access buttons */
-  enabledVisualizations: string[];
+  /** Currently active visualization preset ID */
+  activeVisualizationPreset?: string;
+  
+  /** List of visualization IDs shown as quick-access buttons (legacy) */
+  enabledVisualizations?: string[];
+  
+  /** Named visualization presets */
+  visualizationPresets?: VisualizationPreset[];
   
   /** Common settings shared by all visualizations */
   commonSettings: CommonVisualizationSettings;
   
-  /** Per-visualization custom settings */
-  visualizationSettings: Record<string, Record<string, unknown>>;
+  /** Per-visualization custom settings (legacy - kept for backward compatibility) */
+  visualizationSettings?: Record<string, Record<string, unknown>>;
   
   /** Preset messages */
   messages: MessageConfig[];
@@ -219,6 +289,12 @@ export interface AppConfiguration {
   /** Default text style for new messages */
   defaultTextStyle: string;
   
-  /** Per-text-style settings */
-  textStyleSettings: Record<string, Record<string, unknown>>;
+  /** Per-text-style settings (legacy - kept for backward compatibility) */
+  textStyleSettings?: Record<string, Record<string, unknown>>;
+  
+  /** Named text style presets */
+  textStylePresets?: TextStylePreset[];
+  
+  /** Message statistics and tracking */
+  messageStats?: Record<string, MessageStats>;
 }

@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
-use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings};
+use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, TextStylePreset};
 
 #[derive(Clone)]
 struct AppState {
@@ -134,7 +134,10 @@ async fn handle_command(
                         id: "triggered".to_string(),
                         text: text.to_string(),
                         text_style: "scrolling-capitals".to_string(),
+                        text_style_preset: None,
                         style_overrides: None,
+                        repeat_count: None,
+                        speed: None,
                     });
                 } else if let Ok(msg) = serde_json::from_value::<MessageConfig>(p.clone()) {
                     triggered_message = Some(msg);
@@ -157,7 +160,10 @@ async fn handle_command(
                                 id: i.to_string(),
                                 text: s.to_string(),
                                 text_style: "scrolling-capitals".to_string(),
+                                text_style_preset: None,
                                 style_overrides: None,
+                                repeat_count: None,
+                                speed: None,
                             })
                         })
                         .collect();
@@ -180,6 +186,49 @@ async fn handle_command(
                     *m = p.clone();
                 }
             }
+        }
+        "set-visualization-presets" => {
+            if let Some(p) = &payload.payload {
+                if let Ok(presets) = serde_json::from_value::<Vec<VisualizationPreset>>(p.clone()) {
+                    if let Ok(mut m) = state.app_state_sync.visualization_presets.lock() {
+                        *m = presets;
+                    }
+                }
+            }
+        }
+        "set-active-visualization-preset" => {
+            if let Some(p) = &payload.payload {
+                if p.is_null() {
+                    if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
+                        *m = None;
+                    }
+                } else if let Some(preset_id) = p.as_str() {
+                    if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
+                        *m = Some(preset_id.to_string());
+                    }
+                    // Also update active visualization based on preset
+                    if let Ok(presets) = state.app_state_sync.visualization_presets.lock() {
+                        if let Some(preset) = presets.iter().find(|p| p.id == preset_id) {
+                            if let Ok(mut m) = state.app_state_sync.active_visualization.lock() {
+                                *m = preset.visualization_id.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "set-text-style-presets" => {
+            if let Some(p) = &payload.payload {
+                if let Ok(presets) = serde_json::from_value::<Vec<TextStylePreset>>(p.clone()) {
+                    if let Ok(mut m) = state.app_state_sync.text_style_presets.lock() {
+                        *m = presets;
+                    }
+                }
+            }
+        }
+        "clear-active-message" => {
+            // This is handled on the frontend, but we acknowledge it
+            // The actual clearing happens in the VisualizerWindow
         }
         "load-configuration" => {
             if let Some(obj) = payload.payload.as_ref().and_then(|p| p.as_object()) {
@@ -223,6 +272,30 @@ async fn handle_command(
                 if let Some(settings) = obj.get("textStyleSettings") {
                     if let Ok(mut m) = state.app_state_sync.text_style_settings.lock() {
                         *m = settings.clone();
+                    }
+                }
+                if let Some(presets) = obj.get("visualizationPresets") {
+                    if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
+                        if let Ok(mut m) = state.app_state_sync.visualization_presets.lock() {
+                            *m = p;
+                        }
+                    }
+                }
+                if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
+                    if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
+                        *m = Some(preset_id.to_string());
+                    }
+                }
+                if let Some(presets) = obj.get("textStylePresets") {
+                    if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
+                        if let Ok(mut m) = state.app_state_sync.text_style_presets.lock() {
+                            *m = p;
+                        }
+                    }
+                }
+                if let Some(stats) = obj.get("messageStats") {
+                    if let Ok(mut m) = state.app_state_sync.message_stats.lock() {
+                        *m = stats.clone();
                     }
                 }
             }

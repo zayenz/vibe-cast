@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { Flame, Music, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2 } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
-import { visualizationRegistry } from '../plugins/visualizations';
+import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
 import { MessageConfig } from '../plugins/types';
+import { useStore } from '../store';
 
 // Remote runs in browser on the same origin as the Axum server, so no API base needed
 const API_BASE = '';
@@ -19,6 +20,11 @@ export const RemoteControl: React.FC = () => {
   // SSE-based state - single source of truth
   const { state, isConnected, error } = useAppState({ apiBase: API_BASE });
   
+  // Store for presets
+  const visualizationPresets = useStore((s) => s.visualizationPresets);
+  const activeVisualizationPreset = useStore((s) => s.activeVisualizationPreset);
+  const setActiveVisualizationPreset = useStore((s) => s.setActiveVisualizationPreset);
+  
   // Fetcher for form submissions
   const fetcher = useFetcher();
   
@@ -26,8 +32,6 @@ export const RemoteControl: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   
   // Derive values with defaults
-  const activeVisualization = state?.activeVisualization ?? 'fireplace';
-  const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
   const messages = state?.messages ?? [];
   const isPending = fetcher.state !== 'idle';
@@ -74,8 +78,10 @@ export const RemoteControl: React.FC = () => {
     );
   }
 
-  // Get enabled visualizations from registry
-  const enabledVizPlugins = visualizationRegistry.filter(v => enabledVisualizations.includes(v.id));
+  const handleSetActivePreset = (id: string | null) => {
+    setActiveVisualizationPreset(id);
+    sendCommand('set-active-visualization-preset', id);
+  };
 
   return (
     <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-hidden">
@@ -129,17 +135,27 @@ export const RemoteControl: React.FC = () => {
           <Signal size={12} />
           Visualization
         </h2>
-        <div className={`grid gap-4 ${enabledVizPlugins.length > 2 ? 'grid-cols-2' : 'grid-cols-2'}`}>
-          {enabledVizPlugins.map((viz) => (
-            <RemoteVizCard 
-              key={viz.id}
-              active={activeVisualization === viz.id}
-              onClick={() => sendCommand('set-active-visualization', viz.id)}
-              icon={iconMap[viz.icon] || <Settings2 size={28} />}
-              label={viz.name}
-              disabled={isPending}
-            />
-          ))}
+        <div className={`grid gap-4 ${visualizationPresets.length > 2 ? 'grid-cols-2' : 'grid-cols-2'}`}>
+          {visualizationPresets.length === 0 ? (
+            <div className="col-span-2 text-center py-8 text-zinc-500 text-xs">
+              No presets available
+            </div>
+          ) : (
+            visualizationPresets.map((preset) => {
+              const viz = getVisualization(preset.visualizationId);
+              const isActive = preset.id === activeVisualizationPreset;
+              return (
+                <RemoteVizCard 
+                  key={preset.id}
+                  active={isActive}
+                  onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
+                  icon={viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />}
+                  label={preset.name}
+                  disabled={isPending}
+                />
+              );
+            })
+          )}
         </div>
       </section>
 

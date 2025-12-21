@@ -6,14 +6,17 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
-  ChevronDown, ChevronUp, Trash2, ArrowUp, ArrowDown
+  ChevronDown, ChevronUp, Trash2, ArrowUp, ArrowDown, History, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
-import { visualizationRegistry, getVisualization } from '../plugins/visualizations';
-import { textStyleRegistry } from '../plugins/textStyles';
+import { getVisualization } from '../plugins/visualizations';
+import { textStyleRegistry, getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
-import { MessageConfig, AppConfiguration } from '../plugins/types';
+import { VisualizationPresetsManager } from './settings/VisualizationPresetsManager';
+import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
+import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset } from '../plugins/types';
+import { useStore } from '../store';
 
 // API base for Tauri windows - they need to hit the Axum server directly
 const API_BASE = 'http://localhost:8080';
@@ -28,11 +31,31 @@ export const ControlPlane: React.FC = () => {
   // SSE-based state - single source of truth
   const { state, isConnected } = useAppState({ apiBase: API_BASE });
   
+  // Store for preset management (local state for now, will sync via commands)
+  const visualizationPresets = useStore((s) => s.visualizationPresets);
+  const activeVisualizationPreset = useStore((s) => s.activeVisualizationPreset);
+  const addVisualizationPreset = useStore((s) => s.addVisualizationPreset);
+  const updateVisualizationPreset = useStore((s) => s.updateVisualizationPreset);
+  const deleteVisualizationPreset = useStore((s) => s.deleteVisualizationPreset);
+  const setActiveVisualizationPreset = useStore((s) => s.setActiveVisualizationPreset);
+  const messageStats = useStore((s) => s.messageStats);
+  const activeMessages = useStore((s) => s.activeMessages);
+  const clearActiveMessage = useStore((s) => s.clearActiveMessage);
+  
+  // Store for text style presets
+  const textStylePresets = useStore((s) => s.textStylePresets);
+  const addTextStylePreset = useStore((s) => s.addTextStylePreset);
+  const updateTextStylePreset = useStore((s) => s.updateTextStylePreset);
+  const deleteTextStylePreset = useStore((s) => s.deleteTextStylePreset);
+  
   // Local UI state
   const [newMessage, setNewMessage] = useState('');
   const [serverInfo, setServerInfo] = useState<{ ip: string; port: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'visualizations' | 'text-styles'>('visualizations');
   const [expandedMessage, setExpandedMessage] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [draggedMessageId, setDraggedMessageId] = useState<string | null>(null);
 
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
@@ -45,6 +68,11 @@ export const ControlPlane: React.FC = () => {
   const messages = state?.messages ?? [];
   const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
   const textStyleSettings = state?.textStyleSettings ?? {};
+  
+  // Get active preset
+  const activePreset = activeVisualizationPreset 
+    ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
+    : null;
 
   // Fetch server info from Tauri on mount
   useEffect(() => {
@@ -118,6 +146,44 @@ export const ControlPlane: React.FC = () => {
     sendCommand('set-messages', newMessages);
   };
 
+  const handleDragStart = (e: React.DragEvent, messageId: string) => {
+    setDraggedMessageId(messageId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', messageId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, targetMessageId: string) => {
+    e.preventDefault();
+    if (!draggedMessageId || draggedMessageId === targetMessageId) {
+      setDraggedMessageId(null);
+      return;
+    }
+
+    const draggedIndex = messages.findIndex(m => m.id === draggedMessageId);
+    const targetIndex = messages.findIndex(m => m.id === targetMessageId);
+    
+    if (draggedIndex === -1 || targetIndex === -1) {
+      setDraggedMessageId(null);
+      return;
+    }
+
+    const newMessages = [...messages];
+    const [draggedMessage] = newMessages.splice(draggedIndex, 1);
+    newMessages.splice(targetIndex, 0, draggedMessage);
+    
+    sendCommand('set-messages', newMessages);
+    setDraggedMessageId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedMessageId(null);
+  };
+
   const handleUpdateMessageStyle = (id: string, textStyle: string) => {
     sendCommand('set-messages', messages.map(m => 
       m.id === id ? { ...m, textStyle } : m
@@ -126,6 +192,15 @@ export const ControlPlane: React.FC = () => {
 
   const handleTriggerMessage = (msg: MessageConfig) => {
     sendCommand('trigger-message', msg);
+  };
+
+  const handleClearActiveMessage = (messageId: string) => {
+    // Find all active instances of this message and clear them
+    const activeInstances = activeMessages.filter(am => am.message.id === messageId);
+    activeInstances.forEach(({ timestamp }) => {
+      clearActiveMessage(messageId, timestamp, true);
+      sendCommand('clear-active-message', { messageId, timestamp });
+    });
   };
 
   const handleSaveConfig = async () => {
@@ -185,7 +260,54 @@ export const ControlPlane: React.FC = () => {
     );
   }
 
-  const activePlugin = getVisualization(activeVisualization);
+  const activePlugin = activePreset 
+    ? getVisualization(activePreset.visualizationId)
+    : getVisualization(activeVisualization);
+
+  // Preset management handlers
+  const handleAddPreset = (preset: VisualizationPreset) => {
+    addVisualizationPreset(preset);
+    sendCommand('set-visualization-presets', [...visualizationPresets, preset]);
+  };
+
+  const handleUpdatePreset = (id: string, updates: Partial<VisualizationPreset>) => {
+    updateVisualizationPreset(id, updates);
+    const updated = visualizationPresets.map(p => p.id === id ? { ...p, ...updates } : p);
+    sendCommand('set-visualization-presets', updated);
+  };
+
+  const handleDeletePreset = (id: string) => {
+    deleteVisualizationPreset(id);
+    const filtered = visualizationPresets.filter(p => p.id !== id);
+    sendCommand('set-visualization-presets', filtered);
+    if (activeVisualizationPreset === id) {
+      setActiveVisualizationPreset(null);
+      sendCommand('set-active-visualization-preset', null);
+    }
+  };
+
+  const handleSetActivePreset = (id: string | null) => {
+    setActiveVisualizationPreset(id);
+    sendCommand('set-active-visualization-preset', id);
+  };
+
+  // Text style preset handlers
+  const handleAddTextStylePreset = (preset: TextStylePreset) => {
+    addTextStylePreset(preset);
+    sendCommand('set-text-style-presets', [...textStylePresets, preset]);
+  };
+
+  const handleUpdateTextStylePreset = (id: string, updates: Partial<TextStylePreset>) => {
+    updateTextStylePreset(id, updates);
+    const updated = textStylePresets.map(p => p.id === id ? { ...p, ...updates } : p);
+    sendCommand('set-text-style-presets', updated);
+  };
+
+  const handleDeleteTextStylePreset = (id: string) => {
+    deleteTextStylePreset(id);
+    const filtered = textStylePresets.filter(p => p.id !== id);
+    sendCommand('set-text-style-presets', filtered);
+  };
 
   return (
     <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
@@ -246,7 +368,7 @@ export const ControlPlane: React.FC = () => {
 
         <div className="grid grid-cols-12 gap-6">
           {/* Main Controls */}
-          <div className="col-span-12 lg:col-span-8 space-y-6">
+          <div className="col-span-12 lg:col-span-8 space-y-6 order-1">
             {/* Visualization Selection */}
             <section>
               <div className="flex items-center justify-between mb-6">
@@ -266,17 +388,27 @@ export const ControlPlane: React.FC = () => {
               </div>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {visualizationRegistry.filter(v => enabledVisualizations.includes(v.id)).map((viz) => (
-                  <VisualizationCard 
-                    key={viz.id}
-                    active={activeVisualization === viz.id}
-                    onClick={() => sendCommand('set-active-visualization', viz.id)}
-                    icon={iconMap[viz.icon] || <Settings2 size={32} />}
-                    title={viz.name}
-                    description={viz.description}
-                    disabled={isPending}
-                  />
-                ))}
+                {visualizationPresets.length === 0 ? (
+                  <div className="col-span-2 text-center py-8 text-zinc-500 text-sm">
+                    No presets yet. Create one in Settings.
+                  </div>
+                ) : (
+                  visualizationPresets.map((preset) => {
+                    const viz = getVisualization(preset.visualizationId);
+                    const isActive = preset.id === activeVisualizationPreset;
+                    return (
+                      <VisualizationCard 
+                        key={preset.id}
+                        active={isActive}
+                        onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
+                        icon={viz ? (iconMap[viz.icon] || <Settings2 size={32} />) : <Settings2 size={32} />}
+                        title={preset.name}
+                        description={viz?.description || `${preset.visualizationId} preset`}
+                        disabled={isPending}
+                      />
+                    );
+                  })
+                )}
               </div>
             </section>
 
@@ -290,7 +422,7 @@ export const ControlPlane: React.FC = () => {
                   className="overflow-hidden"
                 >
                   <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 space-y-6">
-                    {/* Common Settings */}
+                    {/* Common Settings - Always visible */}
                     <div>
                       <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
                         Common Settings
@@ -303,135 +435,101 @@ export const ControlPlane: React.FC = () => {
                       />
                     </div>
 
-                    {/* Visualization Selection */}
-                    <div>
-                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                        Visible Visualizations
-                      </h3>
-                      <div className="space-y-2">
-                        {visualizationRegistry.map((viz) => {
-                          const isEnabled = enabledVisualizations.includes(viz.id);
-                          return (
-                            <label
-                              key={viz.id}
-                              className="flex items-center gap-3 p-3 bg-zinc-950 border border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700 transition-colors"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isEnabled}
-                                onChange={(e) => {
-                                  const newEnabled = e.target.checked
-                                    ? [...enabledVisualizations, viz.id]
-                                    : enabledVisualizations.filter(id => id !== viz.id);
-                                  sendCommand('set-enabled-visualizations', newEnabled);
-                                }}
-                                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-0 focus:ring-2"
-                              />
-                              <div className="flex items-center gap-2 flex-1">
-                                {iconMap[viz.icon] || <Settings2 size={18} />}
-                                <div>
-                                  <div className="text-sm font-medium text-zinc-200">{viz.name}</div>
-                                  <div className="text-xs text-zinc-500">{viz.description}</div>
-                                </div>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
+                    {/* Tabs */}
+                    <div className="flex gap-2 border-b border-zinc-800">
+                      <button
+                        onClick={() => setSettingsTab('visualizations')}
+                        className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                          settingsTab === 'visualizations'
+                            ? 'border-orange-500 text-orange-500'
+                            : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        Visualizations
+                      </button>
+                      <button
+                        onClick={() => setSettingsTab('text-styles')}
+                        className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                          settingsTab === 'text-styles'
+                            ? 'border-orange-500 text-orange-500'
+                            : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        Text Styles
+                      </button>
                     </div>
 
-                    {/* Active Visualization Settings */}
-                    {activePlugin && activePlugin.settingsSchema.length > 0 && (
-                      <div>
-                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                          {activePlugin.name} Settings
-                        </h3>
-                        <SettingsRenderer
-                          schema={activePlugin.settingsSchema}
-                          values={visualizationSettings[activeVisualization] || {}}
-                          onChange={(key, value) => {
-                            const newSettings = {
-                              ...visualizationSettings,
-                              [activeVisualization]: {
-                                ...(visualizationSettings[activeVisualization] || {}),
-                                [key]: value,
-                              }
-                            };
-                            sendCommand('set-visualization-settings', newSettings);
-                          }}
-                        />
+                    {/* Tab Content */}
+                    {settingsTab === 'visualizations' && (
+                      <div className="space-y-6">
+                        {/* Visualization Presets Manager */}
+                        <div>
+                          <VisualizationPresetsManager
+                            presets={visualizationPresets}
+                            activePresetId={activeVisualizationPreset}
+                            onAddPreset={handleAddPreset}
+                            onUpdatePreset={handleUpdatePreset}
+                            onDeletePreset={handleDeletePreset}
+                            onSetActivePreset={handleSetActivePreset}
+                          />
+                        </div>
+
+                        {/* Active Preset Settings */}
+                        {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
+                          <div>
+                            <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                              {activePreset.name} Settings
+                            </h3>
+                            <SettingsRenderer
+                              schema={activePlugin.settingsSchema}
+                              values={activePreset.settings}
+                              onChange={(key, value) => {
+                                handleUpdatePreset(activePreset.id, {
+                                  settings: { ...activePreset.settings, [key]: value },
+                                });
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {/* Text Style Settings */}
-                    <div>
-                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                        Text Style Settings
-                      </h3>
-                      <div className="space-y-4">
-                        {textStyleRegistry.map((style) => (
-                          <div key={style.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                            <h4 className="text-sm font-medium text-zinc-300 mb-3">{style.name}</h4>
-                            {style.settingsSchema.length > 0 ? (
-                              <SettingsRenderer
-                                schema={style.settingsSchema}
-                                values={textStyleSettings[style.id] || {}}
-                                onChange={(key, value) => {
-                                  const newSettings = {
-                                    ...textStyleSettings,
-                                    [style.id]: {
-                                      ...(textStyleSettings[style.id] || {}),
-                                      [key]: value,
-                                    }
-                                  };
-                                  sendCommand('set-text-style-settings', newSettings);
-                                }}
-                              />
-                            ) : (
-                              <p className="text-xs text-zinc-500">No settings available</p>
-                            )}
-                          </div>
-                        ))}
+                    {settingsTab === 'text-styles' && (
+                      <div className="space-y-6">
+                        {/* Text Style Presets Manager */}
+                        <div>
+                          <TextStylePresetsManager
+                            presets={textStylePresets}
+                            onAddPreset={handleAddTextStylePreset}
+                            onUpdatePreset={handleUpdateTextStylePreset}
+                            onDeletePreset={handleDeleteTextStylePreset}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </motion.section>
               )}
             </AnimatePresence>
 
-            {/* Remote Info Section */}
-            <section className="relative group">
-              <div className="absolute -inset-px bg-gradient-to-r from-orange-500/20 via-zinc-800 to-blue-500/20 rounded-2xl opacity-50 group-hover:opacity-100 transition-opacity" />
-              <div className="relative bg-zinc-950 rounded-2xl p-6 flex flex-col md:flex-row items-center gap-8">
-                <div className="bg-white p-3 rounded-xl shadow-2xl shrink-0">
-                  {remoteUrl ? (
-                    <QRCodeSVG value={remoteUrl} size={120} level="H" />
-                  ) : (
-                    <div className="w-28 h-28 bg-zinc-100 animate-pulse rounded-lg" />
-                  )}
-                </div>
-                <div className="flex-1 text-center md:text-left">
-                  <div className="flex items-center justify-center md:justify-start gap-2 mb-3">
-                    <Smartphone size={18} className="text-orange-500" />
-                    <h3 className="text-lg font-bold">Mobile Remote</h3>
-                  </div>
-                  <p className="text-zinc-400 mb-4 leading-relaxed text-sm max-w-md">
-                    Control from your phone. Scan the QR code to open the remote.
-                  </p>
-                  <div className="inline-flex items-center gap-3 bg-black border border-zinc-800 px-4 py-2 rounded-xl">
-                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                    <code className="text-orange-500 font-mono text-xs">{remoteUrl || 'Detecting...'}</code>
-                  </div>
-                </div>
-              </div>
-            </section>
           </div>
 
           {/* Sidebar - Messages */}
-          <aside className="col-span-12 lg:col-span-4">
-            <div className="flex items-center gap-3 mb-6">
-              <MessageSquare size={18} className="text-zinc-500" />
-              <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
+          <aside className="col-span-12 lg:col-span-4 order-2">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <MessageSquare size={18} className="text-zinc-500" />
+                <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
+              </div>
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className={`p-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
+                  showHistory ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                }`}
+                title="Show message history"
+              >
+                <History size={14} />
+              </button>
             </div>
 
             <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur-md flex flex-col max-h-[700px]">
@@ -459,54 +557,87 @@ export const ControlPlane: React.FC = () => {
 
               <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                 <AnimatePresence initial={false}>
-                  {messages.map((msg) => (
-                    <motion.div
-                      key={msg.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 10 }}
-                      className="bg-zinc-950 border border-zinc-800/50 rounded-xl overflow-hidden"
-                    >
-                      <div className="flex items-center gap-2 p-3">
-                        <button
-                          onClick={() => handleTriggerMessage(msg)}
-                          disabled={isPending}
-                          className="flex-1 text-left text-sm font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50 truncate"
+                  {messages.map((msg) => {
+                    const stats = messageStats[msg.id];
+                    const triggerCount = stats?.triggerCount ?? 0;
+                    const isAnimating = activeMessages.some(am => am.message.id === msg.id);
+                    
+                    return (
+                      <div
+                        key={msg.id}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, msg.id)}
+                        onDragOver={handleDragOver}
+                        onDrop={(e) => handleDrop(e, msg.id)}
+                        onDragEnd={handleDragEnd}
+                        className={`cursor-move ${
+                          draggedMessageId === msg.id ? 'opacity-50' : ''
+                        }`}
+                      >
+                        <motion.div
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: 10 }}
+                          className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
+                            isAnimating ? 'border-orange-500/50 shadow-lg shadow-orange-500/20' : 'border-zinc-800/50'
+                          }`}
                         >
-                          {msg.text}
-                        </button>
-                        <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 p-3">
                           <button
-                            onClick={() => handleMoveMessage(msg.id, 'up')}
-                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
-                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Move up"
+                            onClick={() => isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg)}
+                            disabled={isPending}
+                            className="flex-1 text-left text-sm font-medium text-zinc-300 hover:text-white transition-colors disabled:opacity-50 truncate"
                           >
-                            <ArrowUp size={14} />
+                            <div className="flex items-center gap-2">
+                              <span>{msg.text}</span>
+                              {isAnimating && (
+                                <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
+                              )}
+                            </div>
+                          </button>
+                          {/* Counter badge */}
+                          <div
+                            className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              triggerCount === 0
+                                ? 'bg-zinc-800 text-zinc-500'
+                                : 'bg-orange-500/20 text-orange-400'
+                            }`}
+                            title={`Triggered ${triggerCount} time${triggerCount !== 1 ? 's' : ''}`}
+                          >
+                            {triggerCount}
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <button
+                              onClick={() => handleMoveMessage(msg.id, 'up')}
+                              disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
+                              className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              title="Move up"
+                            >
+                              <ArrowUp size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleMoveMessage(msg.id, 'down')}
+                              disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
+                              className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              title="Move down"
+                            >
+                              <ArrowDown size={14} />
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
+                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
+                          >
+                            {expandedMessage === msg.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                           </button>
                           <button
-                            onClick={() => handleMoveMessage(msg.id, 'down')}
-                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
-                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Move down"
+                            onClick={() => handleDeleteMessage(msg.id)}
+                            className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
+                            title="Delete message"
                           >
-                            <ArrowDown size={14} />
+                            <Trash2 size={16} />
                           </button>
                         </div>
-                        <button
-                          onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
-                          className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
-                        >
-                          {expandedMessage === msg.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteMessage(msg.id)}
-                          className="p-1 text-zinc-600 hover:text-red-400 transition-colors"
-                          title="Delete message"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
                       
                       <AnimatePresence>
                         {expandedMessage === msg.id && (
@@ -516,31 +647,228 @@ export const ControlPlane: React.FC = () => {
                             exit={{ opacity: 0, height: 0 }}
                             className="px-3 pb-3 border-t border-zinc-800/50"
                           >
-                            <div className="pt-3">
-                              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                                Text Style
-                              </label>
-                              <select
-                                value={msg.textStyle}
-                                onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
-                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
-                              >
-                                {textStyleRegistry.map((style) => (
-                                  <option key={style.id} value={style.id}>
-                                    {style.name}
-                                  </option>
-                                ))}
-                              </select>
+                            <div className="pt-3 space-y-4">
+                              {/* Text Style Preset Selector */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Text Style Preset
+                                </label>
+                                <select
+                                  value={msg.textStylePreset || ''}
+                                  onChange={(e) => {
+                                    const updates: Partial<MessageConfig> = {
+                                      textStylePreset: e.target.value || undefined,
+                                    };
+                                    if (!e.target.value) {
+                                      // If no preset, use default text style
+                                      updates.textStyle = defaultTextStyle;
+                                    }
+                                    sendCommand('set-messages', messages.map(m => 
+                                      m.id === msg.id ? { ...m, ...updates } : m
+                                    ));
+                                  }}
+                                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors mb-2"
+                                >
+                                  <option value="">Default ({defaultTextStyle})</option>
+                                  {textStylePresets.map((preset) => (
+                                    <option key={preset.id} value={preset.id}>
+                                      {preset.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                {/* Fallback to text style if no preset */}
+                                {!msg.textStylePreset && (
+                                  <select
+                                    value={msg.textStyle}
+                                    onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
+                                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                                  >
+                                    {textStyleRegistry.map((style) => (
+                                      <option key={style.id} value={style.id}>
+                                        {style.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                              </div>
+
+                              {/* Repeat Count */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Repeat Count: {msg.repeatCount ?? 1}
+                                </label>
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="10"
+                                  value={msg.repeatCount ?? 1}
+                                  onChange={(e) => {
+                                    sendCommand('set-messages', messages.map(m => 
+                                      m.id === msg.id ? { ...m, repeatCount: parseInt(e.target.value) } : m
+                                    ));
+                                  }}
+                                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                                />
+                                <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                                  <span>1</span>
+                                  <span>10</span>
+                                </div>
+                              </div>
+
+                              {/* Speed Multiplier */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Speed: {(msg.speed ?? 1.0).toFixed(1)}x
+                                </label>
+                                <input
+                                  type="range"
+                                  min="0.5"
+                                  max="2.0"
+                                  step="0.1"
+                                  value={msg.speed ?? 1.0}
+                                  onChange={(e) => {
+                                    sendCommand('set-messages', messages.map(m => 
+                                      m.id === msg.id ? { ...m, speed: parseFloat(e.target.value) } : m
+                                    ));
+                                  }}
+                                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                                />
+                                <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                                  <span>0.5x</span>
+                                  <span>2.0x</span>
+                                </div>
+                              </div>
+
+                              {/* Per-Message Style Overrides */}
+                              {(() => {
+                                const preset = msg.textStylePreset 
+                                  ? textStylePresets.find(p => p.id === msg.textStylePreset)
+                                  : null;
+                                const styleId = preset?.textStyleId || msg.textStyle;
+                                const textStyle = getTextStyle(styleId);
+                                
+                                if (!textStyle || textStyle.settingsSchema.length === 0) {
+                                  return null;
+                                }
+
+                                const presetSettings = preset?.settings || textStyleSettings[styleId] || {};
+                                const overrides = msg.styleOverrides || {};
+                                const mergedSettings = { ...presetSettings, ...overrides };
+
+                                return (
+                                  <div>
+                                    <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                      Style Overrides
+                                    </label>
+                                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                                      <SettingsRenderer
+                                        schema={textStyle.settingsSchema}
+                                        values={mergedSettings}
+                                        onChange={(key, value) => {
+                                          const newOverrides = { ...overrides, [key]: value };
+                                          sendCommand('set-messages', messages.map(m => 
+                                            m.id === msg.id ? { ...m, styleOverrides: newOverrides } : m
+                                          ));
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </motion.div>
                         )}
                       </AnimatePresence>
-                    </motion.div>
-                  ))}
+                        </motion.div>
+                      </div>
+                    );
+                  })}
                 </AnimatePresence>
               </div>
+              
+              {/* History Pane */}
+              <AnimatePresence>
+                {showHistory && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mt-4 border-t border-zinc-800 pt-4 overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Message History</h3>
+                      <button
+                        onClick={() => setShowHistory(false)}
+                        className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                        title="Close history"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="space-y-3 max-h-64 overflow-y-auto custom-scrollbar">
+                      {messages.length === 0 ? (
+                        <div className="text-center py-4 text-zinc-500 text-xs">No messages</div>
+                      ) : (
+                        messages.map((msg) => {
+                          const stats = messageStats[msg.id];
+                          const history = stats?.history ?? [];
+                          
+                          return (
+                            <div key={msg.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                              <div className="text-sm font-medium text-zinc-300 mb-2">{msg.text}</div>
+                              {history.length === 0 ? (
+                                <div className="text-xs text-zinc-500">Never triggered</div>
+                              ) : (
+                                <div className="space-y-1">
+                                  <div className="text-xs text-zinc-500 mb-1">
+                                    Triggered {stats?.triggerCount ?? 0} time{stats?.triggerCount !== 1 ? 's' : ''}
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    {history.slice().reverse().map((entry, idx) => (
+                                      <div key={idx} className="text-xs text-zinc-600 font-mono">
+                                        {new Date(entry.timestamp).toLocaleString()}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </aside>
+
+          {/* Remote Info Section - After messages in non-wide layout */}
+          <section className="col-span-12 lg:col-span-8 order-3 lg:order-2 relative group">
+            <div className="absolute -inset-px bg-gradient-to-r from-orange-500/20 via-zinc-800 to-blue-500/20 rounded-2xl opacity-50 group-hover:opacity-100 transition-opacity" />
+            <div className="relative bg-zinc-950 rounded-2xl p-6 flex flex-col md:flex-row items-center gap-8">
+              <div className="bg-white p-3 rounded-xl shadow-2xl shrink-0">
+                {remoteUrl ? (
+                  <QRCodeSVG value={remoteUrl} size={120} level="H" />
+                ) : (
+                  <div className="w-28 h-28 bg-zinc-100 animate-pulse rounded-lg" />
+                )}
+              </div>
+              <div className="flex-1 text-center md:text-left">
+                <div className="flex items-center justify-center md:justify-start gap-2 mb-3">
+                  <Smartphone size={18} className="text-orange-500" />
+                  <h3 className="text-lg font-bold">Mobile Remote</h3>
+                </div>
+                <p className="text-zinc-400 mb-4 leading-relaxed text-sm max-w-md">
+                  Control from your phone. Scan the QR code to open the remote.
+                </p>
+                <div className="inline-flex items-center gap-3 bg-black border border-zinc-800 px-4 py-2 rounded-xl">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  <code className="text-orange-500 font-mono text-xs">{remoteUrl || 'Detecting...'}</code>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>

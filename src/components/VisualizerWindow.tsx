@@ -4,6 +4,7 @@ import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
 import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } from '../plugins/types';
+import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 
 /**
  * Text Style Renderer Component
@@ -13,20 +14,29 @@ const TextStyleRenderer: React.FC<{
   message: MessageConfig;
   messageTimestamp: number;
   textStyleSettings: Record<string, Record<string, unknown>>;
+  textStylePresets: Array<{ id: string; name: string; textStyleId: string; settings: Record<string, unknown> }>;
   verticalOffset?: number;
   onComplete: () => void;
-}> = ({ message, messageTimestamp, textStyleSettings, verticalOffset = 0, onComplete }) => {
-  const textStylePlugin = getTextStyle(message.textStyle);
+}> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, onComplete }) => {
+  // Determine which text style to use
+  const preset = message.textStylePreset 
+    ? textStylePresets.find(p => p.id === message.textStylePreset)
+    : null;
+  
+  const styleId = preset?.textStyleId || message.textStyle;
+  const textStylePlugin = getTextStyle(styleId);
+  
   if (!textStylePlugin) {
     // Fallback to scrolling-capitals if style not found
     const fallback = getTextStyle('scrolling-capitals');
     if (!fallback) return null;
     
     const TextStyleComponent = fallback.component;
-    const settings = {
-      ...textStyleSettings['scrolling-capitals'] || {},
-      ...message.styleOverrides || {},
-    };
+    const baseSettings = preset?.settings || textStyleSettings['scrolling-capitals'] || {};
+    const settings = applySpeedMultiplier(
+      { ...baseSettings, ...message.styleOverrides },
+      message.speed ?? 1.0
+    );
     
     return (
       <TextStyleComponent
@@ -40,10 +50,11 @@ const TextStyleRenderer: React.FC<{
   }
 
   const TextStyleComponent = textStylePlugin.component;
-  const settings = {
-    ...textStyleSettings[message.textStyle] || {},
-    ...message.styleOverrides || {},
-  };
+  const baseSettings = preset?.settings || textStyleSettings[styleId] || getDefaults(textStylePlugin.settingsSchema);
+  const settings = applySpeedMultiplier(
+    { ...baseSettings, ...message.styleOverrides },
+    message.speed ?? 1.0
+  );
 
   return (
     <TextStyleComponent
@@ -55,6 +66,29 @@ const TextStyleRenderer: React.FC<{
     />
   );
 };
+
+/**
+ * Apply speed multiplier to duration-based settings
+ * Speed > 1.0 makes it faster (shorter duration), speed < 1.0 makes it slower (longer duration)
+ */
+function applySpeedMultiplier(
+  settings: Record<string, unknown>,
+  speed: number
+): Record<string, unknown> {
+  if (speed === 1.0) return settings;
+  
+  const durationKeys = ['duration', 'displayDuration', 'fadeInDuration', 'fadeOutDuration', 'typingSpeed'];
+  const result = { ...settings };
+  
+  durationKeys.forEach(key => {
+    if (result[key] !== undefined && typeof result[key] === 'number') {
+      // Divide by speed: speed 2.0 = half duration (faster), speed 0.5 = double duration (slower)
+      result[key] = (result[key] as number) / speed;
+    }
+  });
+  
+  return result;
+}
 
 /**
  * Visualization Renderer Component
@@ -112,11 +146,19 @@ const VisualizationRenderer: React.FC<{
 export const VisualizerWindow: React.FC = () => {
   // Get state from store
   const activeVisualization = useStore((state) => state.activeVisualization);
+  const activeVisualizationPreset = useStore((state) => state.activeVisualizationPreset);
+  const visualizationPresets = useStore((state) => state.visualizationPresets);
   const audioData = useStore((state) => state.audioData);
   const commonSettings = useStore((state) => state.commonSettings);
   const visualizationSettings = useStore((state) => state.visualizationSettings);
   const activeMessages = useStore((state) => state.activeMessages);
   const textStyleSettings = useStore((state) => state.textStyleSettings);
+  const textStylePresets = useStore((state) => state.textStylePresets);
+  
+  // Get active preset if available
+  const activePreset = activeVisualizationPreset 
+    ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
+    : null;
   
   // Actions
   const setAudioData = useStore((state) => state.setAudioData);
@@ -208,6 +250,16 @@ export const VisualizerWindow: React.FC = () => {
             setVisualizationSettings(payload as Record<string, Record<string, unknown>>, false);
           }
           break;
+        case 'SET_VISUALIZATION_PRESETS':
+          // Update visualization presets
+          if (payload && Array.isArray(payload)) {
+            useStore.setState({ visualizationPresets: payload });
+          }
+          break;
+        case 'SET_ACTIVE_VISUALIZATION_PRESET':
+          // Update active preset
+          useStore.setState({ activeVisualizationPreset: payload });
+          break;
         case 'SET_TEXT_STYLE_SETTINGS':
           // Full replacement of text style settings
           Object.entries(payload || {}).forEach(([styleId, settings]) => {
@@ -216,12 +268,25 @@ export const VisualizerWindow: React.FC = () => {
             });
           });
           break;
+        case 'SET_TEXT_STYLE_PRESETS':
+          // Update text style presets
+          if (payload && Array.isArray(payload)) {
+            useStore.setState({ textStylePresets: payload });
+          }
+          break;
         case 'LOAD_CONFIGURATION':
           loadConfiguration(payload, false);
           break;
         case 'CLEAR_MESSAGE':
           // Clear message by timestamp (handled locally, no sync needed)
           clearMessage(payload as number, false);
+          break;
+        case 'CLEAR_ACTIVE_MESSAGE':
+          // Clear specific active message
+          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
+            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
+            useStore.getState().clearActiveMessage(messageId, timestamp, false);
+          }
           break;
       }
     });
@@ -245,13 +310,19 @@ export const VisualizerWindow: React.FC = () => {
     loadConfiguration,
   ]);
 
+  // Determine which visualization and settings to use
+  const vizId = activePreset ? activePreset.visualizationId : activeVisualization;
+  const vizSettings = activePreset 
+    ? { [vizId]: activePreset.settings }
+    : visualizationSettings;
+
   return (
     <div className="w-screen h-screen bg-black relative overflow-hidden">
       <VisualizationRenderer
-        visualizationId={activeVisualization}
+        visualizationId={vizId}
         audioData={audioData}
         commonSettings={commonSettings}
-        visualizationSettings={visualizationSettings}
+        visualizationSettings={vizSettings}
       />
       {/* Render all active messages - they can coexist with higher z-index */}
       <div className="absolute inset-0 pointer-events-none z-[100]">
@@ -261,6 +332,7 @@ export const VisualizerWindow: React.FC = () => {
             message={message}
             messageTimestamp={timestamp}
             textStyleSettings={textStyleSettings}
+            textStylePresets={textStylePresets}
             verticalOffset={index * 80} // Stack messages with 80px spacing
             onComplete={() => clearMessage(timestamp, false)}
           />

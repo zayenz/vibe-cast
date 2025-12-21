@@ -15,7 +15,49 @@ pub struct MessageConfig {
     pub text: String,
     pub text_style: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_style_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style_overrides: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+}
+
+/// Visualization preset matching the frontend VisualizationPreset type
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualizationPreset {
+    pub id: String,
+    pub name: String,
+    pub visualization_id: String,
+    pub settings: serde_json::Value,
+}
+
+/// Text style preset matching the frontend TextStylePreset type
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TextStylePreset {
+    pub id: String,
+    pub name: String,
+    pub text_style_id: String,
+    pub settings: serde_json::Value,
+}
+
+/// Message statistics matching the frontend MessageStats type
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageStats {
+    pub message_id: String,
+    pub trigger_count: u32,
+    pub last_triggered: u64,
+    pub history: Vec<TriggerHistory>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerHistory {
+    pub timestamp: u64,
 }
 
 /// Common visualization settings
@@ -42,9 +84,14 @@ pub struct BroadcastState {
     pub enabled_visualizations: Vec<String>,
     pub common_settings: CommonSettings,
     pub visualization_settings: serde_json::Value,
+    pub visualization_presets: Vec<VisualizationPreset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_visualization_preset: Option<String>,
     pub messages: Vec<MessageConfig>,
     pub default_text_style: String,
     pub text_style_settings: serde_json::Value,
+    pub text_style_presets: Vec<TextStylePreset>,
+    pub message_stats: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triggered_message: Option<MessageConfig>,
     // Legacy compatibility
@@ -57,9 +104,13 @@ pub struct AppStateSync {
     pub enabled_visualizations: Mutex<Vec<String>>,
     pub common_settings: Mutex<CommonSettings>,
     pub visualization_settings: Mutex<serde_json::Value>,
+    pub visualization_presets: Mutex<Vec<VisualizationPreset>>,
+    pub active_visualization_preset: Mutex<Option<String>>,
     pub messages: Mutex<Vec<MessageConfig>>,
     pub default_text_style: Mutex<String>,
     pub text_style_settings: Mutex<serde_json::Value>,
+    pub text_style_presets: Mutex<Vec<TextStylePreset>>,
+    pub message_stats: Mutex<serde_json::Value>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
 }
@@ -80,19 +131,28 @@ impl AppStateSync {
                 id: "1".to_string(),
                 text: "Hello World!".to_string(),
                 text_style: "scrolling-capitals".to_string(),
+                text_style_preset: None,
                 style_overrides: None,
+                repeat_count: None,
+                speed: None,
             },
             MessageConfig {
                 id: "2".to_string(),
                 text: "Keep it calm...".to_string(),
                 text_style: "fade".to_string(),
+                text_style_preset: None,
                 style_overrides: None,
+                repeat_count: None,
+                speed: None,
             },
             MessageConfig {
                 id: "3".to_string(),
                 text: "TECHNO TIME".to_string(),
                 text_style: "scrolling-capitals".to_string(),
+                text_style_preset: None,
                 style_overrides: None,
+                repeat_count: None,
+                speed: None,
             },
         ];
         
@@ -101,9 +161,13 @@ impl AppStateSync {
             enabled_visualizations: Mutex::new(vec!["fireplace".to_string(), "techno".to_string()]),
             common_settings: Mutex::new(CommonSettings::default()),
             visualization_settings: Mutex::new(serde_json::json!({})),
+            visualization_presets: Mutex::new(vec![]),
+            active_visualization_preset: Mutex::new(None),
             messages: Mutex::new(default_messages),
             default_text_style: Mutex::new("scrolling-capitals".to_string()),
             text_style_settings: Mutex::new(serde_json::json!({})),
+            text_style_presets: Mutex::new(vec![]),
+            message_stats: Mutex::new(serde_json::json!({})),
             state_tx,
         }
     }
@@ -122,6 +186,12 @@ impl AppStateSync {
         let visualization_settings = self.visualization_settings.lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
+        let visualization_presets = self.visualization_presets.lock()
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        let active_visualization_preset = self.active_visualization_preset.lock()
+            .map(|m| m.clone())
+            .unwrap_or(None);
         let messages = self.messages.lock()
             .map(|m| m.clone())
             .unwrap_or_default();
@@ -129,6 +199,12 @@ impl AppStateSync {
             .map(|m| m.clone())
             .unwrap_or_else(|_| "scrolling-capitals".to_string());
         let text_style_settings = self.text_style_settings.lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let text_style_presets = self.text_style_presets.lock()
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        let message_stats = self.message_stats.lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
         
@@ -140,9 +216,13 @@ impl AppStateSync {
             enabled_visualizations,
             common_settings,
             visualization_settings,
+            visualization_presets,
+            active_visualization_preset,
             messages,
             default_text_style,
             text_style_settings,
+            text_style_presets,
+            message_stats,
             triggered_message: None,
             mode,
         }
@@ -241,6 +321,43 @@ fn emit_state_change(
                 *m = payload_value.clone();
             }
         }
+        "SET_VISUALIZATION_PRESETS" => {
+            if let Ok(presets) = serde_json::from_value::<Vec<VisualizationPreset>>(payload_value.clone()) {
+                if let Ok(mut m) = state.visualization_presets.lock() {
+                    *m = presets;
+                }
+            }
+        }
+        "SET_ACTIVE_VISUALIZATION_PRESET" => {
+            if payload_value.is_null() {
+                if let Ok(mut m) = state.active_visualization_preset.lock() {
+                    *m = None;
+                }
+            } else if let Some(preset_id) = payload_value.as_str() {
+                if let Ok(mut m) = state.active_visualization_preset.lock() {
+                    *m = Some(preset_id.to_string());
+                }
+                // Also update active visualization based on preset
+                if let Ok(presets) = state.visualization_presets.lock() {
+                    if let Some(preset) = presets.iter().find(|p| p.id == preset_id) {
+                        if let Ok(mut m) = state.active_visualization.lock() {
+                            *m = preset.visualization_id.clone();
+                        }
+                    }
+                }
+            }
+        }
+        "SET_TEXT_STYLE_PRESETS" => {
+            if let Ok(presets) = serde_json::from_value::<Vec<TextStylePreset>>(payload_value.clone()) {
+                if let Ok(mut m) = state.text_style_presets.lock() {
+                    *m = presets;
+                }
+            }
+        }
+        "CLEAR_ACTIVE_MESSAGE" => {
+            // This is handled on the frontend, but we can acknowledge it
+            // The actual clearing happens in the VisualizerWindow
+        }
         "LOAD_CONFIGURATION" => {
             // Full configuration load
             if let Some(obj) = payload_value.as_object() {
@@ -283,6 +400,30 @@ fn emit_state_change(
                 if let Some(settings) = obj.get("textStyleSettings") {
                     if let Ok(mut m) = state.text_style_settings.lock() {
                         *m = settings.clone();
+                    }
+                }
+                if let Some(presets) = obj.get("visualizationPresets") {
+                    if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
+                        if let Ok(mut m) = state.visualization_presets.lock() {
+                            *m = p;
+                        }
+                    }
+                }
+                if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
+                    if let Ok(mut m) = state.active_visualization_preset.lock() {
+                        *m = Some(preset_id.to_string());
+                    }
+                }
+                if let Some(presets) = obj.get("textStylePresets") {
+                    if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
+                        if let Ok(mut m) = state.text_style_presets.lock() {
+                            *m = p;
+                        }
+                    }
+                }
+                if let Some(stats) = obj.get("messageStats") {
+                    if let Ok(mut m) = state.message_stats.lock() {
+                        *m = stats.clone();
                     }
                 }
             }

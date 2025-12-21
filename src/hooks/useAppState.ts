@@ -2,6 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { 
   CommonVisualizationSettings, 
   MessageConfig,
+  VisualizationPreset,
+  TextStylePreset,
+  MessageStats,
   DEFAULT_COMMON_SETTINGS,
 } from '../plugins/types';
 
@@ -15,14 +18,18 @@ export interface AppState {
   enabledVisualizations: string[];
   commonSettings: CommonVisualizationSettings;
   visualizationSettings: Record<string, Record<string, unknown>>;
+  visualizationPresets?: VisualizationPreset[];
+  activeVisualizationPreset?: string | null;
   
   // Message state
   messages: MessageConfig[];
   triggeredMessage?: MessageConfig | null;
+  messageStats?: Record<string, MessageStats>;
   
   // Text style state
   defaultTextStyle: string;
   textStyleSettings: Record<string, Record<string, unknown>>;
+  textStylePresets?: TextStylePreset[];
   
   // Legacy compatibility
   mode?: 'fireplace' | 'techno';
@@ -48,10 +55,14 @@ function parseSSEState(data: any): AppState {
       enabledVisualizations: data.enabledVisualizations ?? ['fireplace', 'techno'],
       commonSettings: data.commonSettings ?? DEFAULT_COMMON_SETTINGS,
       visualizationSettings: data.visualizationSettings ?? {},
+      visualizationPresets: data.visualizationPresets ?? [],
+      activeVisualizationPreset: data.activeVisualizationPreset ?? null,
       messages: data.messages ?? [],
       triggeredMessage: data.triggeredMessage ?? null,
+      messageStats: data.messageStats ?? {},
       defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: data.textStyleSettings ?? {},
+      textStylePresets: data.textStylePresets ?? [],
       // Legacy compatibility
       mode: data.activeVisualization === 'techno' ? 'techno' : 'fireplace',
     };
@@ -63,6 +74,8 @@ function parseSSEState(data: any): AppState {
     enabledVisualizations: ['fireplace', 'techno'],
     commonSettings: DEFAULT_COMMON_SETTINGS,
     visualizationSettings: {},
+    visualizationPresets: [],
+    activeVisualizationPreset: null,
     messages: Array.isArray(data.messages) 
       ? data.messages.map((m: unknown, i: number) => 
           typeof m === 'string' 
@@ -73,8 +86,10 @@ function parseSSEState(data: any): AppState {
     triggeredMessage: data.triggered_message 
       ? { id: 'triggered', text: data.triggered_message, textStyle: 'scrolling-capitals' }
       : null,
+    messageStats: {},
     defaultTextStyle: 'scrolling-capitals',
     textStyleSettings: {},
+    textStylePresets: [],
     mode: data.mode ?? 'fireplace',
   };
 }
