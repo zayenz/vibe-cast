@@ -150,6 +150,7 @@ pub struct AppStateSync {
     pub text_style_settings: Mutex<serde_json::Value>,
     pub text_style_presets: Mutex<Vec<TextStylePreset>>,
     pub message_stats: Mutex<serde_json::Value>,
+    pub server_port: Mutex<u16>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
 }
@@ -220,6 +221,7 @@ impl AppStateSync {
             text_style_settings: Mutex::new(serde_json::json!({})),
             text_style_presets: Mutex::new(vec![]),
             message_stats: Mutex::new(serde_json::json!({})),
+            server_port: Mutex::new(8080),
             state_tx,
         }
     }
@@ -294,11 +296,12 @@ impl AppStateSync {
 }
 
 #[tauri::command]
-fn get_server_info() -> serde_json::Value {
+fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> serde_json::Value {
     let my_local_ip = local_ip().map(|ip| ip.to_string()).unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = state.server_port.lock().map(|p| *p).unwrap_or(8080);
     serde_json::json!({
         "ip": my_local_ip,
-        "port": 8080
+        "port": port
     })
 }
 

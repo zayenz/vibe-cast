@@ -85,6 +85,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         app_handle: app_handle.clone(),
         app_state_sync,
     };
+    let app_state_sync = state.app_state_sync.clone();
 
     // Get the path to the frontend assets
     let dist_path = if cfg!(debug_assertions) {
@@ -111,11 +112,34 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("Server listening on http://{}", addr);
+    // Try a range of ports (helps when a previous instance is still running).
+    let mut bound_listener: Option<(tokio::net::TcpListener, SocketAddr)> = None;
+    for p in port..=port.saturating_add(20) {
+        let addr = SocketAddr::from(([0, 0, 0, 0], p));
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                bound_listener = Some((listener, addr));
+                if let Ok(mut sp) = app_state_sync.server_port.lock() {
+                    *sp = p;
+                }
+                break;
+            }
+            Err(err) => {
+                eprintln!("Failed to bind {} ({}), trying next port...", addr, err);
+                continue;
+            }
+        }
+    }
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let Some((listener, addr)) = bound_listener else {
+        eprintln!("LAN server could not bind any port in range {}..{}", port, port.saturating_add(20));
+        return;
+    };
+
+    println!("Server listening on http://{}", addr);
+    if let Err(err) = axum::serve(listener, app).await {
+        eprintln!("LAN server exited: {}", err);
+    }
 }
 
 async fn handle_index() -> Html<&'static str> {

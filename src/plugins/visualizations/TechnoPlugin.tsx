@@ -5,7 +5,7 @@
  * Built with React Three Fiber.
  */
 
-import React, { useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { MeshDistortMaterial, Sphere, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -238,9 +238,49 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
     opacity: dim,
   };
 
+  const [webglLost, setWebglLost] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0);
+
+  // Reduce GPU pressure a bit on high-DPI screens (helps long-run stability).
+  const dpr = useMemo(() => {
+    if (typeof window === 'undefined') return 1;
+    return Math.min(window.devicePixelRatio || 1, 1.5);
+  }, []);
+
+  // If the WebGL context is lost, remount the Canvas after a short delay.
+  useEffect(() => {
+    if (!webglLost) return;
+    const t = window.setTimeout(() => setCanvasKey((k) => k + 1), 750);
+    return () => window.clearTimeout(t);
+  }, [webglLost]);
+
   return (
-    <div className="w-full h-full bg-black" style={dimStyle}>
-      <Canvas camera={{ position: [0, 0, 8] }} gl={{ antialias: true }}>
+    <div className="w-full h-full bg-black relative" style={dimStyle}>
+      {webglLost && (
+        <div className="absolute inset-0 flex items-center justify-center z-50">
+          <div className="px-4 py-2 rounded-lg bg-black/70 border border-zinc-800 text-zinc-200 text-sm">
+            WebGL context lost — recovering…
+          </div>
+        </div>
+      )}
+      <Canvas
+        key={canvasKey}
+        dpr={dpr}
+        camera={{ position: [0, 0, 8] }}
+        gl={{ antialias: true, alpha: false, powerPreference: 'low-power' }}
+        onCreated={({ gl }) => {
+          const canvas = gl.domElement;
+          const onLost = (e: Event) => {
+            // Prevent the browser's default behavior so we can attempt a recovery.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (e as any).preventDefault?.();
+            setWebglLost(true);
+          };
+          const onRestored = () => setWebglLost(false);
+          canvas.addEventListener('webglcontextlost', onLost as EventListener, false);
+          canvas.addEventListener('webglcontextrestored', onRestored as EventListener, false);
+        }}
+      >
         <color attach="background" args={['#000000']} />
         <fog attach="fog" args={['#000000', 5, 15]} />
         <ambientLight intensity={0.2} />
