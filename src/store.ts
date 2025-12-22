@@ -4,6 +4,7 @@ import {
   AppConfiguration, 
   CommonVisualizationSettings, 
   MessageConfig,
+  MessageTreeNode,
   VisualizationPreset,
   TextStylePreset,
   MessageStats,
@@ -30,6 +31,7 @@ export interface AppState {
   
   // Message state
   messages: MessageConfig[];
+  messageTree: MessageTreeNode[];
   activeMessages: Array<{ message: MessageConfig; timestamp: number }>;
   activeMessage: MessageConfig | null; // Legacy - kept for compatibility
   messageTimestamp: number; // Legacy - kept for compatibility
@@ -66,12 +68,14 @@ export interface AppState {
   setVisualizationPresets: (presets: VisualizationPreset[], sync?: boolean) => void;
   
   setMessages: (messages: MessageConfig[], sync?: boolean) => void;
+  setMessageTree: (tree: MessageTreeNode[], sync?: boolean) => void;
   addMessage: (text: string, sync?: boolean) => void;
   updateMessage: (id: string, updates: Partial<MessageConfig>, sync?: boolean) => void;
   removeMessage: (id: string, sync?: boolean) => void;
   triggerMessage: (message: MessageConfig, sync?: boolean) => void;
   clearMessage: (timestamp: number, sync?: boolean) => void;
   clearActiveMessage: (messageId: string, timestamp: number, sync?: boolean) => void;
+  resetMessageStats: (sync?: boolean) => void;
   
   setDefaultTextStyle: (id: string, sync?: boolean) => void;
   setTextStyleSetting: (styleId: string, key: string, value: unknown, sync?: boolean) => void;
@@ -100,6 +104,25 @@ export interface AppState {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+
+function buildFlatMessageTree(messages: MessageConfig[]): MessageTreeNode[] {
+  return messages.map((m) => ({ type: 'message', id: m.id, message: m }));
+}
+
+function flattenMessageTree(tree: MessageTreeNode[]): MessageConfig[] {
+  const out: MessageConfig[] = [];
+  const walk = (nodes: MessageTreeNode[]) => {
+    nodes.forEach((n) => {
+      if (n.type === 'message') {
+        out.push(n.message);
+      } else {
+        walk(n.children ?? []);
+      }
+    });
+  };
+  walk(tree);
+  return out;
 }
 
 function parseDefaultConfig(): Partial<AppState> {
@@ -182,6 +205,7 @@ function parseDefaultConfig(): Partial<AppState> {
     visualizationPresets,
     activeVisualizationPreset: config.activeVisualizationPreset ?? null,
     messages: config.messages ?? [],
+    messageTree: config.messageTree ?? buildFlatMessageTree(config.messages ?? []),
     defaultTextStyle: config.defaultTextStyle ?? 'scrolling-capitals',
     textStyleSettings: config.textStyleSettings ?? {},
     textStylePresets,
@@ -212,6 +236,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeVisualizationPreset: defaults.activeVisualizationPreset ?? null,
   
   messages: defaults.messages ?? [],
+  messageTree: defaults.messageTree ?? buildFlatMessageTree(defaults.messages ?? []),
   activeMessages: [],
   activeMessage: null, // Legacy compatibility
   messageTimestamp: 0, // Legacy compatibility
@@ -342,9 +367,20 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Message actions
   setMessages: (messages, sync = true) => {
-    set({ messages });
+    set({ messages, messageTree: buildFlatMessageTree(messages) });
     if (sync) {
       syncState('SET_MESSAGES', messages);
+    }
+  },
+
+  setMessageTree: (tree, sync = true) => {
+    const flat = flattenMessageTree(tree);
+    set({ messageTree: tree, messages: flat });
+    if (sync) {
+      // Backward compatible: still sync SET_MESSAGES for existing listeners
+      syncState('SET_MESSAGES', flat);
+      // New: message tree for folder-aware UIs (backend may ignore if not implemented)
+      syncState('SET_MESSAGE_TREE', tree);
     }
   },
 
@@ -476,6 +512,13 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  resetMessageStats: (sync = true) => {
+    set({ messageStats: {} });
+    if (sync) {
+      syncState('RESET_MESSAGE_STATS', {});
+    }
+  },
+
   // Text style actions
   setDefaultTextStyle: (id, sync = true) => {
     set({ defaultTextStyle: id });
@@ -561,6 +604,7 @@ export const useStore = create<AppState>((set, get) => ({
       visualizationSettings: state.visualizationSettings,
       visualizationPresets: state.visualizationPresets,
       messages: state.messages,
+      messageTree: state.messageTree,
       defaultTextStyle: state.defaultTextStyle,
       textStyleSettings: state.textStyleSettings,
       textStylePresets: state.textStylePresets,
@@ -571,6 +615,8 @@ export const useStore = create<AppState>((set, get) => ({
   loadConfiguration: (config, sync = true) => {
     console.log('Loading configuration:', config);
     const mode = (config.activeVisualization ?? 'fireplace') === 'techno' ? 'techno' : 'fireplace';
+    const messageTree = config.messageTree ?? buildFlatMessageTree(config.messages ?? []);
+    const messages = config.messages ?? flattenMessageTree(messageTree);
     set({
       activeVisualization: config.activeVisualization ?? 'fireplace',
       activeVisualizationPreset: config.activeVisualizationPreset ?? null,
@@ -578,7 +624,8 @@ export const useStore = create<AppState>((set, get) => ({
       commonSettings: config.commonSettings,
       visualizationSettings: config.visualizationSettings ?? {},
       visualizationPresets: config.visualizationPresets ?? [],
-      messages: config.messages ?? [],
+      messages,
+      messageTree,
       defaultTextStyle: config.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: config.textStyleSettings ?? {},
       textStylePresets: config.textStylePresets ?? [],

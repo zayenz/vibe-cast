@@ -7,6 +7,7 @@ import {
   MessageStats,
   DEFAULT_COMMON_SETTINGS,
 } from '../plugins/types';
+import type { MessageTreeNode } from '../plugins/types';
 
 /**
  * Application state from the SSE stream
@@ -23,6 +24,7 @@ export interface AppState {
   
   // Message state
   messages: MessageConfig[];
+  messageTree?: MessageTreeNode[];
   triggeredMessage?: MessageConfig | null;
   messageStats?: Record<string, MessageStats>;
   
@@ -58,6 +60,7 @@ function parseSSEState(data: any): AppState {
       visualizationPresets: data.visualizationPresets ?? [],
       activeVisualizationPreset: data.activeVisualizationPreset ?? null,
       messages: data.messages ?? [],
+      messageTree: data.messageTree ?? undefined,
       triggeredMessage: data.triggeredMessage ?? null,
       messageStats: data.messageStats ?? (typeof data.messageStats === 'object' ? data.messageStats : {}),
       defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
@@ -83,6 +86,7 @@ function parseSSEState(data: any): AppState {
             : m as MessageConfig
         )
       : [],
+    messageTree: undefined,
     triggeredMessage: data.triggered_message 
       ? { id: 'triggered', text: data.triggered_message, textStyle: 'scrolling-capitals' }
       : null,

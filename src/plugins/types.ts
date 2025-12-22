@@ -258,6 +258,31 @@ export interface MessageConfig {
 }
 
 // ============================================================================
+// Message Tree (Folders)
+// ============================================================================
+
+export interface MessageFolderNode {
+  type: 'folder';
+  /** Unique identifier for this folder node */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Whether folder is collapsed in the UI */
+  collapsed?: boolean;
+  /** Child nodes */
+  children: MessageTreeNode[];
+}
+
+export interface MessageLeafNode {
+  type: 'message';
+  /** Leaf node id (usually equals message.id) */
+  id: string;
+  message: MessageConfig;
+}
+
+export type MessageTreeNode = MessageFolderNode | MessageLeafNode;
+
+// ============================================================================
 // Full Configuration Type
 // ============================================================================
 
@@ -288,6 +313,12 @@ export interface AppConfiguration {
   
   /** Preset messages */
   messages: MessageConfig[];
+
+  /**
+   * Message tree (folders + messages).
+   * If present, this is the canonical ordering/structure. `messages` is treated as a flattened view.
+   */
+  messageTree?: MessageTreeNode[];
   
   /** Default text style for new messages */
   defaultTextStyle: string;

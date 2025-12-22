@@ -19,6 +19,55 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 
 use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, TextStylePreset};
 
+fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
+    fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
+        match node {
+            serde_json::Value::Array(arr) => {
+                for n in arr {
+                    walk(n, out);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                    match t {
+                        "message" => {
+                            if let Some(msg_val) = obj.get("message") {
+                                if let Ok(msg) = serde_json::from_value::<MessageConfig>(msg_val.clone()) {
+                                    out.push(msg);
+                                }
+                            }
+                        }
+                        "folder" => {
+                            if let Some(children) = obj.get("children") {
+                                walk(children, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out: Vec<MessageConfig> = vec![];
+    walk(tree, &mut out);
+    out
+}
+
+fn build_flat_message_tree(messages: &[MessageConfig]) -> serde_json::Value {
+    serde_json::Value::Array(
+        messages
+            .iter()
+            .map(|m| serde_json::json!({
+                "type": "message",
+                "id": m.id,
+                "message": m
+            }))
+            .collect(),
+    )
+}
+
 #[derive(Clone)]
 struct AppState {
     app_handle: AppHandle,
@@ -202,6 +251,12 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.messages.lock() {
                         *m = messages;
                     }
+                    // Keep a flat tree representation in sync
+                    if let Ok(m) = state.app_state_sync.messages.lock() {
+                        if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
+                            *t = build_flat_message_tree(m.as_slice());
+                        }
+                    }
                 } else if let Some(arr) = p.as_array() {
                     // Legacy format - array of strings
                     let messages: Vec<MessageConfig> = arr.iter()
@@ -221,6 +276,24 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.messages.lock() {
                         *m = messages;
                     }
+                    // Keep a flat tree representation in sync
+                    if let Ok(m) = state.app_state_sync.messages.lock() {
+                        if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
+                            *t = build_flat_message_tree(m.as_slice());
+                        }
+                    }
+                }
+            }
+        }
+        "set-message-tree" => {
+            if let Some(p) = &payload.payload {
+                if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
+                    *t = p.clone();
+                }
+                // Also update the flattened messages list for backward compatibility / remote UI.
+                let flat = flatten_message_tree(p);
+                if let Ok(mut m) = state.app_state_sync.messages.lock() {
+                    *m = flat;
                 }
             }
         }
@@ -281,6 +354,11 @@ async fn handle_command(
             // This is handled on the frontend, but we acknowledge it
             // The actual clearing happens in the VisualizerWindow
         }
+        "reset-message-stats" => {
+            if let Ok(mut m) = state.app_state_sync.message_stats.lock() {
+                *m = serde_json::json!({});
+            }
+        }
         "load-configuration" => {
             if let Some(obj) = payload.payload.as_ref().and_then(|p| p.as_object()) {
                 // Full configuration load
@@ -312,6 +390,24 @@ async fn handle_command(
                     if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
                         if let Ok(mut m) = state.app_state_sync.messages.lock() {
                             *m = messages;
+                        }
+                    }
+                }
+                // Message tree (folders) - canonical ordering/structure if present
+                if let Some(tree) = obj.get("messageTree") {
+                    if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
+                        *t = tree.clone();
+                    }
+                    // Ensure flattened messages match tree
+                    let flat = flatten_message_tree(tree);
+                    if let Ok(mut m) = state.app_state_sync.messages.lock() {
+                        *m = flat;
+                    }
+                } else {
+                    // If no tree was provided, keep a flat tree representation of messages
+                    if let Ok(m) = state.app_state_sync.messages.lock() {
+                        if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
+                            *t = build_flat_message_tree(m.as_slice());
                         }
                     }
                 }

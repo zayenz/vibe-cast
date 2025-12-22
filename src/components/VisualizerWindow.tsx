@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
@@ -316,8 +316,73 @@ export const VisualizerWindow: React.FC = () => {
     ? { [vizId]: activePreset.settings }
     : visualizationSettings;
 
+  // Dev overlay (default OFF; opt-in via localStorage or query param)
+  const devOverlayEnabledByQuery = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('vizDebug') === '1';
+    } catch {
+      return false;
+    }
+  }, []);
+  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(() => {
+    if (!import.meta.env.DEV) return false;
+    if (devOverlayEnabledByQuery) return true;
+    try {
+      return window.localStorage.getItem('vibecast:vizDebug') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    try {
+      window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [showDevOverlay]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + Shift + D toggles overlay
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault();
+        setShowDevOverlay((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   return (
-    <div className="w-screen h-screen bg-black relative overflow-hidden">
+    <div className="w-screen h-screen bg-black relative overflow-hidden" style={{ backgroundColor: '#000' }}>
+      {/* Debug overlay (dev-only): helps diagnose "blank/grey visualizer" reports */}
+      {import.meta.env.DEV && showDevOverlay && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            zIndex: 9999,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            fontSize: 11,
+            lineHeight: 1.35,
+            padding: '6px 8px',
+            background: 'rgba(0,0,0,0.55)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 8,
+            color: 'rgba(255,255,255,0.85)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div>vizId: {String(vizId)}</div>
+          <div>activePreset: {activePreset ? `${activePreset.name} (${activePreset.id})` : 'none'}</div>
+          <div>audioData: {Array.isArray(audioData) ? audioData.length : 'n/a'}</div>
+          <div>common: {commonSettings ? `intensity=${commonSettings.intensity} dim=${commonSettings.dim}` : 'n/a'}</div>
+        </div>
+      )}
       <VisualizationRenderer
         visualizationId={vizId}
         audioData={audioData}

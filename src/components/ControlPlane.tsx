@@ -6,16 +6,16 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
-  ChevronDown, ChevronUp, Trash2, History, X, GripVertical
+  ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
-import { textStyleRegistry, getTextStyle } from '../plugins/textStyles';
+import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
 import { VisualizationPresetsManager } from './settings/VisualizationPresetsManager';
 import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
-import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset } from '../plugins/types';
+import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode } from '../plugins/types';
 import { useStore } from '../store';
 
 // API base for Tauri windows - they need to hit the Axum server directly
@@ -55,6 +55,7 @@ export const ControlPlane: React.FC = () => {
   const messageStats = state?.messageStats ?? storeMessageStats;
   const activeMessages = useStore((s) => s.activeMessages);
   const clearActiveMessage = useStore((s) => s.clearActiveMessage);
+  const resetMessageStats = useStore((s) => s.resetMessageStats);
   
   // Sync messageStats from SSE to store
   // CRITICAL: Use a ref to track the last synced value and only sync when state changes
@@ -98,13 +99,16 @@ export const ControlPlane: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [expandedMessage, setExpandedMessage] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  // Message reordering (pointer-based; HTML5 DnD is flaky in some WebViews)
-  const [draggingMessageId, setDraggingMessageId] = useState<string | null>(null);
-  const [dropIndex, setDropIndex] = useState<number | null>(null); // insertion index [0..messages.length]
+  // Message tree DnD (pointer-based; HTML5 DnD is flaky in some WebViews)
+  const [draggingNodePath, setDraggingNodePath] = useState<string | null>(null);
+  const [dropVisibleIndex, setDropVisibleIndex] = useState<number | null>(null); // insertion marker in visible list
+  const [dropIntoFolderPath, setDropIntoFolderPath] = useState<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
-  const messageItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const messageItemRefs = useRef<Map<string, HTMLDivElement>>(new Map()); // key: node path
   const [showTextStylePresetsManager, setShowTextStylePresetsManager] = useState(false);
   const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
+  const [editingFolderPath, setEditingFolderPath] = useState<string | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState<string>('');
 
   // Debug flag for message reordering
   const dndDebugRef = useRef<boolean>(false);
@@ -167,15 +171,248 @@ export const ControlPlane: React.FC = () => {
   const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
   const visualizationSettings = state?.visualizationSettings ?? {};
-  // Render messages from a local mirror so reorders can be optimistic and not snap back while SSE catches up.
-  // IMPORTANT: don't use `state?.messages ?? []` directly as an effect dep, because `[]` creates a new ref every render.
-  const sseMessages = state?.messages;
-  const [messagesLocal, setMessagesLocal] = useState<MessageConfig[]>([]);
-  useEffect(() => {
-    setMessagesLocal(sseMessages ?? []);
-  }, [sseMessages]);
+  // Message tree (folders). SSE may or may not provide it; if missing we derive a flat tree from `messages`.
+  const buildFlatTree = (msgs: MessageConfig[]): MessageTreeNode[] =>
+    msgs.map((m) => ({ type: 'message', id: m.id, message: m }));
+  const flattenTree = (tree: MessageTreeNode[]): MessageConfig[] => {
+    const out: MessageConfig[] = [];
+    const walk = (nodes: MessageTreeNode[]) => {
+      nodes.forEach((n) => {
+        if (n.type === 'message') out.push(n.message);
+        else walk(n.children ?? []);
+      });
+    };
+    walk(tree);
+    return out;
+  };
 
-  const messages = messagesLocal;
+  const sseMessageTree = state?.messageTree as MessageTreeNode[] | undefined;
+  const sseMessages = state?.messages;
+  const [messageTreeLocal, setMessageTreeLocal] = useState<MessageTreeNode[]>([]);
+  useEffect(() => {
+    if (sseMessageTree && Array.isArray(sseMessageTree)) {
+      setMessageTreeLocal(sseMessageTree);
+    } else {
+      setMessageTreeLocal(buildFlatTree(sseMessages ?? []));
+    }
+  }, [sseMessageTree, sseMessages]);
+
+  const messages = flattenTree(messageTreeLocal);
+
+  const cloneTree = (tree: MessageTreeNode[]) =>
+    JSON.parse(JSON.stringify(tree)) as MessageTreeNode[];
+
+  const updateMessageInTree = (tree: MessageTreeNode[], messageId: string, updater: (m: MessageConfig) => MessageConfig) => {
+    const next = cloneTree(tree);
+    const walk = (nodes: MessageTreeNode[]) => {
+      nodes.forEach((n) => {
+        if (n.type === 'message') {
+          if (n.message.id === messageId) {
+            n.message = updater(n.message);
+            n.id = n.message.id;
+          }
+        } else {
+          walk(n.children ?? []);
+        }
+      });
+    };
+    walk(next);
+    return next;
+  };
+
+  const removeMessageFromTree = (tree: MessageTreeNode[], messageId: string) => {
+    const next = cloneTree(tree);
+    const filterWalk = (nodes: MessageTreeNode[]): MessageTreeNode[] =>
+      nodes
+        .filter((n) => !(n.type === 'message' && n.message.id === messageId))
+        .map((n) => (n.type === 'folder' ? { ...n, children: filterWalk(n.children ?? []) } : n));
+    return filterWalk(next);
+  };
+
+  const commitMessageTree = (nextTree: MessageTreeNode[]) => {
+    setMessageTreeLocal(nextTree);
+    sendCommand('set-message-tree', nextTree);
+  };
+
+  const updateMessageById = (messageId: string, updater: (m: MessageConfig) => MessageConfig) => {
+    const nextTree = updateMessageInTree(messageTreeLocal, messageId, updater);
+    commitMessageTree(nextTree);
+  };
+
+  type VisibleNode = {
+    path: string;
+    parentPath: string;
+    indexInParent: number;
+    depth: number;
+    node: MessageTreeNode;
+  };
+
+  const getVisibleNodes = (tree: MessageTreeNode[]): VisibleNode[] => {
+    const out: VisibleNode[] = [];
+    const walk = (nodes: MessageTreeNode[], parentPath: string, depth: number) => {
+      nodes.forEach((node, i) => {
+        const path = parentPath ? `${parentPath}.${i}` : `${i}`;
+        out.push({ path, parentPath, indexInParent: i, depth, node });
+        if (node.type === 'folder' && !node.collapsed) {
+          walk(node.children ?? [], path, depth + 1);
+        }
+      });
+    };
+    walk(tree, '', 0);
+    return out;
+  };
+
+  const visibleNodes = getVisibleNodes(messageTreeLocal);
+
+  const pathToIndices = (path: string): number[] =>
+    path.split('.').filter(Boolean).map((p) => parseInt(p, 10));
+
+  const getNodeAtPath = (tree: MessageTreeNode[], path: string): MessageTreeNode | null => {
+    const indices = pathToIndices(path);
+    let cur: MessageTreeNode[] = tree;
+    let node: MessageTreeNode | null = null;
+    for (const idx of indices) {
+      node = cur[idx] ?? null;
+      if (!node) return null;
+      if (node.type === 'folder') cur = node.children ?? [];
+      else cur = [];
+    }
+    return node;
+  };
+
+  const updateFolderAtPath = (tree: MessageTreeNode[], folderPath: string, updater: (f: any) => any): MessageTreeNode[] => {
+    const indices = pathToIndices(folderPath);
+    const next = cloneTree(tree);
+    let children = next as any[];
+    for (let d = 0; d < indices.length; d++) {
+      const idx = indices[d];
+      const node = children[idx];
+      if (!node) return next;
+      if (d === indices.length - 1) {
+        children[idx] = updater(node);
+        return next;
+      }
+      if (node.type !== 'folder') return next;
+      children = node.children ?? (node.children = []);
+    }
+    return next;
+  };
+
+  const removeNodeAtPath = (tree: MessageTreeNode[], path: string): { tree: MessageTreeNode[]; removed: MessageTreeNode | null } => {
+    const indices = pathToIndices(path);
+    if (indices.length === 0) return { tree, removed: null };
+    const next = cloneTree(tree);
+    const parentIndices = indices.slice(0, -1);
+    const removeIdx = indices[indices.length - 1];
+    let children: any[] = next as any[];
+    for (const idx of parentIndices) {
+      const node = children[idx];
+      if (!node || node.type !== 'folder') return { tree: next, removed: null };
+      children = node.children ?? (node.children = []);
+    }
+    const removed = children.splice(removeIdx, 1)[0] ?? null;
+    return { tree: next, removed };
+  };
+
+  const insertNode = (tree: MessageTreeNode[], parentPath: string, index: number, node: MessageTreeNode): MessageTreeNode[] => {
+    const next = cloneTree(tree);
+    if (!parentPath) {
+      const arr = next as any[];
+      arr.splice(Math.max(0, Math.min(arr.length, index)), 0, node);
+      return next;
+    }
+    const parent = getNodeAtPath(next, parentPath);
+    if (!parent || parent.type !== 'folder') return next;
+    parent.children = parent.children ?? [];
+    parent.children.splice(Math.max(0, Math.min(parent.children.length, index)), 0, node);
+    return next;
+  };
+
+  const isDescendantPath = (ancestor: string, maybeDesc: string) =>
+    maybeDesc === ancestor || maybeDesc.startsWith(`${ancestor}.`);
+
+  const countFolder = (folder: any): { triggered: number; total: number } => {
+    let total = 0;
+    let triggered = 0;
+    const walk = (nodes: MessageTreeNode[]) => {
+      nodes.forEach((n) => {
+        if (n.type === 'message') {
+          total += 1;
+          const stats = messageStats[n.message.id];
+          if ((stats?.triggerCount ?? 0) > 0) triggered += 1;
+        } else {
+          walk(n.children ?? []);
+        }
+      });
+    };
+    walk(folder.children ?? []);
+    return { triggered, total };
+  };
+
+  const dndLog = (...args: unknown[]) => {
+    if (dndDebugRef.current) console.log('[ControlPlane:DND]', ...args);
+  };
+
+  const computeDrop = (clientX: number, clientY: number) => {
+    // "Into folder" if hovering folder row and pointer is NOT near right edge marker zone.
+    for (const entry of visibleNodes) {
+      const el = messageItemRefs.current.get(entry.path);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      const inside = clientY >= rect.top && clientY <= rect.bottom;
+      if (!inside) continue;
+      if (entry.node.type === 'folder') {
+        const markerZone = 90; // px from right edge reserved for insert marker
+        if (clientX < rect.right - markerZone) {
+          return { mode: 'into' as const, folderPath: entry.path };
+        }
+      }
+      break;
+    }
+
+    // Otherwise insertion before/after based on midpoints
+    for (let i = 0; i < visibleNodes.length; i++) {
+      const entry = visibleNodes[i];
+      const el = messageItemRefs.current.get(entry.path);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        return { mode: 'insert' as const, visibleIndex: i, parentPath: entry.parentPath, index: entry.indexInParent };
+      }
+    }
+    return { mode: 'insert' as const, visibleIndex: visibleNodes.length, parentPath: '', index: messageTreeLocal.length };
+  };
+
+  const commitMove = (sourcePath: string, drop: ReturnType<typeof computeDrop>) => {
+    // Prevent dropping folder into itself/descendant
+    if (drop.mode === 'into' && isDescendantPath(sourcePath, drop.folderPath)) return;
+
+    const removedRes = removeNodeAtPath(messageTreeLocal, sourcePath);
+    if (!removedRes.removed) return;
+    let nextTree = removedRes.tree;
+
+    if (drop.mode === 'into') {
+      const folder = getNodeAtPath(nextTree, drop.folderPath);
+      if (!folder || folder.type !== 'folder') return;
+      folder.children = folder.children ?? [];
+      folder.collapsed = false;
+      folder.children.push(removedRes.removed);
+      dndLog('commit into', { sourcePath, folderPath: drop.folderPath });
+      commitMessageTree(nextTree);
+      return;
+    }
+
+    // Adjust insertion index if moving within same parent and source was before insertion
+    let insertIndex = drop.index;
+    const srcParts = pathToIndices(sourcePath);
+    const srcParentPath = srcParts.slice(0, -1).join('.');
+    const srcIdx = srcParts[srcParts.length - 1];
+    if (srcParentPath === drop.parentPath && srcIdx < insertIndex) insertIndex -= 1;
+
+    nextTree = insertNode(nextTree, drop.parentPath, insertIndex, removedRes.removed);
+    dndLog('commit insert', { sourcePath, parentPath: drop.parentPath, insertIndex });
+    commitMessageTree(nextTree);
+  };
   const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
   const textStyleSettings = state?.textStyleSettings ?? {};
 
@@ -224,89 +461,70 @@ export const ControlPlane: React.FC = () => {
         textStyle: preset?.textStyleId ?? defaultTextStyle,
         textStylePreset: preset?.id || undefined,
       };
-      const next = [...messages, newMsg];
-      setMessagesLocal(next);
-      sendCommand('set-messages', next);
+      const nextTree = [...messageTreeLocal, { type: 'message', id: newMsg.id, message: newMsg } as MessageTreeNode];
+      setMessageTreeLocal(nextTree);
+      sendCommand('set-message-tree', nextTree);
       setNewMessage('');
     }
   };
 
+  const handleAddFolder = () => {
+    const id = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    const nextTree: MessageTreeNode[] = [
+      ...messageTreeLocal,
+      { type: 'folder', id, name: 'New Folder', collapsed: false, children: [] },
+    ];
+    commitMessageTree(nextTree);
+    const newPath = `${messageTreeLocal.length}`;
+    setEditingFolderPath(newPath);
+    setEditingFolderName('New Folder');
+  };
+
+  const handleResetCounts = () => {
+    resetMessageStats(false);
+    sendCommand('reset-message-stats', null);
+  };
+
   const handleDeleteMessage = (id: string) => {
-    const next = messages.filter(m => m.id !== id);
-    setMessagesLocal(next);
-    sendCommand('set-messages', next);
+    const nextTree = removeMessageFromTree(messageTreeLocal, id);
+    setMessageTreeLocal(nextTree);
+    sendCommand('set-message-tree', nextTree);
     if (expandedMessage === id) setExpandedMessage(null);
   };
 
-  const dndLog = (...args: unknown[]) => {
-    if (dndDebugRef.current) console.log('[ControlPlane:DND]', ...args);
-  };
-
-  const computeDropIndexFromPointer = (clientY: number): number => {
-    // Determine insertion point by comparing pointer to item midpoints.
-    for (let i = 0; i < messages.length; i++) {
-      const id = messages[i].id;
-      const el = messageItemRefs.current.get(id);
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) return i;
-    }
-    return messages.length;
-  };
-
-  const commitReorder = (id: string, insertionPoint: number) => {
-    const from = messages.findIndex((m) => m.id === id);
-    if (from === -1) return;
-    let to = insertionPoint;
-    if (from < to) to -= 1;
-
-    const next = [...messages];
-    const [moved] = next.splice(from, 1);
-    const insertPos = Math.max(0, Math.min(next.length, to));
-    next.splice(insertPos, 0, moved);
-
-    if (from === insertPos) return;
-    dndLog('commit', { id, from, insertPos });
-    setMessagesLocal(next);
-    sendCommand('set-messages', next);
-  };
-
-  const startPointerDrag = (e: React.PointerEvent, messageId: string) => {
-    // Only left click / primary pointer
+  const startPointerDrag = (e: React.PointerEvent, nodePath: string) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
 
-    setDraggingMessageId(messageId);
-    const startIdx = messages.findIndex((m) => m.id === messageId);
-    setDropIndex(startIdx === -1 ? 0 : startIdx);
-    dndLog('start', { messageId, startIdx, y: e.clientY });
-
-    // Capture pointer so we continue receiving move/up even if we leave the element.
+    setDraggingNodePath(nodePath);
+    setDropVisibleIndex(null);
+    setDropIntoFolderPath(null);
+    dndLog('start', { nodePath, x: e.clientX, y: e.clientY });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  const onPointerMoveList = (e: React.PointerEvent) => {
-    if (!draggingMessageId) return;
-    const idx = computeDropIndexFromPointer(e.clientY);
-    setDropIndex(idx);
-    dndLog('move', { y: e.clientY, dropIndex: idx });
+  const onPointerMoveTree = (e: React.PointerEvent) => {
+    if (!draggingNodePath) return;
+    const drop = computeDrop(e.clientX, e.clientY);
+    if (drop.mode === 'into') {
+      setDropIntoFolderPath(drop.folderPath);
+      setDropVisibleIndex(null);
+    } else {
+      setDropIntoFolderPath(null);
+      setDropVisibleIndex(drop.visibleIndex);
+    }
+    dndLog('move', drop);
   };
 
-  const endPointerDrag = (e: React.PointerEvent) => {
-    if (!draggingMessageId) return;
-    const id = draggingMessageId;
-    const insertion = dropIndex ?? computeDropIndexFromPointer(e.clientY);
-    dndLog('end', { id, insertion, y: e.clientY });
-    commitReorder(id, insertion);
-    setDraggingMessageId(null);
-    setDropIndex(null);
-  };
-
-  const handleUpdateMessageStyle = (id: string, textStyle: string) => {
-    sendCommand('set-messages', messages.map(m => 
-      m.id === id ? { ...m, textStyle } : m
-    ));
+  const endPointerDragTree = (e: React.PointerEvent) => {
+    if (!draggingNodePath) return;
+    const drop = computeDrop(e.clientX, e.clientY);
+    dndLog('end', drop);
+    commitMove(draggingNodePath, drop);
+    setDraggingNodePath(null);
+    setDropVisibleIndex(null);
+    setDropIntoFolderPath(null);
   };
 
   const handleTriggerMessage = (msg: MessageConfig) => {
@@ -419,17 +637,17 @@ export const ControlPlane: React.FC = () => {
 
   // CRITICAL: NO early returns - always render the same structure
   // Conditionally render loading state in JSX to maintain hook order
-  return (
+    return (
     <>
       {showLoading && !state ? (
-        <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-4">
-            <Loader2 size={32} className="animate-spin text-orange-500" />
-            <span className="text-zinc-500 text-sm">Connecting to server...</span>
-          </div>
+      <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 size={32} className="animate-spin text-orange-500" />
+          <span className="text-zinc-500 text-sm">Connecting to server...</span>
         </div>
+      </div>
       ) : (
-        <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
+    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
       {/* Dynamic Background */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-orange-600/10 blur-[120px] rounded-full mix-blend-screen" />
@@ -563,7 +781,7 @@ export const ControlPlane: React.FC = () => {
 
                     {/* Visualization Presets Manager */}
                     <div className="space-y-6">
-                      <div>
+                    <div>
                         <VisualizationPresetsManager
                           presets={visualizationPresets}
                           activePresetId={activeVisualizationPreset}
@@ -572,24 +790,24 @@ export const ControlPlane: React.FC = () => {
                           onDeletePreset={handleDeletePreset}
                           onSetActivePreset={handleSetActivePreset}
                         />
-                      </div>
+                    </div>
 
                       {/* Active Preset Settings */}
                       {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
-                        <div>
-                          <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                      <div>
+                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
                             {activePreset.name} Settings
-                          </h3>
-                          <SettingsRenderer
-                            schema={activePlugin.settingsSchema}
+                        </h3>
+                        <SettingsRenderer
+                          schema={activePlugin.settingsSchema}
                             values={activePreset.settings}
-                            onChange={(key, value) => {
+                          onChange={(key, value) => {
                               handleUpdatePreset(activePreset.id, {
                                 settings: { ...activePreset.settings, [key]: value },
                               });
-                            }}
-                          />
-                        </div>
+                          }}
+                        />
+                      </div>
                       )}
                     </div>
                   </div>
@@ -606,15 +824,31 @@ export const ControlPlane: React.FC = () => {
               <MessageSquare size={18} className="text-zinc-500" />
               <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Messages</h2>
               </div>
-              <button
-                onClick={() => setShowHistory(!showHistory)}
-                className={`p-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
-                  showHistory ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                }`}
-                title="Show message history"
-              >
-                <History size={14} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddFolder}
+                  className="p-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+                  title="Add folder"
+                >
+                  <FolderPlus size={14} />
+                </button>
+                <button
+                  onClick={handleResetCounts}
+                  className="p-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+                  title="Reset all message counts"
+                >
+                  <RotateCcw size={14} />
+                </button>
+                <button
+                  onClick={() => setShowHistory(!showHistory)}
+                  className={`p-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
+                    showHistory ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                  }`}
+                  title="Show message history"
+                >
+                  <History size={14} />
+                </button>
+              </div>
             </div>
 
             <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur-md flex flex-col max-h-[700px]">
@@ -676,7 +910,7 @@ export const ControlPlane: React.FC = () => {
               {/* Text style presets manager (in Messages sidebar) */}
               <AnimatePresence>
                 {showTextStylePresetsManager && (
-                  <motion.div
+                    <motion.div
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
@@ -697,114 +931,214 @@ export const ControlPlane: React.FC = () => {
               <div
                 ref={messageListRef}
                 className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar"
-                onPointerMove={onPointerMoveList}
-                onPointerUp={endPointerDrag}
-                onPointerCancel={endPointerDrag}
+                onPointerMove={onPointerMoveTree}
+                onPointerUp={endPointerDragTree}
+                onPointerCancel={endPointerDragTree}
               >
                 <AnimatePresence initial={false}>
-                  {messages.map((msg) => {
-                    const stats = messageStats[msg.id];
-                    const triggerCount = stats?.triggerCount ?? 0;
-                    const isAnimating = activeMessages.some(am => am.message.id === msg.id);
-                    const index = messages.findIndex(m => m.id === msg.id);
-                    
-                    return (
-                      <div
-                        key={msg.id}
-                        ref={(el) => {
-                          if (!el) {
-                            messageItemRefs.current.delete(msg.id);
-                            return;
-                          }
-                          messageItemRefs.current.set(msg.id, el);
-                        }}
-                        className={`${draggingMessageId === msg.id ? 'opacity-50' : ''}`}
-                      >
-                        {/* Drop indicator before this item */}
-                        {draggingMessageId && dropIndex === index && (
-                          <div className="h-2 flex items-center">
-                            <div className="w-full h-[2px] bg-orange-500/70 rounded-full" />
-                          </div>
-                        )}
+                  {visibleNodes.map((entry, idx) => {
+                    const indent = 6 + entry.depth * 14;
+                    const isDragging = draggingNodePath === entry.path;
+                    const isDropInto = dropIntoFolderPath === entry.path && entry.node.type === 'folder';
+                    const dropMarker =
+                      draggingNodePath && dropVisibleIndex === idx ? (
+                        <div className="h-2 flex items-center">
+                          <div className="ml-auto w-14 h-[2px] bg-orange-500/70 rounded-full" />
+                        </div>
+                      ) : null;
+
+                    if (entry.node.type === 'folder') {
+                      const folder = entry.node;
+                      const counts = countFolder(folder);
+                      const isCollapsed = !!folder.collapsed;
+                      return (
+                        <div
+                          key={entry.path}
+                          ref={(el) => {
+                            if (!el) {
+                              messageItemRefs.current.delete(entry.path);
+                              return;
+                            }
+                            messageItemRefs.current.set(entry.path, el);
+                          }}
+                          className={isDragging ? 'opacity-50' : ''}
+                        >
+                          {dropMarker}
                     <motion.div
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: 10 }}
+                            className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
+                              isDropInto ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
+                            }`}
+                    >
+                            <div className="flex items-center gap-2 p-3" style={{ paddingLeft: indent }}>
+                        <button
+                                onClick={() => {
+                                  const nextTree = updateFolderAtPath(messageTreeLocal, entry.path, (f) => ({
+                                    ...f,
+                                    collapsed: !f.collapsed,
+                                  }));
+                                  commitMessageTree(nextTree);
+                                }}
+                                className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
+                                title={isCollapsed ? 'Expand folder' : 'Collapse folder'}
+                              >
+                                {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                          <button
+                                onPointerDown={(e) => startPointerDrag(e, entry.path)}
+                                className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors cursor-grab active:cursor-grabbing"
+                                title="Drag folder"
+                              >
+                                <GripVertical size={16} />
+                          </button>
+                              <Folder size={16} className="text-zinc-600" />
+                              {editingFolderPath === entry.path ? (
+                                <input
+                                  autoFocus
+                                  value={editingFolderName}
+                                  onChange={(e) => setEditingFolderName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      const name = editingFolderName.trim() || 'Folder';
+                                      const nextTree = updateFolderAtPath(messageTreeLocal, entry.path, (f) => ({
+                                        ...f,
+                                        name,
+                                      }));
+                                      commitMessageTree(nextTree);
+                                      setEditingFolderPath(null);
+                                    } else if (e.key === 'Escape') {
+                                      setEditingFolderPath(null);
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    const name = editingFolderName.trim() || 'Folder';
+                                    const nextTree = updateFolderAtPath(messageTreeLocal, entry.path, (f) => ({
+                                      ...f,
+                                      name,
+                                    }));
+                                    commitMessageTree(nextTree);
+                                    setEditingFolderPath(null);
+                                  }}
+                                  className="flex-1 bg-black border border-zinc-800 rounded-lg px-2 py-1 text-sm text-zinc-200 focus:border-orange-500/50 outline-none"
+                                />
+                              ) : (
+                          <button
+                                  onDoubleClick={() => {
+                                    setEditingFolderPath(entry.path);
+                                    setEditingFolderName(folder.name);
+                                  }}
+                                  className="flex-1 text-left text-sm font-semibold text-zinc-200 hover:text-white transition-colors truncate"
+                                  title="Double click to rename"
+                                >
+                                  {folder.name}
+                          </button>
+                              )}
+                              <div className="ml-auto flex items-center gap-2">
+                                <div className="text-xs font-bold text-zinc-500 tabular-nums">
+                                  {counts.triggered} / {counts.total}
+                        </div>
+                              </div>
+                            </div>
+                          </motion.div>
+                        </div>
+                      );
+                    }
+
+                    const msg = entry.node.message;
+                    const stats = messageStats[msg.id];
+                    const triggerCount = stats?.triggerCount ?? 0;
+                    const isAnimating = activeMessages.some((am) => am.message.id === msg.id);
+
+                    return (
+                      <div
+                        key={entry.path}
+                        ref={(el) => {
+                          if (!el) {
+                            messageItemRefs.current.delete(entry.path);
+                            return;
+                          }
+                          messageItemRefs.current.set(entry.path, el);
+                        }}
+                        className={isDragging ? 'opacity-50' : ''}
+                      >
+                        {dropMarker}
+                        <motion.div
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: 10 }}
                           className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
                             isAnimating ? 'border-orange-500/50 shadow-lg shadow-orange-500/20' : 'border-zinc-800/50'
                           }`}
-                    >
-                      <div className="flex items-center gap-2 p-3">
-                        {/* Drag handle */}
-                        <button
-                          onPointerDown={(e) => startPointerDrag(e, msg.id)}
-                          className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors cursor-grab active:cursor-grabbing"
-                          title="Drag to reorder"
                         >
-                          <GripVertical size={16} />
-                        </button>
-                          {/* Status indicator button */}
-                        <button
-                            onClick={() => isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg)}
-                          disabled={isPending}
-                            className={`flex-1 text-left text-sm font-medium transition-colors disabled:opacity-50 truncate ${
-                              isAnimating 
-                                ? 'text-orange-500 hover:text-orange-400' 
-                                : triggerCount > 0
-                                ? 'text-zinc-200 hover:text-white'
-                                : 'text-zinc-300 hover:text-white'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              {/* Status indicator */}
-                              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                isAnimating 
-                                  ? 'bg-orange-500 animate-pulse' 
-                                  : triggerCount > 0
-                                  ? 'bg-green-500'
-                                  : 'bg-zinc-600'
-                              }`} />
-                              <span>{msg.text}</span>
-                              {/* Style indicator */}
-                              <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-500 border border-zinc-800 bg-zinc-900/40 rounded px-1.5 py-0.5">
-                                {(() => {
-                                  const preset = msg.textStylePreset
-                                    ? textStylePresets.find(p => p.id === msg.textStylePreset)
-                                    : null;
-                                  if (preset) return preset.name;
-                                  const style = getTextStyle(msg.textStyle);
-                                  return style?.name ?? msg.textStyle;
-                                })()}
-                              </span>
-                              {isAnimating && (
-                                <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
-                              )}
-                            </div>
-                          </button>
-                          {/* Counter badge */}
-                          <div
-                            className={`px-2 py-0.5 rounded text-xs font-bold ${
-                              triggerCount === 0
-                                ? 'bg-zinc-800 text-zinc-500'
-                                : 'bg-orange-500/20 text-orange-400'
-                            }`}
-                            title={`Triggered ${triggerCount} time${triggerCount !== 1 ? 's' : ''}`}
-                          >
-                            {triggerCount}
-                          </div>
-                          {/* Clear button when animating */}
-                          {isAnimating && (
+                          <div className="flex items-center gap-2 p-3" style={{ paddingLeft: indent }}>
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleClearActiveMessage(msg.id);
-                              }}
-                              className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
-                              title="Clear message"
+                              onPointerDown={(e) => startPointerDrag(e, entry.path)}
+                              className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors cursor-grab active:cursor-grabbing"
+                              title="Drag to reorder"
                             >
-                              Clear
-                        </button>
-                          )}
+                              <GripVertical size={16} />
+                            </button>
+                            <button
+                              onClick={() => (isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg))}
+                              disabled={isPending}
+                              className={`flex-1 text-left text-sm font-medium transition-colors disabled:opacity-50 truncate ${
+                                isAnimating
+                                  ? 'text-orange-500 hover:text-orange-400'
+                                  : triggerCount > 0
+                                    ? 'text-zinc-200 hover:text-white'
+                                    : 'text-zinc-300 hover:text-white'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                    isAnimating
+                                      ? 'bg-orange-500 animate-pulse'
+                                      : triggerCount > 0
+                                        ? 'bg-green-500'
+                                        : 'bg-zinc-600'
+                                  }`}
+                                />
+                                <span>{msg.text}</span>
+                                <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-500 border border-zinc-800 bg-zinc-900/40 rounded px-1.5 py-0.5">
+                                  {(() => {
+                                    const preset = msg.textStylePreset
+                                      ? textStylePresets.find((p) => p.id === msg.textStylePreset)
+                                      : null;
+                                    if (preset) return preset.name;
+                                    const style = getTextStyle(msg.textStyle);
+                                    return style?.name ?? msg.textStyle;
+                                  })()}
+                                </span>
+                                {isAnimating && (
+                                  <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
+                                )}
+                              </div>
+                            </button>
+                            <div
+                              className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                triggerCount === 0
+                                  ? 'bg-zinc-800 text-zinc-500'
+                                  : 'bg-orange-500/20 text-orange-400'
+                              }`}
+                              title={`Triggered ${triggerCount} time${triggerCount !== 1 ? 's' : ''}`}
+                            >
+                              {triggerCount}
+                            </div>
+                            {isAnimating && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleClearActiveMessage(msg.id);
+                                }}
+                                className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
+                                title="Clear message"
+                              >
+                                Clear
+                              </button>
+                            )}
                         <button
                           onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
                           className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
@@ -829,53 +1163,56 @@ export const ControlPlane: React.FC = () => {
                             className="px-3 pb-3 border-t border-zinc-800/50"
                           >
                             <div className="pt-3 space-y-4">
-                              {/* Text Style Preset Selector */}
+                              {/* Text Style Selector (single dropdown) */}
                               <div>
                               <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                                  Text Style Preset
+                                Text Style
                               </label>
-                                <select
-                                  value={msg.textStylePreset || ''}
-                                  onChange={(e) => {
-                                    const nextPresetId = e.target.value || '';
-                                    const nextPreset = nextPresetId
-                                      ? textStylePresets.find((p) => p.id === nextPresetId)
-                                      : null;
+                                {(() => {
+                                  const currentPresetId = msg.textStylePreset || '';
+                                  const hasOverrides = !!(msg.styleOverrides && Object.keys(msg.styleOverrides).length > 0);
+                                  const selectedValue = currentPresetId
+                                    ? (hasOverrides ? `${currentPresetId}:modified` : currentPresetId)
+                                    : '';
 
-                                    const updates: Partial<MessageConfig> = {
-                                      textStylePreset: nextPreset?.id || undefined,
-                                      // If switching style basis, clear per-message overrides to avoid mismatched schemas
-                                      styleOverrides: undefined,
-                                      // Keep a sensible fallback styleId on the message itself
-                                      textStyle: nextPreset?.textStyleId ?? defaultTextStyle,
-                                    };
-                                    sendCommand('set-messages', messages.map(m => 
-                                      m.id === msg.id ? { ...m, ...updates } : m
-                                    ));
-                                  }}
-                                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors mb-2"
-                                >
-                                  <option value="">Default ({defaultTextStyle})</option>
-                                  {textStylePresets.map((preset) => (
-                                    <option key={preset.id} value={preset.id}>
-                                      {preset.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                {/* Fallback to text style if no preset */}
-                                {!msg.textStylePreset && (
+                                  return (
                               <select
-                                value={msg.textStyle}
-                                onChange={(e) => handleUpdateMessageStyle(msg.id, e.target.value)}
+                                      value={selectedValue}
+                                      onChange={(e) => {
+                                        const raw = e.target.value || '';
+                                        const isModified = raw.endsWith(':modified');
+                                        const presetId = isModified ? raw.slice(0, -':modified'.length) : raw;
+                                        const preset = presetId ? textStylePresets.find((p) => p.id === presetId) : null;
+                                        if (!preset) return;
+
+                                        updateMessageById(msg.id, (m) => ({
+                                          ...m,
+                                          textStylePreset: preset.id,
+                                          textStyle: preset.textStyleId,
+                                          // Selecting the base option clears overrides; selecting "(modified)" enables them
+                                          styleOverrides: isModified ? (m.styleOverrides ?? {}) : undefined,
+                                        }));
+                                      }}
                                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
                               >
-                                {textStyleRegistry.map((style) => (
-                                  <option key={style.id} value={style.id}>
-                                    {style.name}
+                                      {textStylePresets.flatMap((preset) => {
+                                        const opts = [
+                                          <option key={preset.id} value={preset.id}>
+                                            {preset.name}
+                                          </option>,
+                                        ];
+                                        if (currentPresetId === preset.id && hasOverrides) {
+                                          opts.push(
+                                            <option key={`${preset.id}:modified`} value={`${preset.id}:modified`}>
+                                              {preset.name} (modified)
                                   </option>
-                                ))}
+                                          );
+                                        }
+                                        return opts;
+                                      })}
                               </select>
-                                )}
+                                  );
+                                })()}
                               </div>
 
                               {/* Repeat Count */}
@@ -889,9 +1226,7 @@ export const ControlPlane: React.FC = () => {
                                   max="10"
                                   value={msg.repeatCount ?? 1}
                                   onChange={(e) => {
-                                    sendCommand('set-messages', messages.map(m => 
-                                      m.id === msg.id ? { ...m, repeatCount: parseInt(e.target.value) } : m
-                                    ));
+                                    updateMessageById(msg.id, (m) => ({ ...m, repeatCount: parseInt(e.target.value) }));
                                   }}
                                   className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
                                 />
@@ -913,9 +1248,7 @@ export const ControlPlane: React.FC = () => {
                                   step="0.1"
                                   value={msg.speed ?? 1.0}
                                   onChange={(e) => {
-                                    sendCommand('set-messages', messages.map(m => 
-                                      m.id === msg.id ? { ...m, speed: parseFloat(e.target.value) } : m
-                                    ));
+                                    updateMessageById(msg.id, (m) => ({ ...m, speed: parseFloat(e.target.value) }));
                                   }}
                                   className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
                                 />
@@ -939,6 +1272,7 @@ export const ControlPlane: React.FC = () => {
 
                                 const presetSettings = preset?.settings || textStyleSettings[styleId] || {};
                                 const overridesEnabled = msg.styleOverrides != null;
+                                if (!overridesEnabled) return null;
                                 const overrides = msg.styleOverrides || {};
                                 const mergedSettings = { ...presetSettings, ...overrides };
 
@@ -948,52 +1282,26 @@ export const ControlPlane: React.FC = () => {
                                       <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
                                         Per-message settings
                                       </label>
-                                      <div className="flex items-center gap-3">
-                                        <label className="flex items-center gap-2 text-xs text-zinc-400">
-                                          <input
-                                            type="checkbox"
-                                            checked={overridesEnabled}
-                                            onChange={(e) => {
-                                              const enabled = e.target.checked;
-                                              sendCommand('set-messages', messages.map(m =>
-                                                m.id === msg.id
-                                                  ? { ...m, styleOverrides: enabled ? {} : undefined }
-                                                  : m
-                                              ));
-                                            }}
-                                            className="accent-orange-500"
-                                          />
-                                          Override
-                                        </label>
-                                        {overridesEnabled && (
-                                          <button
-                                            onClick={() => {
-                                              sendCommand('set-messages', messages.map(m =>
-                                                m.id === msg.id ? { ...m, styleOverrides: {} } : m
-                                              ));
-                                            }}
-                                            className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
-                                            title="Reset overrides to preset/default"
-                                          >
-                                            Reset
-                                          </button>
-                                        )}
-                                      </div>
+                                      <button
+                                        onClick={() => {
+                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: {} }));
+                                        }}
+                                        className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
+                                        title="Reset overrides to preset defaults"
+                                      >
+                                        Reset
+                                      </button>
                                     </div>
-                                    {overridesEnabled && (
-                                      <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-                                        <SettingsRenderer
-                                          schema={textStyle.settingsSchema}
-                                          values={mergedSettings}
-                                          onChange={(key, value) => {
-                                            const newOverrides = { ...overrides, [key]: value };
-                                            sendCommand('set-messages', messages.map(m => 
-                                              m.id === msg.id ? { ...m, styleOverrides: newOverrides } : m
-                                            ));
-                                          }}
-                                        />
-                                      </div>
-                                    )}
+                                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                                      <SettingsRenderer
+                                        schema={textStyle.settingsSchema}
+                                        values={mergedSettings}
+                                        onChange={(key, value) => {
+                                          const newOverrides = { ...overrides, [key]: value };
+                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: newOverrides }));
+                                        }}
+                                      />
+                                    </div>
                                   </div>
                                 );
                               })()}
@@ -1005,13 +1313,13 @@ export const ControlPlane: React.FC = () => {
                       </div>
                     );
                   })}
-                  {/* Drop indicator at end */}
-                  {draggingMessageId && dropIndex === messages.length && (
-                    <div className="h-2 flex items-center">
-                      <div className="w-full h-[2px] bg-orange-500/70 rounded-full" />
-                    </div>
-                  )}
                 </AnimatePresence>
+                {/* Drop indicator at end (right aligned) */}
+                {draggingNodePath && dropVisibleIndex === visibleNodes.length && (
+                  <div className="h-2 flex items-center">
+                    <div className="ml-auto w-14 h-[2px] bg-orange-500/70 rounded-full" />
+              </div>
+                )}
               </div>
               
               {/* History Pane */}
@@ -1081,19 +1389,19 @@ export const ControlPlane: React.FC = () => {
                 ) : (
                   <div className="w-28 h-28 bg-zinc-100 animate-pulse rounded-lg" />
                 )}
-              </div>
+        </div>
               <div className="flex-1 text-center md:text-left">
                 <div className="flex items-center justify-center md:justify-start gap-2 mb-3">
                   <Smartphone size={18} className="text-orange-500" />
                   <h3 className="text-lg font-bold">Mobile Remote</h3>
-                </div>
+      </div>
                 <p className="text-zinc-400 mb-4 leading-relaxed text-sm max-w-md">
                   Control from your phone. Scan the QR code to open the remote.
                 </p>
                 <div className="inline-flex items-center gap-3 bg-black border border-zinc-800 px-4 py-2 rounded-xl">
                   <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
                   <code className="text-orange-500 font-mono text-xs">{remoteUrl || 'Detecting...'}</code>
-                </div>
+    </div>
               </div>
             </div>
           </section>

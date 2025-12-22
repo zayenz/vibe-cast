@@ -132,6 +132,63 @@ describe('ControlPlane', () => {
     });
   });
 
+  it('renders folder counts (triggered/total) and sends reset-message-stats command', async () => {
+    renderControlPlane();
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', {
+        activeVisualization: 'fireplace',
+        enabledVisualizations: ['fireplace', 'techno'],
+        commonSettings: { intensity: 1.0, dim: 1.0 },
+        visualizationSettings: {},
+        visualizationPresets: [],
+        activeVisualizationPreset: null,
+        messages: [
+          { id: 'm1', text: 'A', textStyle: 'scrolling-capitals' },
+          { id: 'm2', text: 'B', textStyle: 'scrolling-capitals' },
+        ],
+        messageTree: [
+          {
+            type: 'folder',
+            id: 'f1',
+            name: 'Folder',
+            collapsed: false,
+            children: [
+              { type: 'message', id: 'm1', message: { id: 'm1', text: 'A', textStyle: 'scrolling-capitals' } },
+              { type: 'message', id: 'm2', message: { id: 'm2', text: 'B', textStyle: 'scrolling-capitals' } },
+            ],
+          },
+        ],
+        defaultTextStyle: 'scrolling-capitals',
+        textStyleSettings: {},
+        textStylePresets: [],
+        messageStats: {
+          m1: { messageId: 'm1', triggerCount: 1, lastTriggered: 1, history: [{ timestamp: 1 }] },
+          m2: { messageId: 'm2', triggerCount: 0, lastTriggered: 0, history: [] },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Folder')).toBeInTheDocument();
+      expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTitle('Reset all message counts'));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/command'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('reset-message-stats'),
+        })
+      );
+    });
+  });
+
   it('updates when SSE receives new state', async () => {
     renderControlPlane();
     

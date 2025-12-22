@@ -7,6 +7,42 @@ use local_ip_address::local_ip;
 use tokio::sync::broadcast;
 use crate::audio::AudioState;
 
+fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
+    fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
+        match node {
+            serde_json::Value::Array(arr) => {
+                for n in arr {
+                    walk(n, out);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                    match t {
+                        "message" => {
+                            if let Some(msg_val) = obj.get("message") {
+                                if let Ok(msg) = serde_json::from_value::<MessageConfig>(msg_val.clone()) {
+                                    out.push(msg);
+                                }
+                            }
+                        }
+                        "folder" => {
+                            if let Some(children) = obj.get("children") {
+                                walk(children, out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = vec![];
+    walk(tree, &mut out);
+    out
+}
+
 /// Message configuration matching the frontend MessageConfig type
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +124,8 @@ pub struct BroadcastState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_visualization_preset: Option<String>,
     pub messages: Vec<MessageConfig>,
+    /// Optional message tree (folders). When present, UI should use this as canonical ordering.
+    pub message_tree: serde_json::Value,
     pub default_text_style: String,
     pub text_style_settings: serde_json::Value,
     pub text_style_presets: Vec<TextStylePreset>,
@@ -107,6 +145,7 @@ pub struct AppStateSync {
     pub visualization_presets: Mutex<Vec<VisualizationPreset>>,
     pub active_visualization_preset: Mutex<Option<String>>,
     pub messages: Mutex<Vec<MessageConfig>>,
+    pub message_tree: Mutex<serde_json::Value>,
     pub default_text_style: Mutex<String>,
     pub text_style_settings: Mutex<serde_json::Value>,
     pub text_style_presets: Mutex<Vec<TextStylePreset>>,
@@ -155,6 +194,18 @@ impl AppStateSync {
                 speed: None,
             },
         ];
+
+        // Default message tree: flat list of messages
+        let default_message_tree = serde_json::json!(
+            default_messages
+                .iter()
+                .map(|m| serde_json::json!({
+                    "type": "message",
+                    "id": m.id,
+                    "message": m
+                }))
+                .collect::<Vec<serde_json::Value>>()
+        );
         
         Self {
             active_visualization: Mutex::new("fireplace".to_string()),
@@ -164,6 +215,7 @@ impl AppStateSync {
             visualization_presets: Mutex::new(vec![]),
             active_visualization_preset: Mutex::new(None),
             messages: Mutex::new(default_messages),
+            message_tree: Mutex::new(default_message_tree),
             default_text_style: Mutex::new("scrolling-capitals".to_string()),
             text_style_settings: Mutex::new(serde_json::json!({})),
             text_style_presets: Mutex::new(vec![]),
@@ -195,6 +247,9 @@ impl AppStateSync {
         let messages = self.messages.lock()
             .map(|m| m.clone())
             .unwrap_or_default();
+        let message_tree = self.message_tree.lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| serde_json::json!([]));
         let default_text_style = self.default_text_style.lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| "scrolling-capitals".to_string());
@@ -219,6 +274,7 @@ impl AppStateSync {
             visualization_presets,
             active_visualization_preset,
             messages,
+            message_tree,
             default_text_style,
             text_style_settings,
             text_style_presets,
@@ -302,6 +358,21 @@ fn emit_state_change(
                 if let Ok(mut m) = state.messages.lock() {
                     *m = messages;
                 }
+            }
+        }
+        "SET_MESSAGE_TREE" => {
+            if let Ok(mut t) = state.message_tree.lock() {
+                *t = payload_value.clone();
+            }
+            // Keep flat messages in sync for legacy consumers
+            let flat = flatten_message_tree_value(&payload_value);
+            if let Ok(mut m) = state.messages.lock() {
+                *m = flat;
+            }
+        }
+        "RESET_MESSAGE_STATS" => {
+            if let Ok(mut m) = state.message_stats.lock() {
+                *m = serde_json::json!({});
             }
         }
         "TRIGGER_MESSAGE" => {
