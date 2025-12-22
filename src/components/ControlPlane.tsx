@@ -6,7 +6,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
-  ChevronDown, ChevronUp, Trash2, ArrowUp, ArrowDown, History, X
+  ChevronDown, ChevronUp, Trash2, History, X, GripVertical
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
@@ -98,9 +98,23 @@ export const ControlPlane: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [expandedMessage, setExpandedMessage] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [draggedMessageId, setDraggedMessageId] = useState<string | null>(null);
+  // Message reordering (pointer-based; HTML5 DnD is flaky in some WebViews)
+  const [draggingMessageId, setDraggingMessageId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null); // insertion index [0..messages.length]
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const messageItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [showTextStylePresetsManager, setShowTextStylePresetsManager] = useState(false);
   const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
+
+  // Debug flag for message reordering
+  const dndDebugRef = useRef<boolean>(false);
+  useEffect(() => {
+    try {
+      dndDebugRef.current = window.localStorage.getItem('vibecast:dndDebug') === '1';
+    } catch {
+      dndDebugRef.current = false;
+    }
+  }, []);
 
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
@@ -153,7 +167,15 @@ export const ControlPlane: React.FC = () => {
   const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
   const visualizationSettings = state?.visualizationSettings ?? {};
-  const messages = state?.messages ?? [];
+  // Render messages from a local mirror so reorders can be optimistic and not snap back while SSE catches up.
+  // IMPORTANT: don't use `state?.messages ?? []` directly as an effect dep, because `[]` creates a new ref every render.
+  const sseMessages = state?.messages;
+  const [messagesLocal, setMessagesLocal] = useState<MessageConfig[]>([]);
+  useEffect(() => {
+    setMessagesLocal(sseMessages ?? []);
+  }, [sseMessages]);
+
+  const messages = messagesLocal;
   const defaultTextStyle = state?.defaultTextStyle ?? 'scrolling-capitals';
   const textStyleSettings = state?.textStyleSettings ?? {};
 
@@ -202,64 +224,83 @@ export const ControlPlane: React.FC = () => {
         textStyle: preset?.textStyleId ?? defaultTextStyle,
         textStylePreset: preset?.id || undefined,
       };
-      sendCommand('set-messages', [...messages, newMsg]);
+      const next = [...messages, newMsg];
+      setMessagesLocal(next);
+      sendCommand('set-messages', next);
       setNewMessage('');
     }
   };
 
   const handleDeleteMessage = (id: string) => {
-    sendCommand('set-messages', messages.filter(m => m.id !== id));
+    const next = messages.filter(m => m.id !== id);
+    setMessagesLocal(next);
+    sendCommand('set-messages', next);
     if (expandedMessage === id) setExpandedMessage(null);
   };
 
-  const handleMoveMessage = (id: string, direction: 'up' | 'down') => {
-    const index = messages.findIndex(m => m.id === id);
-    if (index === -1) return;
-
-    const newIndex = direction === 'up' ? index - 1 : index + 1;
-    if (newIndex < 0 || newIndex >= messages.length) return;
-
-    const newMessages = [...messages];
-    [newMessages[index], newMessages[newIndex]] = [newMessages[newIndex], newMessages[index]];
-    sendCommand('set-messages', newMessages);
+  const dndLog = (...args: unknown[]) => {
+    if (dndDebugRef.current) console.log('[ControlPlane:DND]', ...args);
   };
 
-  const handleDragStart = (e: React.DragEvent, messageId: string) => {
-    setDraggedMessageId(messageId);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', messageId);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = (e: React.DragEvent, targetMessageId: string) => {
-    e.preventDefault();
-    if (!draggedMessageId || draggedMessageId === targetMessageId) {
-      setDraggedMessageId(null);
-      return;
+  const computeDropIndexFromPointer = (clientY: number): number => {
+    // Determine insertion point by comparing pointer to item midpoints.
+    for (let i = 0; i < messages.length; i++) {
+      const id = messages[i].id;
+      const el = messageItemRefs.current.get(id);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
     }
-
-    const draggedIndex = messages.findIndex(m => m.id === draggedMessageId);
-    const targetIndex = messages.findIndex(m => m.id === targetMessageId);
-    
-    if (draggedIndex === -1 || targetIndex === -1) {
-      setDraggedMessageId(null);
-      return;
-    }
-
-    const newMessages = [...messages];
-    const [draggedMessage] = newMessages.splice(draggedIndex, 1);
-    newMessages.splice(targetIndex, 0, draggedMessage);
-    
-    sendCommand('set-messages', newMessages);
-    setDraggedMessageId(null);
+    return messages.length;
   };
 
-  const handleDragEnd = () => {
-    setDraggedMessageId(null);
+  const commitReorder = (id: string, insertionPoint: number) => {
+    const from = messages.findIndex((m) => m.id === id);
+    if (from === -1) return;
+    let to = insertionPoint;
+    if (from < to) to -= 1;
+
+    const next = [...messages];
+    const [moved] = next.splice(from, 1);
+    const insertPos = Math.max(0, Math.min(next.length, to));
+    next.splice(insertPos, 0, moved);
+
+    if (from === insertPos) return;
+    dndLog('commit', { id, from, insertPos });
+    setMessagesLocal(next);
+    sendCommand('set-messages', next);
+  };
+
+  const startPointerDrag = (e: React.PointerEvent, messageId: string) => {
+    // Only left click / primary pointer
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    setDraggingMessageId(messageId);
+    const startIdx = messages.findIndex((m) => m.id === messageId);
+    setDropIndex(startIdx === -1 ? 0 : startIdx);
+    dndLog('start', { messageId, startIdx, y: e.clientY });
+
+    // Capture pointer so we continue receiving move/up even if we leave the element.
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMoveList = (e: React.PointerEvent) => {
+    if (!draggingMessageId) return;
+    const idx = computeDropIndexFromPointer(e.clientY);
+    setDropIndex(idx);
+    dndLog('move', { y: e.clientY, dropIndex: idx });
+  };
+
+  const endPointerDrag = (e: React.PointerEvent) => {
+    if (!draggingMessageId) return;
+    const id = draggingMessageId;
+    const insertion = dropIndex ?? computeDropIndexFromPointer(e.clientY);
+    dndLog('end', { id, insertion, y: e.clientY });
+    commitReorder(id, insertion);
+    setDraggingMessageId(null);
+    setDropIndex(null);
   };
 
   const handleUpdateMessageStyle = (id: string, textStyle: string) => {
@@ -653,25 +694,38 @@ export const ControlPlane: React.FC = () => {
                 )}
               </AnimatePresence>
 
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+              <div
+                ref={messageListRef}
+                className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar"
+                onPointerMove={onPointerMoveList}
+                onPointerUp={endPointerDrag}
+                onPointerCancel={endPointerDrag}
+              >
                 <AnimatePresence initial={false}>
                   {messages.map((msg) => {
                     const stats = messageStats[msg.id];
                     const triggerCount = stats?.triggerCount ?? 0;
                     const isAnimating = activeMessages.some(am => am.message.id === msg.id);
+                    const index = messages.findIndex(m => m.id === msg.id);
                     
                     return (
                       <div
                         key={msg.id}
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, msg.id)}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, msg.id)}
-                        onDragEnd={handleDragEnd}
-                        className={`cursor-move ${
-                          draggedMessageId === msg.id ? 'opacity-50' : ''
-                        }`}
+                        ref={(el) => {
+                          if (!el) {
+                            messageItemRefs.current.delete(msg.id);
+                            return;
+                          }
+                          messageItemRefs.current.set(msg.id, el);
+                        }}
+                        className={`${draggingMessageId === msg.id ? 'opacity-50' : ''}`}
                       >
+                        {/* Drop indicator before this item */}
+                        {draggingMessageId && dropIndex === index && (
+                          <div className="h-2 flex items-center">
+                            <div className="w-full h-[2px] bg-orange-500/70 rounded-full" />
+                          </div>
+                        )}
                     <motion.div
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
@@ -681,6 +735,14 @@ export const ControlPlane: React.FC = () => {
                           }`}
                     >
                       <div className="flex items-center gap-2 p-3">
+                        {/* Drag handle */}
+                        <button
+                          onPointerDown={(e) => startPointerDrag(e, msg.id)}
+                          className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors cursor-grab active:cursor-grabbing"
+                          title="Drag to reorder"
+                        >
+                          <GripVertical size={16} />
+                        </button>
                           {/* Status indicator button */}
                         <button
                             onClick={() => isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg)}
@@ -743,24 +805,6 @@ export const ControlPlane: React.FC = () => {
                               Clear
                         </button>
                           )}
-                        <div className="flex flex-col gap-0.5">
-                          <button
-                            onClick={() => handleMoveMessage(msg.id, 'up')}
-                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === 0}
-                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Move up"
-                          >
-                            <ArrowUp size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleMoveMessage(msg.id, 'down')}
-                            disabled={isPending || messages.findIndex(m => m.id === msg.id) === messages.length - 1}
-                            className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Move down"
-                          >
-                            <ArrowDown size={14} />
-                          </button>
-                        </div>
                         <button
                           onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
                           className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"
@@ -961,6 +1005,12 @@ export const ControlPlane: React.FC = () => {
                       </div>
                     );
                   })}
+                  {/* Drop indicator at end */}
+                  {draggingMessageId && dropIndex === messages.length && (
+                    <div className="h-2 flex items-center">
+                      <div className="w-full h-[2px] bg-orange-500/70 rounded-full" />
+                    </div>
+                  )}
                 </AnimatePresence>
               </div>
               
