@@ -36,11 +36,38 @@ const settingsSchema: SettingDefinition[] = [
   {
     type: 'range',
     id: 'dotDensity',
-    label: 'Dot Density',
-    min: 0.3,
+    label: 'Dot Density (for LED texture)',
+    min: 0.6,
     max: 1.0,
     step: 0.1,
-    default: 0.7,
+    default: 1.0,
+  },
+  {
+    type: 'range',
+    id: 'unlitOpacity',
+    label: 'Unlit Dot Opacity',
+    min: 0.0,
+    max: 0.3,
+    step: 0.01,
+    default: 0.08,
+  },
+  {
+    type: 'range',
+    id: 'glow',
+    label: 'Glow Strength',
+    min: 0,
+    max: 30,
+    step: 1,
+    default: 14,
+  },
+  {
+    type: 'range',
+    id: 'edgeFade',
+    label: 'Edge Fade (px)',
+    min: 0,
+    max: 200,
+    step: 10,
+    default: 80,
   },
   {
     type: 'color',
@@ -160,6 +187,9 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   const dotSize = getNumberSetting(settings.dotSize, 8, 4, 16);
   const spacing = getNumberSetting(settings.spacing, 4, 2, 8);
   const dotDensity = getNumberSetting(settings.dotDensity, 0.7, 0.3, 1.0);
+  const unlitOpacity = getNumberSetting(settings.unlitOpacity, 0.08, 0.0, 0.3);
+  const glow = getNumberSetting(settings.glow, 14, 0, 30);
+  const edgeFade = getNumberSetting(settings.edgeFade, 80, 0, 200);
   const dotColor = getStringSetting(settings.dotColor, '#00ff00');
   const bgColor = getStringSetting(settings.bgColor, '#000000');
   const fadeInDuration = getNumberSetting(settings.fadeInDuration, 1.0, 0.5, 3.0);
@@ -257,6 +287,9 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    const gridStep = dotSize + spacing;
+    const cols = Math.ceil(canvas.width / gridStep);
+
     // Deterministic "density" mask (stable across frames; avoids flicker).
     const shouldDrawDot = (i: number, row: number, col: number) => {
       // simple hash → [0,1)
@@ -265,6 +298,26 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
       return v <= dotDensity;
     };
 
+    // Draw faint unlit dot grid (looks like an LED panel even before text hits)
+    if (unlitOpacity > 0) {
+      ctx.save();
+      ctx.globalAlpha = unlitOpacity;
+      ctx.fillStyle = dotColor;
+      for (let row = 0; row < 7; row++) {
+        for (let col = 0; col < cols; col++) {
+          const x = col * gridStep + spacing;
+          const y = row * gridStep + spacing;
+          // tiny texture variation
+          if (!shouldDrawDot(-999, row, col)) continue;
+          ctx.beginPath();
+          ctx.arc(x + dotSize / 2, y + dotSize / 2, dotSize / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Deterministic "density" mask (stable across frames; avoids flicker).
     // Draw characters: start off-screen right and move left
     const startX = viewportWidth - scrollPosition;
 
@@ -287,17 +340,45 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
 
               // Only draw if character should be displayed
               if (i < displayedChars) {
-                ctx.fillStyle = dotColor;
+                // Glow + bright core to mimic LEDs
+                ctx.save();
+                ctx.shadowColor = dotColor;
+                ctx.shadowBlur = glow;
+
+                const r = dotSize / 2;
+                const cx = x + r;
+                const cy = y + r;
+                const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+                g.addColorStop(0, '#ffffff');
+                g.addColorStop(0.25, dotColor);
+                g.addColorStop(1, dotColor);
+                ctx.fillStyle = g;
                 ctx.beginPath();
-                ctx.arc(x + dotSize / 2, y + dotSize / 2, dotSize / 2, 0, Math.PI * 2);
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.restore();
               }
             }
           }
         }
       }
     }
-  }, [isVisible, message, scrollPosition, displayedChars, dotSize, spacing, dotColor, bgColor, dotDensity, charWidth, totalHeight, viewportWidth]);
+
+    // Soft edge fade (makes the banner feel nicer, avoids hard cutoffs)
+    if (edgeFade > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-in';
+      const fade = Math.min(edgeFade, canvas.width / 2);
+      const mask = ctx.createLinearGradient(0, 0, canvas.width, 0);
+      mask.addColorStop(0, 'rgba(0,0,0,0)');
+      mask.addColorStop(fade / canvas.width, 'rgba(0,0,0,1)');
+      mask.addColorStop(1 - fade / canvas.width, 'rgba(0,0,0,1)');
+      mask.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = mask;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+  }, [isVisible, message, scrollPosition, displayedChars, dotSize, spacing, dotColor, bgColor, dotDensity, unlitOpacity, glow, edgeFade, charWidth, totalHeight, viewportWidth]);
 
   if (!message || !isVisible) return null;
 
