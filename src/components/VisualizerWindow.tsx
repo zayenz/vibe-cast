@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
@@ -128,11 +128,7 @@ const VisualizationRenderer: React.FC<{
   const storedSettings = visualizationSettings[visualizationId] || {};
   const customSettings = { ...defaultSettings, ...storedSettings };
   
-  console.log(`VisualizationRenderer [${visualizationId}]:`, {
-    storedSettings,
-    defaultSettings,
-    customSettings,
-  });
+  // Avoid per-frame logging here; it can cause long-run degradation/crashes in WebViews.
 
   return (
     <VizComponent
@@ -175,10 +171,30 @@ export const VisualizerWindow: React.FC = () => {
   // Legacy compatibility
   const setMode = useStore((state) => state.setMode);
 
+  // Health watchdog: detect long-running stalls and attempt a safe remount.
+  const [vizRemountKey, setVizRemountKey] = useState(0);
+  const lastRafRef = useRef<number>(performance.now());
+  const lastAudioRef = useRef<number>(Date.now());
+  const [recoveryCount, setRecoveryCount] = useState(0);
+
+  // Throttle audio updates to at most one store update per animation frame.
+  const audioRafRef = useRef<number | null>(null);
+  const latestAudioRef = useRef<number[] | null>(null);
+
   useEffect(() => {
     // Listen for audio data from Rust
     const unlistenAudio = listen<number[]>('audio-data', (event) => {
-      setAudioData(event.payload);
+      latestAudioRef.current = event.payload;
+      // Coalesce multiple audio events into a single store update per frame.
+      if (audioRafRef.current == null) {
+        audioRafRef.current = requestAnimationFrame(() => {
+          audioRafRef.current = null;
+          if (latestAudioRef.current) {
+            setAudioData(latestAudioRef.current);
+          }
+        });
+      }
+      lastAudioRef.current = Date.now();
     });
 
     // Listen for remote commands
@@ -295,6 +311,10 @@ export const VisualizerWindow: React.FC = () => {
       unlistenAudio.then((u) => u());
       unlistenRemote.then((u) => u());
       unlistenState.then((u) => u());
+      if (audioRafRef.current != null) {
+        cancelAnimationFrame(audioRafRef.current);
+        audioRafRef.current = null;
+      }
     };
   }, [
     setAudioData, 
@@ -310,11 +330,53 @@ export const VisualizerWindow: React.FC = () => {
     loadConfiguration,
   ]);
 
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      lastRafRef.current = performance.now();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // Determine which visualization and settings to use
   const vizId = activePreset ? activePreset.visualizationId : activeVisualization;
   const vizSettings = activePreset 
     ? { [vizId]: activePreset.settings }
     : visualizationSettings;
+
+  useEffect(() => {
+    // Only run in dev; we don't want surprise remounts in production without explicit opt-in.
+    if (!import.meta.env.DEV) return;
+    const interval = window.setInterval(() => {
+      // Avoid false positives when app is not visible/focused and RAF is throttled.
+      if (document.hidden) return;
+      const nowPerf = performance.now();
+      const now = Date.now();
+      const msSinceRaf = nowPerf - lastRafRef.current;
+      const msSinceAudio = now - lastAudioRef.current;
+
+      // If RAF is stalled for a long time while visible, attempt a remount.
+      // This helps recover from intermittent compositor/GPU hiccups without restarting the app.
+      if (msSinceRaf > 15_000) {
+        console.warn('[VisualizerWindow] RAF stalled, attempting visualization remount', {
+          msSinceRaf,
+          msSinceAudio,
+          vizId,
+        });
+        setRecoveryCount((c) => c + 1);
+        setVizRemountKey((k) => k + 1);
+        // Force-enable overlay on recovery so we can see state if it happens again.
+        try {
+          window.localStorage.setItem('vibecast:vizDebug', '1');
+        } catch {
+          // ignore
+        }
+      }
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [vizId]);
 
   // Dev overlay (default OFF; opt-in via localStorage or query param)
   const devOverlayEnabledByQuery = useMemo(() => {
@@ -381,9 +443,11 @@ export const VisualizerWindow: React.FC = () => {
           <div>activePreset: {activePreset ? `${activePreset.name} (${activePreset.id})` : 'none'}</div>
           <div>audioData: {Array.isArray(audioData) ? audioData.length : 'n/a'}</div>
           <div>common: {commonSettings ? `intensity=${commonSettings.intensity} dim=${commonSettings.dim}` : 'n/a'}</div>
+          <div>recoveryCount: {recoveryCount}</div>
         </div>
       )}
       <VisualizationRenderer
+        key={vizRemountKey}
         visualizationId={vizId}
         audioData={audioData}
         commonSettings={commonSettings}

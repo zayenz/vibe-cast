@@ -442,6 +442,14 @@ export const ControlPlane: React.FC = () => {
     }
   };
 
+  const restartViz = async () => {
+    try {
+      await invoke('restart_viz_window');
+    } catch (error) {
+      console.error('Error restarting viz window:', error);
+    }
+  };
+
   // Helper to send commands via fetcher
   const sendCommand = (command: string, payload: unknown) => {
     fetcher.submit(
@@ -698,6 +706,18 @@ export const ControlPlane: React.FC = () => {
               <div className="relative flex items-center gap-3 font-bold text-sm">
                 <Monitor size={18} className="text-orange-500" />
                 Toggle Stage
+              </div>
+            </button>
+
+            <button
+              onClick={restartViz}
+              className="group relative px-6 py-3 bg-zinc-900 border border-zinc-800 hover:border-red-500/60 rounded-xl transition-all active:scale-95 overflow-hidden"
+              title="Restart the visualization window (use if it turns grey/unresponsive)"
+            >
+              <div className="absolute inset-0 bg-gradient-to-tr from-red-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative flex items-center gap-3 font-bold text-sm">
+                <X size={18} className="text-red-400" />
+                Restart Stage
               </div>
             </button>
           </div>

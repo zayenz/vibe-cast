@@ -231,7 +231,7 @@ const TechnoVisualization: React.FC<VisualizationProps> = ({
   const sphereOpacity = getNumberSetting(customSettings.sphereOpacity, 1.0, 0, 1);
   const sphereColor = getStringSetting(customSettings.sphereColor, '#ffffff');
   
-  console.log('TechnoVisualization settings:', { barCount, sphereScale, sphereDistort, colorScheme, showSphere, showBars, sphereOpacity, sphereColor });
+  // Avoid per-frame logging in the visualizer window (can degrade over long runs).
 
   // Apply dim as a CSS filter
   const dimStyle = {

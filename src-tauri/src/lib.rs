@@ -314,6 +314,24 @@ fn get_audio_data(state: tauri::State<'_, AudioState>) -> Vec<f32> {
 }
 
 #[tauri::command]
+fn restart_viz_window(handle: tauri::AppHandle) -> Result<(), String> {
+    // Close existing viz window (if any)
+    if let Some(w) = handle.get_webview_window("viz") {
+        let _ = w.close();
+    }
+
+    // Recreate it pointing at the app index route. The App component will route by window label.
+    tauri::WebviewWindowBuilder::new(&handle, "viz", tauri::WebviewUrl::App("index.html".into()))
+        .title("VibeCast")
+        .inner_size(1280.0, 720.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 fn emit_state_change(
     handle: tauri::AppHandle, 
     state: tauri::State<'_, Arc<AppStateSync>>,
@@ -527,7 +545,7 @@ fn emit_state_change(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_server_info, get_audio_data, emit_state_change])
+        .invoke_handler(tauri::generate_handler![get_server_info, get_audio_data, restart_viz_window, emit_state_change])
         .setup(|app| {
             let handle = app.handle().clone();
             

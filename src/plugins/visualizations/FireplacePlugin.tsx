@@ -73,7 +73,7 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
   const glowColor = getStringSetting(customSettings.glowColor, '#ea580c');
   const showLogs = getBooleanSetting(customSettings.showLogs, true);
   
-  console.log('FireplaceVisualization settings:', { emberCount, flameCount, flameHeight, glowColor, showLogs });
+  // Avoid per-frame logging in the visualizer window (can degrade over long runs).
 
   // Apply intensity smoothing to audio data
   // Lower intensity = more smoothing = reactive to larger trends
