@@ -8,7 +8,7 @@ import {
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
@@ -958,11 +958,16 @@ export const ControlPlane: React.FC = () => {
                 onPointerUp={endPointerDragTree}
                 onPointerCancel={endPointerDragTree}
               >
+                <LayoutGroup>
                 <AnimatePresence initial={false}>
                   {visibleNodes.map((entry, idx) => {
                     const indent = 6 + entry.depth * 14;
                     const isDragging = draggingNodePath === entry.path;
                     const isDropInto = dropIntoFolderPath === entry.path && entry.node.type === 'folder';
+                    const rowKey =
+                      entry.node.type === 'folder'
+                        ? `f:${entry.node.id}`
+                        : `m:${entry.node.message.id}`;
                     const dropMarker =
                       draggingNodePath && dropVisibleIndex === idx ? (
                         <div className="h-2 flex items-center">
@@ -976,7 +981,7 @@ export const ControlPlane: React.FC = () => {
                       const isCollapsed = !!folder.collapsed;
                       return (
                         <div
-                          key={entry.path}
+                          key={rowKey}
                           ref={(el) => {
                             if (!el) {
                               messageItemRefs.current.delete(entry.path);
@@ -988,9 +993,8 @@ export const ControlPlane: React.FC = () => {
                         >
                           {dropMarker}
                     <motion.div
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 10 }}
+                            layout="position"
+                            transition={{ type: 'spring', stiffness: 650, damping: 45, mass: 0.8 }}
                             className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
                               isDropInto ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
                             }`}
@@ -1076,7 +1080,7 @@ export const ControlPlane: React.FC = () => {
 
                     return (
                       <div
-                        key={entry.path}
+                        key={rowKey}
                         ref={(el) => {
                           if (!el) {
                             messageItemRefs.current.delete(entry.path);
@@ -1088,9 +1092,8 @@ export const ControlPlane: React.FC = () => {
                       >
                         {dropMarker}
                         <motion.div
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0, x: 10 }}
+                          layout="position"
+                          transition={{ type: 'spring', stiffness: 650, damping: 45, mass: 0.8 }}
                           className={`bg-zinc-950 border rounded-xl overflow-hidden transition-all ${
                             isAnimating ? 'border-orange-500/50 shadow-lg shadow-orange-500/20' : 'border-zinc-800/50'
                           }`}
@@ -1337,6 +1340,7 @@ export const ControlPlane: React.FC = () => {
                     );
                   })}
                 </AnimatePresence>
+                </LayoutGroup>
                 {/* Drop indicator at end (right aligned) */}
                 {draggingNodePath && dropVisibleIndex === visibleNodes.length && (
                   <div className="h-2 flex items-center">
