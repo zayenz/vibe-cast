@@ -17,6 +17,7 @@ import { VisualizationPresetsManager } from './settings/VisualizationPresetsMana
 import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
 import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode } from '../plugins/types';
 import { useStore } from '../store';
+import { adjustPathForRemoval } from './messageTreeDnd';
 
 // API base for Tauri windows - they need to hit the Axum server directly
 const API_BASE = 'http://localhost:8080';
@@ -392,12 +393,14 @@ export const ControlPlane: React.FC = () => {
     let nextTree = removedRes.tree;
 
     if (drop.mode === 'into') {
-      const folder = getNodeAtPath(nextTree, drop.folderPath);
+      // Removing the source can shift indices; adjust folder path accordingly.
+      const adjustedFolderPath = adjustPathForRemoval(drop.folderPath, sourcePath);
+      const folder = getNodeAtPath(nextTree, adjustedFolderPath);
       if (!folder || folder.type !== 'folder') return;
       folder.children = folder.children ?? [];
       folder.collapsed = false;
       folder.children.push(removedRes.removed);
-      dndLog('commit into', { sourcePath, folderPath: drop.folderPath });
+      dndLog('commit into', { sourcePath, folderPath: drop.folderPath, adjustedFolderPath });
       commitMessageTree(nextTree);
       return;
     }
