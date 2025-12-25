@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useFetcher } from 'react-router-dom';
-import { Flame, Music, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2 } from 'lucide-react';
+import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2 } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
@@ -14,6 +14,7 @@ const API_BASE = '';
 const iconMap: Record<string, React.ReactNode> = {
   'Flame': <Flame size={28} />,
   'Music': <Music size={28} />,
+  'Flower': <Flower size={28} />,
 };
 
 export const RemoteControl: React.FC = () => {

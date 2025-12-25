@@ -6,6 +6,7 @@ export { FireplacePlugin } from './FireplacePlugin';
 export { TechnoPlugin } from './TechnoPlugin';
 export { WavesPlugin } from './WavesPlugin';
 export { ParticlesPlugin } from './ParticlesPlugin';
+export { MushroomsPlugin } from './MushroomsPlugin';
 export { 
   visualizationRegistry, 
   getVisualization, 

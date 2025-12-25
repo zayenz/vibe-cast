@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
-  Flame, Music, Send, Monitor, Smartphone, MessageSquare, 
+  Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw
 } from 'lucide-react';
@@ -27,6 +27,7 @@ const API_BASE = 'http://localhost:8080';
 const iconMap: Record<string, React.ReactNode> = {
   'Flame': <Flame size={32} />,
   'Music': <Music size={32} />,
+  'Flower': <Flower size={32} />,
 };
 
 export const ControlPlane: React.FC = () => {
