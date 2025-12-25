@@ -15,9 +15,10 @@ import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
 import { VisualizationPresetsManager } from './settings/VisualizationPresetsManager';
 import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
-import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode } from '../plugins/types';
+import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode, getDefaultsFromSchema } from '../plugins/types';
 import { useStore } from '../store';
 import { adjustPathForRemoval } from './messageTreeDnd';
+import { applyStyleOverrideChange } from './messageStyleOverrides';
 
 // API base for Tauri windows - they need to hit the Axum server directly
 const API_BASE = 'http://localhost:8080';
@@ -1215,8 +1216,8 @@ export const ControlPlane: React.FC = () => {
                                           ...m,
                                           textStylePreset: preset.id,
                                           textStyle: preset.textStyleId,
-                                          // Selecting the base option clears overrides; selecting "(modified)" enables them
-                                          styleOverrides: isModified ? (m.styleOverrides ?? {}) : undefined,
+                                          // Selecting the base option clears overrides. "(modified)" is only shown when overrides actually differ.
+                                          styleOverrides: isModified ? m.styleOverrides : undefined,
                                         }));
                                       }}
                                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
@@ -1296,11 +1297,13 @@ export const ControlPlane: React.FC = () => {
                                   return null;
                                 }
 
-                                const presetSettings = preset?.settings || textStyleSettings[styleId] || {};
-                                const overridesEnabled = msg.styleOverrides != null;
-                                if (!overridesEnabled) return null;
-                                const overrides = msg.styleOverrides || {};
-                                const mergedSettings = { ...presetSettings, ...overrides };
+                                const presetSettings =
+                                  (preset?.settings as Record<string, unknown> | undefined) ??
+                                  (textStyleSettings[styleId] as Record<string, unknown> | undefined) ??
+                                  (getDefaultsFromSchema(textStyle.settingsSchema) as Record<string, unknown>);
+                                const overrides = (msg.styleOverrides as Record<string, unknown> | undefined) ?? undefined;
+                                const mergedSettings = { ...presetSettings, ...(overrides ?? {}) };
+                                const isModified = !!(overrides && Object.keys(overrides).length > 0);
 
                                 return (
                                   <div>
@@ -1308,23 +1311,30 @@ export const ControlPlane: React.FC = () => {
                                       <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
                                         Per-message settings
                                       </label>
-                                      <button
-                                        onClick={() => {
-                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: {} }));
-                                        }}
-                                        className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
-                                        title="Reset overrides to preset defaults"
-                                      >
-                                        Reset
-                                      </button>
+                                      {isModified && (
+                                        <button
+                                          onClick={() => {
+                                            updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: undefined }));
+                                          }}
+                                          className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
+                                          title="Reset per-message changes (back to preset)"
+                                        >
+                                          Reset
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
                                       <SettingsRenderer
                                         schema={textStyle.settingsSchema}
                                         values={mergedSettings}
                                         onChange={(key, value) => {
-                                          const newOverrides = { ...overrides, [key]: value };
-                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: newOverrides }));
+                                          const nextOverrides = applyStyleOverrideChange(
+                                            presetSettings,
+                                            (msg.styleOverrides as Record<string, unknown> | undefined) ?? undefined,
+                                            key,
+                                            value
+                                          );
+                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: nextOverrides }));
                                         }}
                                       />
                                     </div>
