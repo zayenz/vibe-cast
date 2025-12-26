@@ -12,6 +12,7 @@ A high-performance, multi-window macOS application built with **Tauri v2** and *
   - **Techno**: A dynamic, audio-reactive 3D environment built with React Three Fiber with customizable sphere and frequency bars.
   - **Waves**: Flowing audio-reactive wave patterns for a calming, ocean-like visualization.
   - **Particles**: Dynamic particle system with customizable colors and spread.
+  - **YouTube**: Loop YouTube videos with Premium account support for ad-free playback.
 - **Audio Reactivity**: Real-time FFT analysis of system audio (e.g., Spotify) using Rust.
 - **iPhone Remote**: A web-based remote control served over the LAN, accessible via QR code.
 - **Text Message Styles**: Multiple text display styles with full customization:

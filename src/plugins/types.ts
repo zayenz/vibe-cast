@@ -56,9 +56,20 @@ export interface BooleanSetting {
 }
 
 /**
+ * Definition for a text input setting
+ */
+export interface TextSetting {
+  type: 'text';
+  id: string;
+  label: string;
+  default: string;
+  placeholder?: string;
+}
+
+/**
  * Union of all setting types
  */
-export type SettingDefinition = RangeSetting | ColorSetting | SelectSetting | BooleanSetting;
+export type SettingDefinition = RangeSetting | ColorSetting | SelectSetting | BooleanSetting | TextSetting;
 
 /**
  * Extract default values from a settings schema

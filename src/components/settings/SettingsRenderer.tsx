@@ -79,6 +79,15 @@ const SettingControl: React.FC<SettingControlProps> = ({ setting, value, onChang
           onChange={onChange}
         />
       );
+    case 'text':
+      return (
+        <TextControl
+          label={setting.label}
+          value={value as string}
+          placeholder={setting.placeholder}
+          onChange={onChange}
+        />
+      );
     default:
       return null;
   }
@@ -205,6 +214,30 @@ const BooleanControl: React.FC<BooleanControlProps> = ({ label, value, onChange 
           }`}
         />
       </button>
+    </div>
+  );
+};
+
+interface TextControlProps {
+  label: string;
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}
+
+const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, onChange }) => {
+  return (
+    <div className="space-y-2">
+      <label className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
+        {label}
+      </label>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:border-orange-500 outline-none transition-colors"
+      />
     </div>
   );
 };
