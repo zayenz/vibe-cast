@@ -75,6 +75,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
   const [currentRepeat, setCurrentRepeat] = useState(0);
+  const [animationKey, setAnimationKey] = useState(0);
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -103,27 +104,34 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     
     const nextRepeat = currentRepeat + 1;
     if (nextRepeat < repeatCount) {
-      // Reset for next repeat - briefly clear display then show again
-      setDisplayMessage(null);
+      // Increment repeat counter - this will change the key and trigger exit
       setCurrentRepeat(nextRepeat);
-      // Use a small timeout to reset the animation
-      setTimeout(() => {
-        if (!completedRef.current) {
-          setDisplayMessage(message);
-        }
-      }, 50);
+      // Change the animation key to trigger AnimatePresence exit/enter cycle
+      setAnimationKey(prev => prev + 1);
     } else {
-      // All repeats done
+      // All repeats done - clear display to trigger exit
       completedRef.current = true;
       setDisplayMessage(null);
-      setCurrentRepeat(0);
       // Clear safety timeout if it exists
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
-      onComplete?.();
     }
+  };
+
+  // Handle exit completion from AnimatePresence
+  const handleExitComplete = () => {
+    if (completedRef.current) {
+      // All done - call onComplete
+      setCurrentRepeat(0);
+      setAnimationKey(0);
+      onComplete?.();
+      return;
+    }
+    
+    // Exit complete - next repeat will start automatically because key changed
+    // and displayMessage is still set, so AnimatePresence will enter the new element
   };
 
   useEffect(() => {
@@ -131,6 +139,12 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Reset completion flag and repeat counter
       completedRef.current = false;
       setCurrentRepeat(0);
+      setAnimationKey(0);
+      // Clear any pending timeouts
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current);
+        safetyTimeoutRef.current = null;
+      }
       // Immediately show the message
       setDisplayMessage(message);
       
@@ -143,14 +157,14 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Assume viewport is roughly 100rem wide (typical), so if text is longer, add buffer
       const textWidthRatio = Math.max(1, estimatedTextWidthRem / 100);
       const bufferTime = Math.max(3, textWidthRatio * 2); // At least 3 seconds, more for long text
-      // Safety timeout must account for all repeats
-      const totalDuration = (duration + bufferTime) * repeatCount;
+      // Safety timeout must account for all repeats plus exit animations between repeats
+      const exitTimeBetweenRepeats = 0.3; // 300ms for exit animation
+      const totalDuration = (duration + bufferTime) * repeatCount + (exitTimeBetweenRepeats * Math.max(0, repeatCount - 1));
       safetyTimeoutRef.current = setTimeout(() => {
         if (!completedRef.current) {
           completedRef.current = true;
           setDisplayMessage(null);
-          setCurrentRepeat(0);
-          onComplete?.();
+          // AnimatePresence will handle the exit, then onExitComplete will call onComplete
         }
       }, totalDuration * 1000);
       
@@ -168,10 +182,10 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
       style={{ transform: `translateY(${verticalOffset}px)` }}
     >
-      <AnimatePresence>
+      <AnimatePresence mode="wait" onExitComplete={handleExitComplete}>
         {displayMessage && (
           <motion.div
-            key={`${messageTimestamp}-${currentRepeat}`}
+            key={`${messageTimestamp}-${currentRepeat}-${animationKey}`}
             initial={{ x: '100%' }}
             animate={{ x: '-100%' }}
             exit={{ opacity: 0 }}

@@ -1199,8 +1199,16 @@ export const ControlPlane: React.FC = () => {
                                 {(() => {
                                   const currentPresetId = msg.textStylePreset || '';
                                   const hasOverrides = !!(msg.styleOverrides && Object.keys(msg.styleOverrides).length > 0);
-                                  const selectedValue = currentPresetId
-                                    ? (hasOverrides ? `${currentPresetId}:modified` : currentPresetId)
+                                  
+                                  // If we have overrides but no preset, try to find a preset matching the text style
+                                  const styleId = msg.textStyle;
+                                  const matchingPreset = !currentPresetId && hasOverrides && styleId
+                                    ? textStylePresets.find(p => p.textStyleId === styleId)
+                                    : null;
+                                  const effectivePresetId = currentPresetId || (matchingPreset?.id || '');
+                                  
+                                  const selectedValue = effectivePresetId
+                                    ? (hasOverrides ? `${effectivePresetId}:modified` : effectivePresetId)
                                     : '';
 
                                   return (
@@ -1229,7 +1237,10 @@ export const ControlPlane: React.FC = () => {
                                             {preset.name}
                                           </option>,
                                         ];
-                                        if (currentPresetId === preset.id && hasOverrides) {
+                                        // Show modified option if this preset is selected (or matches the style when no preset is selected) and has overrides
+                                        const isSelected = currentPresetId === preset.id || 
+                                          (!currentPresetId && hasOverrides && preset.textStyleId === styleId);
+                                        if (isSelected && hasOverrides) {
                                           opts.push(
                                             <option key={`${preset.id}:modified`} value={`${preset.id}:modified`}>
                                               {preset.name} (modified)
@@ -1335,7 +1346,17 @@ export const ControlPlane: React.FC = () => {
                                             key,
                                             value
                                           );
-                                          updateMessageById(msg.id, (m) => ({ ...m, styleOverrides: nextOverrides }));
+                                          updateMessageById(msg.id, (m) => {
+                                            const updates: Partial<MessageConfig> = { styleOverrides: nextOverrides };
+                                            // If no preset is selected but we have overrides, auto-select a matching preset
+                                            if (!m.textStylePreset && nextOverrides && Object.keys(nextOverrides).length > 0) {
+                                              const matchingPreset = textStylePresets.find(p => p.textStyleId === styleId);
+                                              if (matchingPreset) {
+                                                updates.textStylePreset = matchingPreset.id;
+                                              }
+                                            }
+                                            return { ...m, ...updates };
+                                          });
                                         }}
                                       />
                                     </div>
