@@ -5,7 +5,7 @@
  * The classic marquee style.
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
@@ -78,7 +78,6 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const [viewportWidth, setViewportWidth] = useState<number>(() => 
     typeof window !== 'undefined' ? window.innerWidth : 1920
   );
-  const [animationEnd, setAnimationEnd] = useState<string>('');
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationKeyRef = useRef(0);
@@ -123,15 +122,10 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     return { endPos, animDuration, scrollDistance };
   };
 
-  // Get animation duration for current message
-  const getAnimationDuration = () => {
-    if (!displayMessage) return duration;
-    const { animDuration } = calculateAnimationParams(displayMessage);
-    return animDuration;
-  };
 
   // Handle completion - supports repeatCount
-  const handleComplete = () => {
+  // Use useCallback to ensure stable reference, but capture latest values via refs/state
+  const handleComplete = useCallback(() => {
     if (completedRef.current || !displayMessage) return;
     
     // Use ref to avoid stale closure issues
@@ -140,10 +134,10 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     
     if (nextRepeat < repeatCount) {
       // More repeats needed - increment repeat counter
-      // The useEffect below will detect the change and restart the animation
+      // The key change (due to currentRepeat in key) will cause remount and restart animation
+      // The end position is calculated directly in render, so it's always current
       currentRepeatRef.current = nextRepeat;
       setCurrentRepeat(nextRepeat);
-      // Don't change the key - let the useEffect handle restarting the animation
     } else {
       // All repeats done
       completedRef.current = true;
@@ -158,25 +152,12 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         onComplete?.();
       }, 300);
     }
-  };
+  }, [displayMessage, repeatCount, viewportWidth, fontSize, duration, onComplete]);
 
-  // Restart animation when currentRepeat changes (for repeat functionality)
-  // Only run when currentRepeat > 0 (i.e., for repeats, not initial render)
-  useEffect(() => {
-    if (!displayMessage || completedRef.current || currentRepeat === 0) return;
-    
-    // This is a repeat - restart the animation
-    const { endPos } = calculateAnimationParams(displayMessage);
-    
-    // Reset to start position first, then animate to end
-    // Use double requestAnimationFrame to ensure the reset happens before the animation starts
-    requestAnimationFrame(() => {
-      setAnimationEnd(`${viewportWidth}px`);
-      requestAnimationFrame(() => {
-        setAnimationEnd(endPos);
-      });
-    });
-  }, [currentRepeat, displayMessage, viewportWidth, fontSize, duration]);
+  // Note: We don't need a separate useEffect for repeats because:
+  // 1. handleComplete sets animationEnd before setting currentRepeat
+  // 2. The key includes currentRepeat, so remount happens after state updates
+  // 3. On remount, animationEnd is already set, so animation starts immediately
 
   // Reset state only when message or messageTimestamp changes (new message triggered)
   useEffect(() => {
@@ -195,14 +176,13 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Immediately show the message
       setDisplayMessage(message);
       
-      // Calculate and set initial animation end position
-      const { endPos, animDuration } = calculateAnimationParams(message);
-      setAnimationEnd(endPos);
+      // Note: Animation parameters are calculated directly in render
       
       // For the first render, use animate prop. For repeats, we'll use controls.
       // The initial render will use the animate prop with endPos
       
       // Safety timeout: ensure message is cleared even if animation doesn't complete
+      const { animDuration } = calculateAnimationParams(message);
       const totalDuration = animDuration * repeatCount;
       safetyTimeoutRef.current = setTimeout(() => {
         if (!completedRef.current) {
@@ -226,17 +206,20 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
       style={{ transform: `translateY(${verticalOffset}px)` }}
     >
-      {displayMessage && (
-        <motion.div
-          key={`${messageTimestamp}`}
-          initial={{ x: `${viewportWidth}px` }}
-          animate={{ x: animationEnd }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: getAnimationDuration(), ease: "linear" }}
-          onAnimationComplete={handleComplete}
-          className="whitespace-nowrap"
-          style={{ willChange: 'transform' }}
-        >
+      {displayMessage && (() => {
+        // Calculate end position directly in render to ensure it's always current
+        const { endPos, animDuration } = calculateAnimationParams(displayMessage);
+        return (
+          <motion.div
+            key={`${messageTimestamp}-${currentRepeat}`}
+            initial={{ x: `${viewportWidth}px` }}
+            animate={{ x: endPos }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: animDuration, ease: "linear" }}
+            onAnimationComplete={handleComplete}
+            className="whitespace-nowrap"
+            style={{ willChange: 'transform' }}
+          >
           <span 
             ref={spanRef}
             className="font-black uppercase tracking-tighter"
@@ -249,7 +232,8 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
             {displayMessage}
           </span>
         </motion.div>
-      )}
+        );
+      })()}
     </div>
   );
 };
