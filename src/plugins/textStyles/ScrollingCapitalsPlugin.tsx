@@ -17,12 +17,12 @@ import { getNumberSetting, getStringSetting } from '../utils/settings';
 const settingsSchema: SettingDefinition[] = [
   {
     type: 'range',
-    id: 'duration',
-    label: 'Scroll Duration (seconds)',
-    min: 5,
-    max: 20,
-    step: 1,
-    default: 10,
+    id: 'charDuration',
+    label: 'Time per Character (seconds)',
+    min: 0.1,
+    max: 2,
+    step: 0.1,
+    default: 0.3,
   },
   {
     type: 'range',
@@ -84,7 +84,8 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const spanRef = useRef<HTMLSpanElement>(null);
   const controls = useAnimationControls();
 
-  const duration = getNumberSetting(settings.duration, 10, 5, 20);
+  // Use charDuration if available, otherwise default (old 'duration' setting is ignored)
+  const charDuration = getNumberSetting(settings.charDuration, 0.3, 0.1, 2);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
   const color = getStringSetting(settings.color, '#ffffff');
   const glowIntensity = getNumberSetting(settings.glowIntensity, 0.5, 0, 1);
@@ -114,9 +115,16 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   // Helper function to calculate animation parameters
   const calculateAnimationParams = (msg: string) => {
     // Estimate text width: each character is roughly fontSize * 0.6rem
-    const textWidth = msg.length * (fontSize * 0.6 * 16); // Convert rem to px
+    const charWidth = fontSize * 0.6 * 16; // Convert rem to px per character
+    const textWidth = msg.length * charWidth;
     const travelDistance = viewportWidth + textWidth; // Start at right edge, exit when text width is fully off-screen
-    const animDuration = duration; // user-configured total scroll duration
+    
+    // Calculate total duration based on time per character
+    // Number of characters that need to cross: viewport width in chars + message length
+    const viewportChars = viewportWidth / charWidth;
+    const totalChars = viewportChars + msg.length;
+    const animDuration = totalChars * charDuration; // Duration based on time per character
+    
     const endPos = `-${textWidth}px`; // move left until the tail is off-screen
     return { endPos, animDuration, scrollDistance: travelDistance };
   };
@@ -168,7 +176,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         });
       });
     });
-  }, [displayMessage, currentRepeat, viewportWidth, fontSize, duration, controls]);
+  }, [displayMessage, currentRepeat, viewportWidth, fontSize, charDuration, controls]);
 
   // Reset state when new message is triggered
   useEffect(() => {
@@ -204,7 +212,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, duration, fontSize, repeatCount, viewportWidth, onComplete]);
+  }, [message, messageTimestamp, charDuration, fontSize, repeatCount, viewportWidth, onComplete]);
 
   return (
     <div 
