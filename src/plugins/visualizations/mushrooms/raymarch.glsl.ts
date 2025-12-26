@@ -33,6 +33,12 @@ export const raymarchFragmentShader = /* glsl */ `
   uniform float uFocus;          // 0..1 (fake DOF/softness)
   uniform float uShowGround;     // 0..1
   uniform float uDebug;          // 0..1
+  uniform vec2 uJitter;          // subpixel jitter in pixels
+  uniform float uDitherStrength; // 0..1
+  uniform sampler2D uRampCap;
+  uniform sampler2D uRampStem;
+  uniform sampler2D uRampGround;
+  uniform sampler2D uRampSky;
 
   // ----------------------------------------------------------------------------
   // Hash / noise
@@ -150,13 +156,15 @@ export const raymarchFragmentShader = /* glsl */ `
     return mix(b, a, h) - k * h * (1.0 - h);
   }
 
-  // Domain repetition with jitter for natural placement
-  vec3 cellID(vec3 p, float cellSize) {
+  // Cell helpers (WebGL1-safe). Cells are centered at integer multiples of cellSize.
+  vec2 cellID2(vec2 p, float cellSize) {
     return floor((p + 0.5 * cellSize) / cellSize);
   }
 
-  vec3 cellPos(vec3 p, float cellSize) {
-    return fract((p + 0.5 * cellSize) / cellSize) * cellSize - 0.5 * cellSize;
+  vec2 cellCenter2(vec2 p, float cellSize) {
+    // With the above ID definition, the center is cid * cellSize.
+    vec2 cid = cellID2(p, cellSize);
+    return cid * cellSize;
   }
 
   // “Realistic but trippy” mushroom: subtle asymmetry + cap lip + gill cavity
@@ -217,14 +225,17 @@ export const raymarchFragmentShader = /* glsl */ `
   float sdTree(vec3 p, float id, float t) {
     float h = hash11(id * 9.13 + 1.2);
     float h2 = hash11(id * 4.77 + 8.4);
-    float height = mix(6.0, 14.0, h);
-    float radius = mix(0.18, 0.45, h2);
-    // Slight bend
-    p.x += 0.25 * sin(p.y * 0.18 + t * 0.25 + id);
-    p.z += 0.20 * cos(p.y * 0.14 + t * 0.22 + id * 2.0);
-    float trunk = sdCappedCylinder(p - vec3(0.0, height * 0.5, 0.0), height * 0.5, radius);
-    // Bark ridges
-    trunk += 0.06 * (fbm(p.xz * 3.5 + id) - 0.5);
+    // Whimsical silhouettes: fewer, thicker, shorter, smoother (avoid "glitch pillars")
+    float height = mix(4.0, 9.0, h);
+    float r1 = mix(0.30, 0.55, h2);
+    float r2 = r1 * mix(0.55, 0.85, hash11(id * 2.17 + 0.4));
+    // Gentle bend
+    p.x += 0.18 * sin(p.y * 0.22 + t * 0.18 + id);
+    p.z += 0.14 * cos(p.y * 0.18 + t * 0.16 + id * 2.0);
+    // Tapered trunk
+    float trunk = sdRoundCone(p - vec3(0.0, height * 0.5, 0.0), r1, r2, height * 0.5);
+    // Very mild bark (stable)
+    trunk += 0.02 * (noise(p.xz * 1.6 + id) - 0.5);
     return trunk;
   }
 
@@ -247,15 +258,18 @@ export const raymarchFragmentShader = /* glsl */ `
     // Trees: far ring
     {
       float cell = 6.0;
-      vec3 cid = cellID(p + vec3(seed * 10.0, 0.0, seed * -8.0), cell);
       // Ring mask: only place trees beyond radius
       float r = length(p.xz);
       if (r > 10.0) {
-        vec3 q = cellPos(p + vec3(seed * 10.0, 0.0, seed * -8.0), cell);
-        float id = cid.x * 19.0 + cid.z * 7.0 + seed * 131.0;
+        vec2 off = vec2(seed * 10.0, seed * -8.0);
+        vec2 pOff = p.xz + off;
+        vec2 cid = cellID2(pOff, cell);
+        vec2 center = cellCenter2(pOff, cell) - off;
+        vec3 q = p - vec3(center.x, 0.0, center.y);
+        float id = cid.x * 19.0 + cid.y * 7.0 + seed * 131.0;
         float pick = hash11(id * 1.31 + 11.0);
         if (pick < clamp(uTreeDensity, 0.0, 1.0)) {
-          float dTree = sdTree(q + vec3(0.0, 0.0, 0.0), id, t);
+          float dTree = sdTree(q, id, t);
           res = opU(res, hit(dTree, 3.0));
         }
       }
@@ -264,17 +278,20 @@ export const raymarchFragmentShader = /* glsl */ `
     // Mushrooms: repeated cells near camera
     {
       float cell = mix(1.6, 2.6, 1.0 - density); // higher density => smaller cells
-      vec3 cid = cellID(p + vec3(seed * 3.0, 0.0, seed * -2.0), cell);
-      vec3 q = cellPos(p + vec3(seed * 3.0, 0.0, seed * -2.0), cell);
-      float id = cid.x * 37.0 + cid.z * 17.0 + seed * 101.0;
+      vec2 off = vec2(seed * 3.0, seed * -2.0);
+      vec2 pOff = p.xz + off;
+      vec2 cid = cellID2(pOff, cell);
+      vec2 center = cellCenter2(pOff, cell) - off;
+      float id = cid.x * 37.0 + cid.y * 17.0 + seed * 101.0;
       // Probabilistic placement
       float pick = hash11(id * 1.7 + 3.0);
       if (pick < mix(0.30, 0.72, density) * clamp(uUserDensity, 0.0, 1.0)) {
-        // Put on ground
+        // Place each mushroom at the ground height of its cell center to avoid world/local mixing artifacts.
+        float baseY = 0.0;
         if (uShowGround > 0.5) {
-          float gh2 = groundHeight(p.xz, t);
-          q.y += gh2;
+          baseY = groundHeight(center, t);
         }
+        vec3 q = p - vec3(center.x, baseY, center.y);
         vec2 m = sdMushroom(q, id, t, audio, warp);
         res = opU(res, m);
       }
@@ -323,6 +340,11 @@ export const raymarchFragmentShader = /* glsl */ `
     return clamp(1.0 - ao, 0.0, 1.0);
   }
 
+  vec3 sampleRamp(sampler2D ramp, float x) {
+    float u = clamp(x, 0.0, 1.0);
+    return texture2D(ramp, vec2(u, 0.5)).rgb;
+  }
+
   vec3 shade(vec3 p, vec3 n, vec3 rd, float mat, float t, float audio, float styleMix, int styleA, int styleB) {
     vec3 V = -rd;
     vec3 L1 = normalize(vec3(0.6, 0.9, 0.3));
@@ -330,40 +352,41 @@ export const raymarchFragmentShader = /* glsl */ `
     float diff = 0.7 * max(0.0, dot(n, L1)) + 0.3 * max(0.0, dot(n, L2));
     float rim = pow(1.0 - max(0.0, dot(n, V)), 2.1);
 
-    // Material base colors: ground darker, stem lighter, cap saturated
-    float h = fract(0.15 * p.y + 0.04 * p.x + 0.03 * p.z + 0.09 * sin(t * 0.12));
-    vec3 palA = palette(styleA, fract(h + 0.22 * sin(t * 0.08)));
-    vec3 palB = palette(styleB, fract(h + 0.22 * sin(t * 0.08)));
-    vec3 pal = mix(palA, palB, styleMix);
+    // Illustrative ramp shading: compute a stylized light coordinate and sample ramps.
+    float lit = clamp(0.08 + 0.92 * diff, 0.0, 1.0);
+    lit += 0.35 * rim;
+    lit = clamp(lit, 0.0, 1.0);
 
     vec3 base;
-    if (mat < 0.5) { // ground
-      float moss = fbm(p.xz * 0.35 + t * 0.05);
-      base = mix(vec3(0.03, 0.02, 0.04), pal * 0.25, 0.25 + 0.55 * moss);
-    } else if (mat < 1.5) { // stem
-      float grain = fbm(p.xz * 2.0 + p.y * 0.6);
-      base = mix(vec3(0.62, 0.60, 0.68), pal * 0.85, 0.35 + 0.35 * grain);
-    } else if (mat < 2.5) { // cap
-      float detail = fbm(p.xz * 2.5 + vec2(t * 0.05, -t * 0.04));
-      base = mix(pal * 1.15, pal * 0.75, detail);
-    } else { // tree
-      base = vec3(0.03, 0.02, 0.04);
+    if (mat < 0.5) {
+      // Ground: add mild pattern but keep stable
+      float pat = 0.15 * fbm(p.xz * 0.18 + vec2(t * 0.01));
+      base = sampleRamp(uRampGround, clamp(lit + pat, 0.0, 1.0));
+    } else if (mat < 1.5) {
+      float grain = 0.10 * fbm(p.xz * 0.35 + p.y * 0.10);
+      base = sampleRamp(uRampStem, clamp(lit + grain, 0.0, 1.0));
+    } else if (mat < 2.5) {
+      float speck = 0.12 * fbm(p.xz * 0.45 + vec2(t * 0.02, -t * 0.01));
+      base = sampleRamp(uRampCap, clamp(lit + speck, 0.0, 1.0));
+    } else {
+      // Trees: darker, more silhouette
+      base = mix(vec3(0.02, 0.02, 0.03), vec3(0.12, 0.08, 0.18), 0.15 + 0.35 * rim);
     }
 
     // Specular sparkle (subtle)
     vec3 H = normalize(L1 + V);
     float spec = pow(max(0.0, dot(n, H)), 24.0);
 
-    // Bioluminescent emissive: more on caps, a little on ground (mycelium), negligible on trees
+    // Bioluminescent emissive: more on caps, a little on ground (storybook glow)
     float emiss = 0.0;
-    if (mat < 0.5) emiss = 0.15 + 0.35 * fbm(p.xz * 0.25 + t * 0.03);
-    else if (mat < 1.5) emiss = 0.25;
-    else if (mat < 2.5) emiss = 0.55;
+    if (mat < 0.5) emiss = 0.10 + 0.25 * fbm(p.xz * 0.18 + t * 0.02);
+    else if (mat < 1.5) emiss = 0.20;
+    else if (mat < 2.5) emiss = 0.75;
     emiss *= (0.55 + 0.45 * audio);
     emiss *= uGlow;
 
-    vec3 col = base * (0.18 + 0.95 * diff) + spec * vec3(0.8);
-    col += base * (0.30 * rim + emiss);
+    vec3 col = base * (0.20 + 0.90 * diff) + spec * vec3(0.65);
+    col += base * (0.35 * rim + emiss);
     return col;
   }
 
@@ -435,6 +458,10 @@ export const raymarchFragmentShader = /* glsl */ `
     sectionParams(t, styleMix, styleA, styleB, density, camRad, camY);
     density = clamp(density * clamp(uUserDensity, 0.0, 1.0), 0.0, 1.0);
 
+    // Apply subpixel jitter (for TAA). uJitter is in pixels.
+    vec2 jitterNdc = (uJitter / max(uResolution, vec2(1.0))) * 2.0;
+    p += jitterNdc;
+
     // Camera orbit + gentle bob + “dream warp”
     float camT = t * 0.12;
     vec3 ro = vec3(cos(camT) * camRad, camY + 0.25 * sin(t * 0.35), sin(camT) * camRad);
@@ -482,10 +509,18 @@ export const raymarchFragmentShader = /* glsl */ `
     }
 
     // Background: dreamy gradient + stars/sparks (brighter baseline so it's never "invisible")
-    vec3 bgA = vec3(0.03, 0.03, 0.05);
-    vec3 bgB = palette(styleA, 0.65) * 0.18;
-    vec3 bgC = palette(styleB, 0.35) * 0.16;
-    vec3 bg = bgA + mix(bgB, bgC, styleMix);
+    // Sky + portal/glade glow (storybook focal point)
+    float skyU = clamp(0.55 + 0.35 * (1.0 - length(p)), 0.0, 1.0);
+    vec3 bg = sampleRamp(uRampSky, skyU);
+    // Portal centered near horizon
+    vec2 portalCenter = vec2(0.0, -0.10);
+    float pr = length(p - portalCenter);
+    float portal = exp(-pr * pr * 3.5);
+    // Soft ring bands to feel "magical"
+    float bands = 0.5 + 0.5 * sin(12.0 * pr - t * 0.9);
+    portal *= mix(0.55, 1.15, bands);
+    vec3 portalCol = mix(vec3(0.10, 0.85, 1.0), vec3(1.0, 0.25, 0.85), 0.5 + 0.5 * sin(t * 0.25));
+    bg += portalCol * (0.22 * portal);
     float v = smoothstep(1.2, 0.1, length(p));
     bg *= v;
     float stars = smoothstep(0.995, 1.0, noise(uv * uResolution * 0.35 + t * 0.02));
@@ -544,6 +579,15 @@ export const raymarchFragmentShader = /* glsl */ `
 
     // Add channel separation (very subtle)
     col = vec3(colR.r, col.g, colB.b);
+
+    // Deterministic dither (reduce banding without animated grain)
+    // Interleaved gradient noise based on pixel coords.
+    float ds = clamp(uDitherStrength, 0.0, 1.0);
+    if (ds > 0.001) {
+      vec2 px = floor(uv * uResolution);
+      float ign = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+      col += (ign - 0.5) * (0.006 * ds);
+    }
 
     gl_FragColor = vec4(col, 1.0);
   }

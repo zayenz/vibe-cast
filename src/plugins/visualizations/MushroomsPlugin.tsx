@@ -14,6 +14,8 @@ import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../t
 import { getBooleanSetting, getNumberSetting, getStringSetting } from '../utils/settings';
 import { fullscreenVertexShader, raymarchFragmentShader } from './mushrooms/raymarch.glsl';
 import { feedbackFragmentShader, feedbackVertexShader } from './mushrooms/feedback.glsl';
+import { taaFragmentShader, taaVertexShader } from './mushrooms/taa.glsl';
+import { createWhimsicalRamps } from './mushrooms/textures';
 
 // ============================================================================
 // Settings Schema
@@ -114,6 +116,33 @@ const settingsSchema: SettingDefinition[] = [
   },
   {
     type: 'range',
+    id: 'taaStrength',
+    label: 'TAA Strength',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    default: 0.85,
+  },
+  {
+    type: 'range',
+    id: 'taaClamp',
+    label: 'TAA Clamp',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    default: 0.35,
+  },
+  {
+    type: 'range',
+    id: 'dither',
+    label: 'Dither',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    default: 0.55,
+  },
+  {
+    type: 'range',
     id: 'sectionLength',
     label: 'Section Length',
     min: 8,
@@ -155,7 +184,7 @@ const settingsSchema: SettingDefinition[] = [
     min: 0,
     max: 1,
     step: 0.05,
-    default: 0.75,
+    default: 0.25,
   },
   {
     type: 'range',
@@ -164,7 +193,7 @@ const settingsSchema: SettingDefinition[] = [
     min: 0,
     max: 1,
     step: 0.05,
-    default: 0.25,
+    default: 0.0,
   },
   {
     type: 'range',
@@ -219,6 +248,23 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
+function halton(index: number, base: number): number {
+  let i = index;
+  let f = 1;
+  let r = 0;
+  while (i > 0) {
+    f /= base;
+    r += f * (i % base);
+    i = Math.floor(i / base);
+  }
+  return r;
+}
+
+function halton2D(frame: number): { x: number; y: number } {
+  // Center around 0
+  return { x: halton(frame, 2) - 0.5, y: halton(frame, 3) - 0.5 };
+}
+
 function computeAudioScalar(audioData: number[], intensity: number): number {
   // Stable-ish mid-band average (avoid allocations, no heavy smoothing here — intensity already exists).
   if (!audioData || audioData.length === 0) return 0;
@@ -264,6 +310,9 @@ const RaymarchPipeline: React.FC<{
   showGround: boolean;
   feedbackAmount: number;
   feedbackWarp: number;
+  taaStrength: number;
+  taaClamp: number;
+  dither: number;
 }> = ({
   audioData,
   intensity,
@@ -284,6 +333,9 @@ const RaymarchPipeline: React.FC<{
   showGround,
   feedbackAmount,
   feedbackWarp,
+  taaStrength,
+  taaClamp,
+  dither,
 }) => {
   const { gl, size } = useThree();
 
@@ -296,6 +348,7 @@ const RaymarchPipeline: React.FC<{
   const blitScene = useMemo(() => new THREE.Scene(), []);
 
   const rayMat = useMemo(() => {
+    const ramps = createWhimsicalRamps();
     return new THREE.ShaderMaterial({
       vertexShader: fullscreenVertexShader,
       fragmentShader: raymarchFragmentShader,
@@ -317,6 +370,12 @@ const RaymarchPipeline: React.FC<{
         uFocus: { value: 0.25 },
         uShowGround: { value: 1.0 },
         uDebug: { value: 0.0 },
+        uJitter: { value: new THREE.Vector2(0, 0) },
+        uDitherStrength: { value: 0.55 },
+        uRampCap: { value: ramps.cap },
+        uRampStem: { value: ramps.stem },
+        uRampGround: { value: ramps.ground },
+        uRampSky: { value: ramps.sky },
       },
       depthWrite: false,
       depthTest: false,
@@ -341,6 +400,22 @@ const RaymarchPipeline: React.FC<{
     });
   }, []);
 
+  const taaMat = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: taaVertexShader,
+      fragmentShader: taaFragmentShader,
+      uniforms: {
+        uCurrent: { value: null },
+        uHistory: { value: null },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+        uAlpha: { value: 0.85 },
+        uClampK: { value: 0.35 },
+      },
+      depthWrite: false,
+      depthTest: false,
+    });
+  }, []);
+
   const blitMat = useMemo(() => new THREE.MeshBasicMaterial({ map: null }), []);
 
   const rayMesh = useMemo(() => new THREE.Mesh(quadGeo, rayMat), [quadGeo, rayMat]);
@@ -350,10 +425,13 @@ const RaymarchPipeline: React.FC<{
   const rtCurrentRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const rtPrevRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const rtNextRef = useRef<THREE.WebGLRenderTarget | null>(null);
+  const taaHistARef = useRef<THREE.WebGLRenderTarget | null>(null);
+  const taaHistBRef = useRef<THREE.WebGLRenderTarget | null>(null);
 
   useEffect(() => {
     rayScene.add(rayMesh);
     fbScene.add(fbMesh);
+    // TAA uses its own mini-scene (reuse fbScene to avoid extra Scene? keep separate for clarity)
     blitScene.add(blitMesh);
     return () => {
       rayScene.remove(rayMesh);
@@ -367,10 +445,13 @@ const RaymarchPipeline: React.FC<{
       quadGeo.dispose();
       rayMat.dispose();
       fbMat.dispose();
+      taaMat.dispose();
       blitMat.dispose();
       rtCurrentRef.current?.dispose();
       rtPrevRef.current?.dispose();
       rtNextRef.current?.dispose();
+      taaHistARef.current?.dispose();
+      taaHistBRef.current?.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -386,14 +467,24 @@ const RaymarchPipeline: React.FC<{
     rtCurrentRef.current?.dispose();
     rtPrevRef.current?.dispose();
     rtNextRef.current?.dispose();
+    taaHistARef.current?.dispose();
+    taaHistBRef.current?.dispose();
     rtCurrentRef.current = createRT(rtW, rtH);
     rtPrevRef.current = createRT(rtW, rtH);
     rtNextRef.current = createRT(rtW, rtH);
+    taaHistARef.current = createRT(rtW, rtH);
+    taaHistBRef.current = createRT(rtW, rtH);
     (rayMat.uniforms.uResolution as THREE.IUniform<THREE.Vector2>).value.set(rtW, rtH);
     (fbMat.uniforms.uResolution as THREE.IUniform<THREE.Vector2>).value.set(rtW, rtH);
+    (taaMat.uniforms.uResolution as THREE.IUniform<THREE.Vector2>).value.set(rtW, rtH);
     // Clear prev so feedback starts clean
     gl.setRenderTarget(rtPrevRef.current);
     gl.setClearColor(0x000000, 1);
+    gl.clear(true, true, true);
+    // Clear TAA history
+    gl.setRenderTarget(taaHistARef.current);
+    gl.clear(true, true, true);
+    gl.setRenderTarget(taaHistBRef.current);
     gl.clear(true, true, true);
     gl.setRenderTarget(null);
   }, [rtW, rtH, gl, rayMat, fbMat]);
@@ -420,10 +511,16 @@ const RaymarchPipeline: React.FC<{
     const rtCurrent = rtCurrentRef.current;
     const rtPrev = rtPrevRef.current;
     const rtNext = rtNextRef.current;
+    const taaA = taaHistARef.current;
+    const taaB = taaHistBRef.current;
+    if (!taaA || !taaB) return;
     if (!rtCurrent || !rtPrev || !rtNext) return;
 
     const t = state.clock.getElapsedTime() * Math.max(0.1, evolutionSpeed);
     const audio = computeAudioScalar(audioData, intensity);
+    const frame = state.clock.elapsedTime === 0 ? 0 : Math.floor(state.clock.elapsedTime * 60);
+    const j = halton2D(frame % 1024);
+    const jitterPx = new THREE.Vector2(j.x, j.y); // in pixels (subpixel)
 
     // Update raymarch uniforms
     (rayMat.uniforms.uTime as THREE.IUniform<number>).value = t;
@@ -441,16 +538,33 @@ const RaymarchPipeline: React.FC<{
     (rayMat.uniforms.uUserDensity as THREE.IUniform<number>).value = clamp01(userDensity);
     (rayMat.uniforms.uTreeDensity as THREE.IUniform<number>).value = clamp01(treeDensity);
     (rayMat.uniforms.uShowGround as THREE.IUniform<number>).value = showGround ? 1.0 : 0.0;
+    (rayMat.uniforms.uJitter as THREE.IUniform<THREE.Vector2>).value = jitterPx;
+    (rayMat.uniforms.uDitherStrength as THREE.IUniform<number>).value = clamp01(dither);
 
     // Render raymarch to rtCurrent
     gl.setRenderTarget(rtCurrent);
     gl.clear(true, true, true);
     gl.render(rayScene, cam);
 
+    // TAA: blend rtCurrent into history (ping-pong)
+    (taaMat.uniforms.uCurrent as THREE.IUniform<THREE.Texture | null>).value = rtCurrent.texture;
+    (taaMat.uniforms.uHistory as THREE.IUniform<THREE.Texture | null>).value = taaA.texture;
+    (taaMat.uniforms.uAlpha as THREE.IUniform<number>).value = clamp01(taaStrength) * 0.95;
+    (taaMat.uniforms.uClampK as THREE.IUniform<number>).value = clamp01(taaClamp);
+    gl.setRenderTarget(taaB);
+    gl.clear(true, true, true);
+    // Render TAA via a tiny scene-less render using fbScene temporarily
+    // Swap fbMesh material for taaMat for this pass to avoid another scene.
+    const prevMat = fbMesh.material;
+    fbMesh.material = taaMat;
+    gl.render(fbScene, cam);
+    fbMesh.material = prevMat;
+
     const fbAmt = clamp01(feedbackAmount);
     if (fbAmt > 0.001) {
       // Feedback to rtNext
-      (fbMat.uniforms.uCurrent as THREE.IUniform<THREE.Texture | null>).value = rtCurrent.texture;
+      // Feed the temporally-stabilized image into trails
+      (fbMat.uniforms.uCurrent as THREE.IUniform<THREE.Texture | null>).value = taaB.texture;
       (fbMat.uniforms.uPrev as THREE.IUniform<THREE.Texture | null>).value = rtPrev.texture;
       (fbMat.uniforms.uTime as THREE.IUniform<number>).value = t;
       (fbMat.uniforms.uAudio as THREE.IUniform<number>).value = audio;
@@ -473,12 +587,16 @@ const RaymarchPipeline: React.FC<{
       rtNextRef.current = rtPrev;
     } else {
       // No feedback: blit current
-      blitMat.map = rtCurrent.texture;
+      blitMat.map = taaB.texture;
       blitMat.opacity = dim;
       blitMat.transparent = dim < 1;
       gl.setRenderTarget(null);
       gl.render(blitScene, cam);
     }
+
+    // Swap TAA history A/B for next frame
+    taaHistARef.current = taaB;
+    taaHistBRef.current = taaA;
   }, 1000);
 
   return null;
@@ -516,6 +634,9 @@ const MushroomsVisualization: React.FC<VisualizationProps> = ({
   const treeDensity = getNumberSetting(customSettings.treeDensity, 0.75, 0, 1);
   const feedbackAmount = getNumberSetting(customSettings.feedbackAmount, 0.55, 0, 1);
   const feedbackWarp = getNumberSetting(customSettings.feedbackWarp, 0.35, 0, 1);
+  const taaStrength = getNumberSetting(customSettings.taaStrength, 0.85, 0, 1);
+  const taaClamp = getNumberSetting(customSettings.taaClamp, 0.35, 0, 1);
+  const dither = getNumberSetting(customSettings.dither, 0.55, 0, 1);
 
   // Map legacy-ish worldDensitySetting [5..80] into 0..1
   const userDensity = (worldDensitySetting - 5) / (80 - 5);
@@ -551,6 +672,9 @@ const MushroomsVisualization: React.FC<VisualizationProps> = ({
           showGround={showGround}
           feedbackAmount={feedbackAmount}
           feedbackWarp={feedbackWarp}
+          taaStrength={taaStrength}
+          taaClamp={taaClamp}
+          dither={dither}
         />
       </Canvas>
     </div>
