@@ -551,7 +551,7 @@ fn list_images_in_folder(folder_path: String) -> Result<Vec<String>, String> {
     use std::fs;
     use std::path::Path;
     
-    eprintln!("Listing images in folder: {}", folder_path);
+    eprintln!("Listing media files in folder: {}", folder_path);
     
     let path = Path::new(&folder_path);
     if !path.exists() {
@@ -564,8 +564,9 @@ fn list_images_in_folder(folder_path: String) -> Result<Vec<String>, String> {
         return Err(format!("Path is not a directory: {}", folder_path));
     }
     
-    let mut images = Vec::new();
-    let image_extensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"];
+    let mut media_files = Vec::new();
+    let image_extensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif"];
+    let video_extensions = ["mp4", "mov", "webm", "m4v", "avi", "mkv"];
     
     match fs::read_dir(path) {
         Ok(entries) => {
@@ -575,23 +576,23 @@ fn list_images_in_folder(folder_path: String) -> Result<Vec<String>, String> {
                     if entry_path.is_file() {
                         if let Some(ext) = entry_path.extension() {
                             let ext_str = ext.to_string_lossy().to_lowercase();
-                            if image_extensions.contains(&ext_str.as_str()) {
+                            if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
                                 if let Some(path_str) = entry_path.to_str() {
-                                    images.push(path_str.to_string());
+                                    media_files.push(path_str.to_string());
                                 }
                             }
                         }
                     }
                 }
             }
-            images.sort();
-            eprintln!("Found {} images in folder", images.len());
-            if images.is_empty() {
-                eprintln!("WARNING: No images found in folder");
+            media_files.sort();
+            eprintln!("Found {} media files in folder", media_files.len());
+            if media_files.is_empty() {
+                eprintln!("WARNING: No media files found in folder");
             } else {
-                eprintln!("First image: {}", images[0]);
+                eprintln!("First file: {}", media_files[0]);
             }
-            Ok(images)
+            Ok(media_files)
         }
         Err(e) => {
             eprintln!("ERROR: Failed to read directory: {}", e);
