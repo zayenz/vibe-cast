@@ -75,9 +75,9 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
   const [currentRepeat, setCurrentRepeat] = useState(0);
-  const [animationKey, setAnimationKey] = useState(0);
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRepeatRef = useRef<number | null>(null);
 
   const duration = getNumberSetting(settings.duration, 10, 5, 20);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
@@ -104,10 +104,9 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     
     const nextRepeat = currentRepeat + 1;
     if (nextRepeat < repeatCount) {
-      // Increment repeat counter - this will change the key and trigger exit
-      setCurrentRepeat(nextRepeat);
-      // Change the animation key to trigger AnimatePresence exit/enter cycle
-      setAnimationKey(prev => prev + 1);
+      // Store the next repeat number and trigger exit by clearing displayMessage
+      pendingRepeatRef.current = nextRepeat;
+      setDisplayMessage(null); // Trigger exit animation
     } else {
       // All repeats done - clear display to trigger exit
       completedRef.current = true;
@@ -125,13 +124,19 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     if (completedRef.current) {
       // All done - call onComplete
       setCurrentRepeat(0);
-      setAnimationKey(0);
+      pendingRepeatRef.current = null;
       onComplete?.();
       return;
     }
     
-    // Exit complete - next repeat will start automatically because key changed
-    // and displayMessage is still set, so AnimatePresence will enter the new element
+    // Exit complete - if we have a pending repeat, start it
+    if (pendingRepeatRef.current !== null) {
+      const nextRepeat = pendingRepeatRef.current;
+      pendingRepeatRef.current = null;
+      setCurrentRepeat(nextRepeat);
+      // Restore displayMessage to trigger enter animation for next repeat
+      setDisplayMessage(message);
+    }
   };
 
   useEffect(() => {
@@ -139,7 +144,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Reset completion flag and repeat counter
       completedRef.current = false;
       setCurrentRepeat(0);
-      setAnimationKey(0);
+      pendingRepeatRef.current = null;
       // Clear any pending timeouts
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
@@ -185,7 +190,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       <AnimatePresence mode="wait" onExitComplete={handleExitComplete}>
         {displayMessage && (
           <motion.div
-            key={`${messageTimestamp}-${currentRepeat}-${animationKey}`}
+            key={`${messageTimestamp}-${currentRepeat}`}
             initial={{ x: '100%' }}
             animate={{ x: '-100%' }}
             exit={{ opacity: 0 }}
