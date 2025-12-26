@@ -78,6 +78,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const [viewportWidth, setViewportWidth] = useState<number>(() => 
     typeof window !== 'undefined' ? window.innerWidth : 1920
   );
+  const [animationEnd, setAnimationEnd] = useState<string>('');
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationKeyRef = useRef(0);
@@ -112,20 +113,37 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Helper function to calculate animation parameters
+  const calculateAnimationParams = (msg: string) => {
+    const textWidth = msg.length * (fontSize * 0.6 * 16);
+    const scrollDistance = viewportWidth + textWidth;
+    const scrollSpeed = viewportWidth / duration;
+    const animDuration = scrollDistance / scrollSpeed;
+    const endPos = `-${scrollDistance}px`;
+    return { endPos, animDuration, scrollDistance };
+  };
+
+  // Get animation duration for current message
+  const getAnimationDuration = () => {
+    if (!displayMessage) return duration;
+    const { animDuration } = calculateAnimationParams(displayMessage);
+    return animDuration;
+  };
+
   // Handle completion - supports repeatCount
   const handleComplete = () => {
-    if (completedRef.current) return;
+    if (completedRef.current || !displayMessage) return;
     
     // Use ref to avoid stale closure issues
     const currentRepeatValue = currentRepeatRef.current;
     const nextRepeat = currentRepeatValue + 1;
     
     if (nextRepeat < repeatCount) {
-      // More repeats needed - increment repeat counter and animation key to restart animation
+      // More repeats needed - increment repeat counter
+      // The useEffect below will detect the change and restart the animation
       currentRepeatRef.current = nextRepeat;
       setCurrentRepeat(nextRepeat);
-      animationKeyRef.current += 1;
-      // The key change will cause the motion.div to remount and restart the animation
+      // Don't change the key - let the useEffect handle restarting the animation
     } else {
       // All repeats done
       completedRef.current = true;
@@ -141,6 +159,24 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       }, 300);
     }
   };
+
+  // Restart animation when currentRepeat changes (for repeat functionality)
+  // Only run when currentRepeat > 0 (i.e., for repeats, not initial render)
+  useEffect(() => {
+    if (!displayMessage || completedRef.current || currentRepeat === 0) return;
+    
+    // This is a repeat - restart the animation
+    const { endPos } = calculateAnimationParams(displayMessage);
+    
+    // Reset to start position first, then animate to end
+    // Use double requestAnimationFrame to ensure the reset happens before the animation starts
+    requestAnimationFrame(() => {
+      setAnimationEnd(`${viewportWidth}px`);
+      requestAnimationFrame(() => {
+        setAnimationEnd(endPos);
+      });
+    });
+  }, [currentRepeat, displayMessage, viewportWidth, fontSize, duration]);
 
   // Reset state only when message or messageTimestamp changes (new message triggered)
   useEffect(() => {
@@ -159,15 +195,15 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Immediately show the message
       setDisplayMessage(message);
       
+      // Calculate and set initial animation end position
+      const { endPos, animDuration } = calculateAnimationParams(message);
+      setAnimationEnd(endPos);
+      
+      // For the first render, use animate prop. For repeats, we'll use controls.
+      // The initial render will use the animate prop with endPos
+      
       // Safety timeout: ensure message is cleared even if animation doesn't complete
-      // Estimate text width: each character is roughly fontSize * 0.6rem
-      const estimatedTextWidth = message.length * (fontSize * 0.6 * 16); // Convert rem to px
-      const totalScrollDistance = viewportWidth + estimatedTextWidth;
-      // Calculate actual duration needed based on scroll distance and speed
-      // Speed = viewportWidth / duration (in pixels per second)
-      const speed = viewportWidth / duration; // pixels per second
-      const actualDuration = totalScrollDistance / speed; // seconds needed
-      const totalDuration = actualDuration * repeatCount;
+      const totalDuration = animDuration * repeatCount;
       safetyTimeoutRef.current = setTimeout(() => {
         if (!completedRef.current) {
           completedRef.current = true;
@@ -185,18 +221,6 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     }
   }, [message, messageTimestamp, duration, fontSize, repeatCount, viewportWidth, onComplete]);
 
-  // Calculate the end position based on viewport width and text width
-  // Estimate text width: each character is roughly fontSize * 0.6rem
-  const estimatedTextWidth = displayMessage ? displayMessage.length * (fontSize * 0.6 * 16) : 0; // Convert rem to px
-  const totalScrollDistance = viewportWidth + estimatedTextWidth;
-  // Calculate actual duration needed to scroll the full distance
-  // Speed = viewportWidth / duration (pixels per second)
-  const speed = viewportWidth / duration;
-  const actualDuration = totalScrollDistance / speed;
-  // Calculate end position: start at 100vw (right edge of viewport), scroll by totalScrollDistance
-  // End position = -(viewportWidth + textWidth) to ensure text fully scrolls off
-  const endPosition = `-${totalScrollDistance}px`;
-
   return (
     <div 
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
@@ -204,11 +228,11 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     >
       {displayMessage && (
         <motion.div
-          key={`${messageTimestamp}-${currentRepeat}-${animationKeyRef.current}`}
+          key={`${messageTimestamp}`}
           initial={{ x: `${viewportWidth}px` }}
-          animate={{ x: endPosition }}
+          animate={{ x: animationEnd }}
           exit={{ opacity: 0 }}
-          transition={{ duration: actualDuration, ease: "linear" }}
+          transition={{ duration: getAnimationDuration(), ease: "linear" }}
           onAnimationComplete={handleComplete}
           className="whitespace-nowrap"
           style={{ willChange: 'transform' }}
