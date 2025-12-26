@@ -175,11 +175,13 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   messageTimestamp,
   settings,
   verticalOffset = 0,
+  repeatCount = 1,
   onComplete,
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [displayedChars, setDisplayedChars] = useState<number>(0);
   const [scrollPosition, setScrollPosition] = useState(0);
+  const [currentRepeat, setCurrentRepeat] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const completedRef = useRef(false);
@@ -217,11 +219,21 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   }, []);
 
   const handleComplete = () => {
-    if (!completedRef.current) {
+    if (completedRef.current) return;
+    
+    const nextRepeat = currentRepeat + 1;
+    if (nextRepeat < repeatCount) {
+      // Reset for next repeat
+      setCurrentRepeat(nextRepeat);
+      setDisplayedChars(0);
+      setScrollPosition(0);
+    } else {
+      // All repeats done
       completedRef.current = true;
       setIsVisible(false);
       setDisplayedChars(0);
       setScrollPosition(0);
+      setCurrentRepeat(0);
       onComplete?.();
     }
   };
@@ -233,10 +245,11 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
       setIsVisible(true);
       setDisplayedChars(0);
       setScrollPosition(0);
+      setCurrentRepeat(0);
     }
   }, [message, messageTimestamp]);
 
-  // Scroll animation
+  // Scroll animation - restart on each repeat
   useEffect(() => {
     if (!isVisible || !message) return;
 
@@ -269,7 +282,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isVisible, message, scrollSpeed, charWidth, viewportWidth]);
+  }, [isVisible, message, scrollSpeed, charWidth, viewportWidth, currentRepeat]);
 
   // Render dots on canvas
   useEffect(() => {

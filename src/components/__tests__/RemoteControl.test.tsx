@@ -21,6 +21,19 @@ function renderRemoteControl() {
   return render(<RouterProvider router={router} />);
 }
 
+// Helper to create mock state with presets
+const createMockState = (overrides: Record<string, unknown> = {}) => ({
+  activeVisualization: 'fireplace',
+  visualizationPresets: [
+    { id: 'preset-1', name: 'Fireplace Default', visualizationId: 'fireplace', settings: {}, enabled: true },
+    { id: 'preset-2', name: 'Techno Default', visualizationId: 'techno', settings: {}, enabled: true },
+  ],
+  activeVisualizationPreset: null,
+  commonSettings: { intensity: 1.0, dim: 1.0 },
+  messages: [],
+  ...overrides,
+});
+
 describe('RemoteControl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,10 +59,9 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        mode: 'fireplace',
-        messages: ['Test Message'],
-      });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: '1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -68,7 +80,7 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+      sse?.simulateEvent('state', createMockState());
     });
 
     await waitFor(() => {
@@ -82,7 +94,7 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+      sse?.simulateEvent('state', createMockState());
     });
 
     await waitFor(() => {
@@ -109,7 +121,9 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Hello World'] });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: '1', text: 'Hello World', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -136,7 +150,9 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Initial'] });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: '1', text: 'Initial', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -146,7 +162,13 @@ describe('RemoteControl', () => {
     // Simulate state update from SSE (e.g., from another client changing mode)
     await act(async () => {
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'techno', messages: ['Initial', 'New Message'] });
+      sse?.simulateEvent('state', createMockState({
+        activeVisualization: 'techno',
+        messages: [
+          { id: '1', text: 'Initial', textStyle: 'scrolling-capitals' },
+          { id: '2', text: 'New Message', textStyle: 'scrolling-capitals' },
+        ],
+      }));
     });
 
     await waitFor(() => {
@@ -160,7 +182,7 @@ describe('RemoteControl', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+      sse?.simulateEvent('state', createMockState());
     });
 
     await waitFor(() => {

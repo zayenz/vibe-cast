@@ -59,7 +59,8 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   const handleUpdatePreset = (id: string) => {
     onUpdatePreset(id, formData);
     setEditingId(null);
-    setFormData({ name: '', visualizationId: '', settings: {} });
+    // Reset to default values, not empty - ensures next Create modal works
+    setFormData({ name: '', visualizationId: visualizationRegistry[0]?.id || '', settings: {} });
   };
 
   const handleEditPreset = (preset: VisualizationPreset) => {
@@ -74,7 +75,8 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   const handleCancelEdit = () => {
     setEditingId(null);
     setShowCreateModal(false);
-    setFormData({ name: '', visualizationId: '', settings: {} });
+    // Reset to default values, not empty - ensures next Create modal works
+    setFormData({ name: '', visualizationId: visualizationRegistry[0]?.id || '', settings: {} });
   };
 
   const handleVisualizationChange = (vizId: string) => {
@@ -100,7 +102,14 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
           Visualization Presets
         </h3>
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => {
+            // Reset form data to defaults when opening create modal
+            const defaultVizId = visualizationRegistry[0]?.id || '';
+            const defaultViz = getVisualization(defaultVizId);
+            const defaultSettings = defaultViz ? getDefaultsFromSchema(defaultViz.settingsSchema) : {};
+            setFormData({ name: '', visualizationId: defaultVizId, settings: defaultSettings });
+            setShowCreateModal(true);
+          }}
           className="flex items-center gap-2 px-3 py-1.5 bg-orange-500 text-white rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-orange-600 transition-colors"
         >
           <Plus size={14} />

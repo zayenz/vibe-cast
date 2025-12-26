@@ -73,9 +73,11 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
   messageTimestamp,
   settings,
   verticalOffset = 0,
+  repeatCount = 1,
   onComplete,
 }) => {
   const [displayedText, setDisplayedText] = useState('');
+  const completedRef = useRef(false);
   // IMPORTANT: parent often passes a new function each render; don't let that restart typing.
   const onCompleteRef = useRef<TextStyleProps['onComplete']>(onComplete);
 
@@ -104,6 +106,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
     }
 
     // Reset state when message changes
+    completedRef.current = false;
     setDisplayedText('');
     
     // Start with first character immediately
@@ -112,6 +115,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
     }
     
     let currentIndex = 1;
+    let localRepeat = 0;
     let completeTimer: ReturnType<typeof setTimeout> | null = null;
 
     const typeInterval = setInterval(() => {
@@ -119,11 +123,29 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
         setDisplayedText(message.slice(0, currentIndex + 1));
         currentIndex++;
       } else {
-        clearInterval(typeInterval);
-        // Wait a bit before calling onComplete
-        completeTimer = setTimeout(() => {
-          onCompleteRef.current?.();
-        }, 1000);
+        // Finished one pass
+        localRepeat++;
+        if (localRepeat < repeatCount) {
+          // Reset for next repeat
+          currentIndex = 0;
+          setDisplayedText('');
+          // Brief pause before repeating
+          setTimeout(() => {
+            if (!completedRef.current && message.length > 0) {
+              setDisplayedText(message[0]);
+              currentIndex = 1;
+            }
+          }, 500);
+        } else {
+          clearInterval(typeInterval);
+          // Wait a bit before calling onComplete
+          completeTimer = setTimeout(() => {
+            if (!completedRef.current) {
+              completedRef.current = true;
+              onCompleteRef.current?.();
+            }
+          }, 1000);
+        }
       }
     }, typingSpeed);
 
@@ -133,7 +155,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
         clearTimeout(completeTimer);
       }
     };
-  }, [message, messageTimestamp, typingSpeed]);
+  }, [message, messageTimestamp, typingSpeed, repeatCount]);
 
   if (!message) return null;
 

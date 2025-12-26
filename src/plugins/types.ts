@@ -145,6 +145,9 @@ export interface TextStyleProps {
   /** Vertical offset for stacking multiple messages */
   verticalOffset?: number;
   
+  /** Number of times to repeat the animation before completing (default: 1) */
+  repeatCount?: number;
+  
   /** Callback when the message display is complete */
   onComplete?: () => void;
 }

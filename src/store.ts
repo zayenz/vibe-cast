@@ -421,7 +421,6 @@ export const useStore = create<AppState>((set, get) => ({
   triggerMessage: (message, sync = true) => {
     console.log(`Triggering message: ${message.text}, sync=${sync}`);
     const timestamp = Date.now();
-    const repeatCount = message.repeatCount ?? 1;
     
     set(state => {
       // Update message stats
@@ -456,20 +455,8 @@ export const useStore = create<AppState>((set, get) => ({
       };
     });
     
-    // Trigger multiple times if repeatCount > 1
-    if (repeatCount > 1) {
-      const delays = Array.from({ length: repeatCount - 1 }, (_, i) => i + 1);
-      delays.forEach(delay => {
-        setTimeout(() => {
-          const newTimestamp = Date.now();
-          set(state => {
-            const newActiveMessages = [...state.activeMessages, { message, timestamp: newTimestamp }];
-            const trimmedMessages = newActiveMessages.slice(-5);
-            return { activeMessages: trimmedMessages };
-          });
-        }, delay * 1000); // 1 second between repeats
-      });
-    }
+    // Note: repeatCount is now handled by the text style plugins themselves
+    // They will repeat the animation internally before calling onComplete
     
     if (sync) {
       syncState('TRIGGER_MESSAGE', message);

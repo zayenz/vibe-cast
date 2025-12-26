@@ -129,7 +129,7 @@ const AudioReactiveSphere: React.FC<AudioReactiveSphereProps> = ({
   const colorValue = new THREE.Color(sphereColor);
   
   return (
-    <Sphere ref={meshRef} args={[1, 128, 128]}>
+    <Sphere ref={meshRef} args={[1, 64, 64]}>
       <MeshDistortMaterial
         color={colorValue}
         speed={1.5}
@@ -202,7 +202,7 @@ const FrequencyBars: React.FC<FrequencyBarsProps> = ({
   return (
     <group ref={barsRef} position={[startX, -3, 0]}>
       {Array.from({ length: barCount }, (_, i) => (
-        <mesh key={`bar-${i}-${barCount}`} position={[i * barSpacing, 0, 0]}>
+        <mesh key={`bar-${i}`} position={[i * barSpacing, 0, 0]}>
           <boxGeometry args={[barWidth, 1, barWidth]} />
           <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.5} />
         </mesh>

@@ -70,9 +70,11 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   messageTimestamp,
   settings,
   verticalOffset = 0,
+  repeatCount = 1,
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
+  const [currentRepeat, setCurrentRepeat] = useState(0);
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -95,24 +97,40 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     ? `0 5px ${glowSize}px rgba(255, 255, 255, ${glowIntensity})`
     : 'none';
 
-  // Handle completion - only call once
+  // Handle completion - supports repeatCount
   const handleComplete = () => {
-    if (!completedRef.current) {
+    if (completedRef.current) return;
+    
+    const nextRepeat = currentRepeat + 1;
+    if (nextRepeat < repeatCount) {
+      // Reset for next repeat - briefly clear display then show again
+      setDisplayMessage(null);
+      setCurrentRepeat(nextRepeat);
+      // Use a small timeout to reset the animation
+      setTimeout(() => {
+        if (!completedRef.current) {
+          setDisplayMessage(message);
+        }
+      }, 50);
+    } else {
+      // All repeats done
       completedRef.current = true;
       setDisplayMessage(null);
-      onComplete?.();
+      setCurrentRepeat(0);
       // Clear safety timeout if it exists
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
+      onComplete?.();
     }
   };
 
   useEffect(() => {
     if (message) {
-      // Reset completion flag
+      // Reset completion flag and repeat counter
       completedRef.current = false;
+      setCurrentRepeat(0);
       // Immediately show the message
       setDisplayMessage(message);
       
@@ -125,9 +143,16 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Assume viewport is roughly 100rem wide (typical), so if text is longer, add buffer
       const textWidthRatio = Math.max(1, estimatedTextWidthRem / 100);
       const bufferTime = Math.max(3, textWidthRatio * 2); // At least 3 seconds, more for long text
+      // Safety timeout must account for all repeats
+      const totalDuration = (duration + bufferTime) * repeatCount;
       safetyTimeoutRef.current = setTimeout(() => {
-        handleComplete();
-      }, (duration + bufferTime) * 1000);
+        if (!completedRef.current) {
+          completedRef.current = true;
+          setDisplayMessage(null);
+          setCurrentRepeat(0);
+          onComplete?.();
+        }
+      }, totalDuration * 1000);
       
       return () => {
         if (safetyTimeoutRef.current) {
@@ -136,7 +161,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, duration, fontSize, onComplete]);
+  }, [message, messageTimestamp, duration, fontSize, repeatCount, onComplete]);
 
   return (
     <div 
@@ -146,7 +171,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       <AnimatePresence>
         {displayMessage && (
           <motion.div
-            key={messageTimestamp}
+            key={`${messageTimestamp}-${currentRepeat}`}
             initial={{ x: '100%' }}
             animate={{ x: '-100%' }}
             exit={{ opacity: 0 }}

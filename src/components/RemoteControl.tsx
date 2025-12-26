@@ -4,8 +4,7 @@ import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, 
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
-import { MessageConfig } from '../plugins/types';
-import { useStore } from '../store';
+import { MessageConfig, VisualizationPreset } from '../plugins/types';
 
 // Remote runs in browser on the same origin as the Axum server, so no API base needed
 const API_BASE = '';
@@ -18,13 +17,12 @@ const iconMap: Record<string, React.ReactNode> = {
 };
 
 export const RemoteControl: React.FC = () => {
-  // SSE-based state - single source of truth
+  // SSE-based state - single source of truth for everything
   const { state, isConnected, error } = useAppState({ apiBase: API_BASE });
   
-  // Store for presets
-  const visualizationPresets = useStore((s) => s.visualizationPresets);
-  const activeVisualizationPreset = useStore((s) => s.activeVisualizationPreset);
-  const setActiveVisualizationPreset = useStore((s) => s.setActiveVisualizationPreset);
+  // Get presets from SSE state (not local store - remote runs in browser without Tauri)
+  const visualizationPresets: VisualizationPreset[] = state?.visualizationPresets ?? [];
+  const activeVisualizationPreset: string | null = state?.activeVisualizationPreset ?? null;
   
   // Fetcher for form submissions
   const fetcher = useFetcher();
@@ -80,7 +78,7 @@ export const RemoteControl: React.FC = () => {
   }
 
   const handleSetActivePreset = (id: string | null) => {
-    setActiveVisualizationPreset(id);
+    // Only send command - SSE will update the state
     sendCommand('set-active-visualization-preset', id);
   };
 

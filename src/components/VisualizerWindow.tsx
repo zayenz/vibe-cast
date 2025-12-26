@@ -16,8 +16,9 @@ const TextStyleRenderer: React.FC<{
   textStyleSettings: Record<string, Record<string, unknown>>;
   textStylePresets: Array<{ id: string; name: string; textStyleId: string; settings: Record<string, unknown> }>;
   verticalOffset?: number;
+  repeatCount?: number;
   onComplete: () => void;
-}> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, onComplete }) => {
+}> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, repeatCount = 1, onComplete }) => {
   // Determine which text style to use
   const preset = message.textStylePreset 
     ? textStylePresets.find(p => p.id === message.textStylePreset)
@@ -44,6 +45,7 @@ const TextStyleRenderer: React.FC<{
         messageTimestamp={messageTimestamp}
         settings={settings}
         verticalOffset={verticalOffset}
+        repeatCount={repeatCount}
         onComplete={onComplete}
       />
     );
@@ -62,6 +64,7 @@ const TextStyleRenderer: React.FC<{
       messageTimestamp={messageTimestamp}
       settings={settings}
       verticalOffset={verticalOffset}
+      repeatCount={repeatCount}
       onComplete={onComplete}
     />
   );
@@ -209,6 +212,23 @@ export const VisualizerWindow: React.FC = () => {
           break;
         case 'set-active-visualization':
           setActiveVisualization(payload, false);
+          break;
+        case 'set-active-visualization-preset':
+          // Handle preset activation from remote
+          useStore.setState({ activeVisualizationPreset: payload });
+          // Also update active visualization based on preset
+          if (payload) {
+            const preset = useStore.getState().visualizationPresets.find(p => p.id === payload);
+            if (preset) {
+              setActiveVisualization(preset.visualizationId, false);
+            }
+          }
+          break;
+        case 'set-visualization-presets':
+          // Update visualization presets from remote
+          if (payload && Array.isArray(payload)) {
+            useStore.setState({ visualizationPresets: payload });
+          }
           break;
         case 'trigger-message':
           // Handle both legacy string and new MessageConfig formats
@@ -463,6 +483,7 @@ export const VisualizerWindow: React.FC = () => {
             textStyleSettings={textStyleSettings}
             textStylePresets={textStylePresets}
             verticalOffset={index * 80} // Stack messages with 80px spacing
+            repeatCount={message.repeatCount ?? 1}
             onComplete={() => clearMessage(timestamp, false)}
           />
         ))}

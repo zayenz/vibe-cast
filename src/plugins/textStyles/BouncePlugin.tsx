@@ -88,10 +88,12 @@ const BounceStyle: React.FC<TextStyleProps> = ({
   messageTimestamp,
   settings,
   verticalOffset = 0,
+  repeatCount = 1,
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
   const [isFadingOut, setIsFadingOut] = useState(false);
+  const [currentRepeat, setCurrentRepeat] = useState(0);
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -118,16 +120,33 @@ const BounceStyle: React.FC<TextStyleProps> = ({
 
   const handleComplete = () => {
     if (completedRef.current) return;
-    completedRef.current = true;
-    setDisplayMessage(null);
-    setIsFadingOut(false);
-    onComplete?.();
+    
+    const nextRepeat = currentRepeat + 1;
+    if (nextRepeat < repeatCount) {
+      // Reset for next repeat
+      setDisplayMessage(null);
+      setIsFadingOut(false);
+      setCurrentRepeat(nextRepeat);
+      // Brief pause then show again
+      setTimeout(() => {
+        if (!completedRef.current) {
+          setDisplayMessage(message);
+        }
+      }, 100);
+    } else {
+      completedRef.current = true;
+      setDisplayMessage(null);
+      setIsFadingOut(false);
+      setCurrentRepeat(0);
+      onComplete?.();
+    }
   };
 
   useEffect(() => {
     if (message) {
-      // Reset completion flag
+      // Reset completion flag and repeat counter
       completedRef.current = false;
+      setCurrentRepeat(0);
       
       // Immediately show the message
       setDisplayMessage(message);
@@ -139,10 +158,18 @@ const BounceStyle: React.FC<TextStyleProps> = ({
       }, displayDuration * 1000);
 
       // Safety timeout: ensure message is removed even if animation doesn't complete
-      const totalDuration = (displayDuration + fadeOutDuration) * 1000;
+      // Account for all repeats
+      const singleCycleDuration = (displayDuration + fadeOutDuration + 0.1) * 1000;
+      const totalDuration = singleCycleDuration * repeatCount;
       const safetyBuffer = 1000; // 1 second buffer
       safetyTimeoutRef.current = setTimeout(() => {
-        handleComplete();
+        if (!completedRef.current) {
+          completedRef.current = true;
+          setDisplayMessage(null);
+          setIsFadingOut(false);
+          setCurrentRepeat(0);
+          onComplete?.();
+        }
       }, totalDuration + safetyBuffer);
       
       return () => {
@@ -152,7 +179,7 @@ const BounceStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, displayDuration, fadeOutDuration]);
+  }, [message, messageTimestamp, displayDuration, fadeOutDuration, repeatCount, onComplete]);
 
   // Handle fade-out completion
   useEffect(() => {
@@ -205,7 +232,7 @@ const BounceStyle: React.FC<TextStyleProps> = ({
       <AnimatePresence>
         {displayMessage && (
           <motion.div
-            key={messageTimestamp}
+            key={`${messageTimestamp}-${currentRepeat}`}
             initial="hidden"
             animate={isFadingOut ? "fadingOut" : "visible"}
             exit="fadingOut"
