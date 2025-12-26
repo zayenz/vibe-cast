@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
 
@@ -75,9 +75,15 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
   const [currentRepeat, setCurrentRepeat] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState<number>(() => 
+    typeof window !== 'undefined' ? window.innerWidth : 1920
+  );
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRepeatRef = useRef<number | null>(null);
+  const animationKeyRef = useRef(0);
+  const currentRepeatRef = useRef(0); // Use ref to track current repeat to avoid stale closures
+  const spanRef = useRef<HTMLSpanElement>(null);
+  const lastMessageTimestampRef = useRef<number>(0); // Track last message timestamp to detect new messages
 
   const duration = getNumberSetting(settings.duration, 10, 5, 20);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
@@ -98,17 +104,30 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     ? `0 5px ${glowSize}px rgba(255, 255, 255, ${glowIntensity})`
     : 'none';
 
+  // Track viewport width for responsive calculations
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Handle completion - supports repeatCount
   const handleComplete = () => {
     if (completedRef.current) return;
     
-    const nextRepeat = currentRepeat + 1;
+    // Use ref to avoid stale closure issues
+    const currentRepeatValue = currentRepeatRef.current;
+    const nextRepeat = currentRepeatValue + 1;
+    
     if (nextRepeat < repeatCount) {
-      // Store the next repeat number and trigger exit by clearing displayMessage
-      pendingRepeatRef.current = nextRepeat;
-      setDisplayMessage(null); // Trigger exit animation
+      // More repeats needed - increment repeat counter and animation key to restart animation
+      currentRepeatRef.current = nextRepeat;
+      setCurrentRepeat(nextRepeat);
+      animationKeyRef.current += 1;
+      // The key change will cause the motion.div to remount and restart the animation
     } else {
-      // All repeats done - clear display to trigger exit
+      // All repeats done
       completedRef.current = true;
       setDisplayMessage(null);
       // Clear safety timeout if it exists
@@ -116,35 +135,22 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
+      // Call onComplete after a brief delay to allow exit animation
+      setTimeout(() => {
+        onComplete?.();
+      }, 300);
     }
   };
 
-  // Handle exit completion from AnimatePresence
-  const handleExitComplete = () => {
-    if (completedRef.current) {
-      // All done - call onComplete
-      setCurrentRepeat(0);
-      pendingRepeatRef.current = null;
-      onComplete?.();
-      return;
-    }
-    
-    // Exit complete - if we have a pending repeat, start it
-    if (pendingRepeatRef.current !== null) {
-      const nextRepeat = pendingRepeatRef.current;
-      pendingRepeatRef.current = null;
-      setCurrentRepeat(nextRepeat);
-      // Restore displayMessage to trigger enter animation for next repeat
-      setDisplayMessage(message);
-    }
-  };
-
+  // Reset state only when message or messageTimestamp changes (new message triggered)
   useEffect(() => {
-    if (message) {
-      // Reset completion flag and repeat counter
+    if (message && messageTimestamp !== lastMessageTimestampRef.current) {
+      // New message - reset everything
+      lastMessageTimestampRef.current = messageTimestamp;
       completedRef.current = false;
+      currentRepeatRef.current = 0;
       setCurrentRepeat(0);
-      pendingRepeatRef.current = null;
+      animationKeyRef.current = 0;
       // Clear any pending timeouts
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
@@ -154,24 +160,21 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       setDisplayMessage(message);
       
       // Safety timeout: ensure message is cleared even if animation doesn't complete
-      // The animation goes from 100% to -100% (200% of viewport), but if text is longer
-      // than viewport, it needs additional time. Add buffer based on text length.
-      // Estimate: each character is roughly fontSize * 0.6rem wide
-      // For very long text, we need extra time beyond the base duration
-      const estimatedTextWidthRem = message.length * (fontSize * 0.6);
-      // Assume viewport is roughly 100rem wide (typical), so if text is longer, add buffer
-      const textWidthRatio = Math.max(1, estimatedTextWidthRem / 100);
-      const bufferTime = Math.max(3, textWidthRatio * 2); // At least 3 seconds, more for long text
-      // Safety timeout must account for all repeats plus exit animations between repeats
-      const exitTimeBetweenRepeats = 0.3; // 300ms for exit animation
-      const totalDuration = (duration + bufferTime) * repeatCount + (exitTimeBetweenRepeats * Math.max(0, repeatCount - 1));
+      // Estimate text width: each character is roughly fontSize * 0.6rem
+      const estimatedTextWidth = message.length * (fontSize * 0.6 * 16); // Convert rem to px
+      const totalScrollDistance = viewportWidth + estimatedTextWidth;
+      // Calculate actual duration needed based on scroll distance and speed
+      // Speed = viewportWidth / duration (in pixels per second)
+      const speed = viewportWidth / duration; // pixels per second
+      const actualDuration = totalScrollDistance / speed; // seconds needed
+      const totalDuration = actualDuration * repeatCount;
       safetyTimeoutRef.current = setTimeout(() => {
         if (!completedRef.current) {
           completedRef.current = true;
           setDisplayMessage(null);
-          // AnimatePresence will handle the exit, then onExitComplete will call onComplete
+          onComplete?.();
         }
-      }, totalDuration * 1000);
+      }, (totalDuration * 1000) + 500); // Add 500ms buffer
       
       return () => {
         if (safetyTimeoutRef.current) {
@@ -180,37 +183,49 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, duration, fontSize, repeatCount, onComplete]);
+  }, [message, messageTimestamp, duration, fontSize, repeatCount, viewportWidth, onComplete]);
+
+  // Calculate the end position based on viewport width and text width
+  // Estimate text width: each character is roughly fontSize * 0.6rem
+  const estimatedTextWidth = displayMessage ? displayMessage.length * (fontSize * 0.6 * 16) : 0; // Convert rem to px
+  const totalScrollDistance = viewportWidth + estimatedTextWidth;
+  // Calculate actual duration needed to scroll the full distance
+  // Speed = viewportWidth / duration (pixels per second)
+  const speed = viewportWidth / duration;
+  const actualDuration = totalScrollDistance / speed;
+  // Calculate end position: start at 100vw (right edge of viewport), scroll by totalScrollDistance
+  // End position = -(viewportWidth + textWidth) to ensure text fully scrolls off
+  const endPosition = `-${totalScrollDistance}px`;
 
   return (
     <div 
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
       style={{ transform: `translateY(${verticalOffset}px)` }}
     >
-      <AnimatePresence mode="wait" onExitComplete={handleExitComplete}>
-        {displayMessage && (
-          <motion.div
-            key={`${messageTimestamp}-${currentRepeat}`}
-            initial={{ x: '100%' }}
-            animate={{ x: '-100%' }}
-            exit={{ opacity: 0 }}
-            transition={{ duration, ease: "linear" }}
-            onAnimationComplete={handleComplete}
-            className="whitespace-nowrap"
+      {displayMessage && (
+        <motion.div
+          key={`${messageTimestamp}-${currentRepeat}-${animationKeyRef.current}`}
+          initial={{ x: `${viewportWidth}px` }}
+          animate={{ x: endPosition }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: actualDuration, ease: "linear" }}
+          onAnimationComplete={handleComplete}
+          className="whitespace-nowrap"
+          style={{ willChange: 'transform' }}
+        >
+          <span 
+            ref={spanRef}
+            className="font-black uppercase tracking-tighter"
+            style={{ 
+              fontSize: `${fontSize}rem`,
+              color,
+              textShadow,
+            }}
           >
-            <span 
-              className="font-black uppercase tracking-tighter"
-              style={{ 
-                fontSize: `${fontSize}rem`,
-                color,
-                textShadow,
-              }}
-            >
-              {displayMessage}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            {displayMessage}
+          </span>
+        </motion.div>
+      )}
     </div>
   );
 };
