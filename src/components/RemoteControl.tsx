@@ -4,7 +4,7 @@ import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, 
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
-import { MessageConfig, VisualizationPreset } from '../plugins/types';
+import { MessageConfig, VisualizationPreset, MessageTreeNode } from '../plugins/types';
 
 // Remote runs in browser on the same origin as the Axum server, so no API base needed
 const API_BASE = '';
@@ -33,7 +33,49 @@ export const RemoteControl: React.FC = () => {
   // Derive values with defaults
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
   const messages = state?.messages ?? [];
+  const messageTree: MessageTreeNode[] = state?.messageTree ?? [];
   const isPending = fetcher.state !== 'idle';
+
+  // Helper to render message tree with folders
+  const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
+    return nodes.map((node) => {
+      if (node.type === 'folder') {
+        return (
+          <div key={node.id}>
+            <div 
+              style={{ paddingLeft: `${depth * 12}px` }} 
+              className="text-xs text-zinc-500 font-bold uppercase tracking-wider mt-4 mb-2 px-2"
+            >
+              {node.name}
+            </div>
+            {renderMessageTree(node.children ?? [], depth + 1)}
+          </div>
+        );
+      } else {
+        const msg = node.message;
+        return (
+          <button
+            key={msg.id}
+            onClick={() => handleTriggerMessage(msg)}
+            disabled={isPending}
+            style={{ paddingLeft: `${depth * 12 + 20}px` }}
+            className="w-full p-5 bg-zinc-950 border border-zinc-800/50 rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
+            <div className="relative z-10 flex-1 min-w-0">
+              <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
+                {msg.text}
+              </span>
+              <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                {msg.textStyle.replace('-', ' ')}
+              </span>
+            </div>
+            <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
+          </button>
+        );
+      }
+    });
+  };
 
   // Helper to send commands via fetcher
   const sendCommand = (command: string, payload: unknown) => {
@@ -161,25 +203,27 @@ export const RemoteControl: React.FC = () => {
       <section className="relative flex-1 flex flex-col min-h-0">
         <h2 className="text-zinc-500 text-[10px] font-bold uppercase mb-6 tracking-[0.2em]">Broadcast</h2>
         <div className="flex-1 space-y-3 overflow-y-auto pb-8 custom-scrollbar">
-          {messages.map((msg) => (
-            <button
-              key={msg.id}
-              onClick={() => handleTriggerMessage(msg)}
-              disabled={isPending}
-              className="w-full p-5 bg-zinc-950 border border-zinc-800/50 rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50"
-            >
-              <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
-              <div className="relative z-10 flex-1 min-w-0">
-                <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
-                  {msg.text}
-                </span>
-                <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
-                  {msg.textStyle.replace('-', ' ')}
-                </span>
-              </div>
-              <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
-            </button>
-          ))}
+          {messageTree.length > 0 ? renderMessageTree(messageTree) : (
+            messages.map((msg) => (
+              <button
+                key={msg.id}
+                onClick={() => handleTriggerMessage(msg)}
+                disabled={isPending}
+                className="w-full p-5 bg-zinc-950 border border-zinc-800/50 rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
+                <div className="relative z-10 flex-1 min-w-0">
+                  <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
+                    {msg.text}
+                  </span>
+                  <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                    {msg.textStyle.replace('-', ' ')}
+                  </span>
+                </div>
+                <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
+              </button>
+            ))
+          )}
         </div>
       </section>
 

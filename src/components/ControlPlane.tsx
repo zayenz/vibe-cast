@@ -171,9 +171,7 @@ export const ControlPlane: React.FC = () => {
   // CRITICAL: NO early returns - always render the same structure
   // Use defaults if state is not available yet - always have values to render
   const activeVisualization = state?.activeVisualization ?? 'fireplace';
-  const enabledVisualizations = state?.enabledVisualizations ?? ['fireplace', 'techno'];
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
-  const visualizationSettings = state?.visualizationSettings ?? {};
   // Message tree (folders). SSE may or may not provide it; if missing we derive a flat tree from `messages`.
   const buildFlatTree = (msgs: MessageConfig[]): MessageTreeNode[] =>
     msgs.map((m) => ({ type: 'message', id: m.id, message: m }));
@@ -554,17 +552,8 @@ export const ControlPlane: React.FC = () => {
   };
 
   const handleSaveConfig = async () => {
-    // Create configuration object
-    const config: AppConfiguration = {
-      version: 1,
-      activeVisualization,
-      enabledVisualizations,
-      commonSettings,
-      visualizationSettings,
-      messages,
-      defaultTextStyle,
-      textStyleSettings,
-    };
+    // Get complete configuration from store
+    const config = useStore.getState().getConfiguration();
     
     // Download as JSON file
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });

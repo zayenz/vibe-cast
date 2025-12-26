@@ -117,11 +117,13 @@ const VisualizationRenderer: React.FC<{
     const customSettings = { ...defaultSettings, ...storedSettings };
     
     return (
-      <VizComponent
-        audioData={audioData}
-        commonSettings={commonSettings}
-        customSettings={customSettings}
-      />
+      <div className="w-full h-full">
+        <VizComponent
+          audioData={audioData}
+          commonSettings={commonSettings}
+          customSettings={customSettings}
+        />
+      </div>
     );
   }
 
@@ -134,11 +136,13 @@ const VisualizationRenderer: React.FC<{
   // Avoid per-frame logging here; it can cause long-run degradation/crashes in WebViews.
 
   return (
-    <VizComponent
-      audioData={audioData}
-      commonSettings={commonSettings}
-      customSettings={customSettings}
-    />
+    <div className="w-full h-full">
+      <VizComponent
+        audioData={audioData}
+        commonSettings={commonSettings}
+        customSettings={customSettings}
+      />
+    </div>
   );
 };
 
@@ -173,6 +177,9 @@ export const VisualizerWindow: React.FC = () => {
   
   // Legacy compatibility
   const setMode = useStore((state) => state.setMode);
+
+  // Determine which visualization and settings to use based on preset
+  const targetVizId = activePreset ? activePreset.visualizationId : activeVisualization;
 
   // Health watchdog: detect long-running stalls and attempt a safe remount.
   const [vizRemountKey, setVizRemountKey] = useState(0);
@@ -360,10 +367,9 @@ export const VisualizerWindow: React.FC = () => {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Determine which visualization and settings to use
-  const vizId = activePreset ? activePreset.visualizationId : activeVisualization;
+  // Get settings for the target visualization
   const vizSettings = activePreset 
-    ? { [vizId]: activePreset.settings }
+    ? { [targetVizId]: activePreset.settings }
     : visualizationSettings;
 
   useEffect(() => {
@@ -383,7 +389,7 @@ export const VisualizerWindow: React.FC = () => {
         console.warn('[VisualizerWindow] RAF stalled, attempting visualization remount', {
           msSinceRaf,
           msSinceAudio,
-          vizId,
+          targetVizId,
         });
         setRecoveryCount((c) => c + 1);
         setVizRemountKey((k) => k + 1);
@@ -396,7 +402,7 @@ export const VisualizerWindow: React.FC = () => {
       }
     }, 2_000);
     return () => window.clearInterval(interval);
-  }, [vizId]);
+  }, [targetVizId]);
 
   // Dev overlay (default OFF; opt-in via localStorage or query param)
   const devOverlayEnabledByQuery = useMemo(() => {
@@ -459,20 +465,22 @@ export const VisualizerWindow: React.FC = () => {
             pointerEvents: 'none',
           }}
         >
-          <div>vizId: {String(vizId)}</div>
+          <div>targetVizId: {String(targetVizId)}</div>
           <div>activePreset: {activePreset ? `${activePreset.name} (${activePreset.id})` : 'none'}</div>
           <div>audioData: {Array.isArray(audioData) ? audioData.length : 'n/a'}</div>
           <div>common: {commonSettings ? `intensity=${commonSettings.intensity} dim=${commonSettings.dim}` : 'n/a'}</div>
           <div>recoveryCount: {recoveryCount}</div>
         </div>
       )}
-      <VisualizationRenderer
-        key={vizRemountKey}
-        visualizationId={vizId}
-        audioData={audioData}
-        commonSettings={commonSettings}
-        visualizationSettings={vizSettings}
-      />
+      <div className="absolute inset-0">
+        <VisualizationRenderer
+          key={vizRemountKey}
+          visualizationId={targetVizId}
+          audioData={audioData}
+          commonSettings={commonSettings}
+          visualizationSettings={vizSettings}
+        />
+      </div>
       {/* Render all active messages - they can coexist with higher z-index */}
       <div className="absolute inset-0 pointer-events-none z-[100]">
         {activeMessages.map(({ message, timestamp }, index) => (

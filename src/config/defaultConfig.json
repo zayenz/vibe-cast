@@ -1,63 +1,111 @@
 {
   "version": 1,
-  "activeVisualization": "fireplace",
-  "enabledVisualizations": ["fireplace", "techno"],
+  "visualizationPresets": [
+    {
+      "id": "blue-glow-preset",
+      "name": "Blue glow",
+      "visualizationId": "fireplace",
+      "settings": {
+        "emberCount": 0,
+        "flameCount": 0,
+        "flameHeight": 0,
+        "glowColor": "#1e3a8a",
+        "showLogs": false
+      },
+      "enabled": true
+    },
+    {
+      "id": "trippy-mushrooms-preset",
+      "name": "Trippy mushrooms",
+      "visualizationId": "youtube",
+      "settings": {
+        "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
+        "showControls": false,
+        "muted": true,
+        "volume": 50
+      },
+      "enabled": true
+    },
+    {
+      "id": "fireplace-preset",
+      "name": "Fireplace",
+      "visualizationId": "fireplace",
+      "settings": {
+        "emberCount": 15,
+        "flameCount": 12,
+        "flameHeight": 1.0,
+        "glowColor": "#ea580c",
+        "showLogs": true
+      },
+      "enabled": true
+    },
+    {
+      "id": "techno-preset",
+      "name": "Techno",
+      "visualizationId": "techno",
+      "settings": {
+        "barCount": 48,
+        "sphereScale": 1.0,
+        "sphereDistort": 0.5,
+        "colorScheme": "rainbow",
+        "showSphere": false,
+        "showBars": true
+      },
+      "enabled": true
+    },
+    {
+      "id": "waves-preset",
+      "name": "Waves Default",
+      "visualizationId": "waves",
+      "settings": {
+        "waveCount": 4,
+        "waveSpeed": 1.0,
+        "waveHeight": 1.0,
+        "waveColor": "#3b82f6",
+        "opacity": 0.8
+      },
+      "enabled": false
+    },
+    {
+      "id": "particles-preset",
+      "name": "Particles Default",
+      "visualizationId": "particles",
+      "settings": {
+        "particleCount": 80,
+        "particleSize": 3,
+        "speed": 1.5,
+        "particleColor": "#f59e0b",
+        "colorful": true,
+        "spread": 1.5
+      },
+      "enabled": false
+    },
+    {
+      "id": "mushrooms-preset",
+      "name": "Mushrooms Default",
+      "visualizationId": "mushrooms",
+      "settings": {
+        "mushroomCount": 28,
+        "evolutionSpeed": 1.0,
+        "mushroomScale": 1.1,
+        "colorStyle": "deep-dream",
+        "colorIntensity": 1.25,
+        "seed": 13,
+        "showGround": true,
+        "showFog": true,
+        "fogDensity": 0.6
+      },
+      "enabled": false
+    }
+  ],
+  "activeVisualizationPreset": "blue-glow-preset",
   "commonSettings": {
     "intensity": 1.0,
     "dim": 1.0
   },
-  "visualizationSettings": {
-    "fireplace": {
-      "emberCount": 15,
-      "flameCount": 12,
-      "flameHeight": 1.0,
-      "glowColor": "#ea580c",
-      "showLogs": true
-    },
-    "techno": {
-      "barCount": 48,
-      "sphereScale": 1.0,
-      "sphereDistort": 0.5,
-      "colorScheme": "rainbow",
-      "showSphere": true,
-      "showBars": true
-    }
-  },
-  "messages": [
-    {
-      "id": "1",
-      "text": "Hello World!",
-      "textStyle": "scrolling-capitals"
-    },
-    {
-      "id": "2",
-      "text": "Keep it calm...",
-      "textStyle": "fade"
-    },
-    {
-      "id": "3",
-      "text": "TECHNO TIME",
-      "textStyle": "scrolling-capitals"
-    }
-  ],
+  "messages": [],
+  "messageTree": [],
   "defaultTextStyle": "scrolling-capitals",
-  "textStyleSettings": {
-    "scrolling-capitals": {
-      "duration": 10,
-      "fontSize": 8,
-      "color": "#ffffff",
-      "glowIntensity": 0.5,
-      "position": "top"
-    },
-    "fade": {
-      "displayDuration": 5,
-      "fadeInDuration": 0.5,
-      "fadeOutDuration": 0.5,
-      "fontSize": 5,
-      "color": "#ffffff",
-      "uppercase": false,
-      "fontWeight": "bold",
-      "blurAmount": 0
-    }
-  }
+  "textStyleSettings": {},
+  "textStylePresets": []
 }
