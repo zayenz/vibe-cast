@@ -134,6 +134,7 @@ const settingsSchema: SettingDefinition[] = [
     options: [
       { value: 'cover', label: 'Cover (fill screen)' },
       { value: 'contain', label: 'Contain (show full media)' },
+      { value: 'mosaic', label: 'Mosaic (2 portraits side-by-side)' },
       { value: 'fill', label: 'Fill (stretch)' }
     ],
     default: 'cover'
@@ -301,6 +302,8 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const [facePositions, setFacePositions] = useState<Map<string, FacePosition>>(new Map());
   // Map from image path to ready-to-display blob URL
   const [readyImages, setReadyImages] = useState<Map<string, string>>(new Map());
+  // Track whether images are portrait (height > width)
+  const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
   
   const timerRef = useRef<number | null>(null);
   // Store blob URLs for cleanup
@@ -357,13 +360,34 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
           
           console.log('[Photo Slideshow] Video ready:', path.split('/').pop());
         } else {
-          // For images, decode to ensure fully ready for display
+          // For images, ensure complete load and decode
           const img = new Image();
           img.src = blobUrl;
-          await img.decode();
-          console.log('[Photo Slideshow] Image ready:', path.split('/').pop());
+          
+          // Wait for complete load AND decode
+          await new Promise<void>((resolve, reject) => {
+            img.onload = async () => {
+              try {
+                // Ensure decode is complete
+                await img.decode();
+                
+                // Detect orientation for mosaic mode
+                const isPortrait = img.naturalHeight > img.naturalWidth;
+                setImageOrientations(prev => new Map(prev).set(path, isPortrait));
+                
+                console.log(`[Photo Slideshow] Image ready (${img.naturalWidth}x${img.naturalHeight}, ${isPortrait ? 'portrait' : 'landscape'}):`, path.split('/').pop());
+                resolve();
+              } catch (err) {
+                reject(err);
+              }
+            };
+            img.onerror = () => reject(new Error('Image load failed'));
+            // Timeout after 10 seconds
+            setTimeout(() => resolve(), 10000);
+          });
         }
         
+        // Only mark as ready after everything is complete
         blobUrls.current.set(path, blobUrl);
         setReadyImages(prev => new Map(prev).set(path, blobUrl));
         loadingPromises.current.delete(path);
@@ -630,18 +654,26 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const advanceToNext = async () => {
     if (images.length === 0) return;
     
+    // Check if we just showed a mosaic (two portraits side by side)
+    const currentIsPortrait = currentImage ? imageOrientations.get(currentImage) : false;
     const nextIdx = (currentIndex + 1) % images.length;
     const nextPath = images[nextIdx];
+    const nextIsPortrait = imageOrientations.get(nextPath);
+    const wasMosaic = fitMode === 'mosaic' && currentIsPortrait && nextIsPortrait && !isVideoFile(currentImage);
     
-    // Ensure next media has a ready blob URL before transitioning
+    // If we showed a mosaic, skip to the image after the partner
+    const targetIdx = wasMosaic ? (currentIndex + 2) % images.length : nextIdx;
+    const targetPath = images[targetIdx];
+    
+    // Ensure target media has a ready blob URL before transitioning
     // Use blobUrls ref for synchronous check (more reliable than state)
-    if (!blobUrls.current.has(nextPath)) {
+    if (!blobUrls.current.has(targetPath)) {
       console.log('[Photo Slideshow] Waiting for next media to be ready...');
-      const blobUrl = await preloadMedia(nextPath);
+      const blobUrl = await preloadMedia(targetPath);
       if (!blobUrl) {
         console.error('[Photo Slideshow] Failed to prepare next media, skipping');
         // Skip to the one after if this one failed
-        setCurrentIndex(nextIdx);
+        setCurrentIndex(targetIdx);
         return;
       }
     }
@@ -650,11 +682,11 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     const nextTransition = availableTransitions[Math.floor(Math.random() * availableTransitions.length)];
     
     setCurrentTransition(nextTransition);
-    setNextIndex(nextIdx);
+    setNextIndex(targetIdx);
     setIsTransitioning(true);
     
     setTimeout(() => {
-      setCurrentIndex(nextIdx);
+      setCurrentIndex(targetIdx);
       setNextIndex(null);
       setIsTransitioning(false);
     }, transitionDuration * 1000);
@@ -671,6 +703,22 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   
   const currentBlobUrl = getBlobUrl(currentImage);
   const nextBlobUrl = getBlobUrl(nextImage);
+  
+  // Check if we should use mosaic mode (two portraits side by side)
+  const currentIsPortrait = currentImage ? imageOrientations.get(currentImage) : false;
+  const nextIsPortrait = nextImage ? imageOrientations.get(nextImage) : false;
+  const useMosaic = fitMode === 'mosaic' && 
+                    currentIsPortrait && 
+                    !isVideoFile(currentImage) &&
+                    images.length > 1;
+  
+  // In mosaic mode, if next image is also portrait AND fully loaded, show both
+  // Must use readyImages state (not blobUrls ref) to ensure image is fully decoded
+  const nextIdx = (currentIndex + 1) % images.length;
+  const mosaicPartnerPath = images[nextIdx];
+  const mosaicPartnerLoaded = mosaicPartnerPath ? readyImages.has(mosaicPartnerPath) : false;
+  const mosaicPartner = useMosaic && nextIsPortrait && mosaicPartnerLoaded ? mosaicPartnerPath : null;
+  const mosaicPartnerUrl = mosaicPartner ? readyImages.get(mosaicPartner) : undefined;
   
   // Get face positions for both images
   const currentFacePosition = currentImage ? facePositions.get(currentImage) : undefined;
@@ -821,79 +869,124 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       
       {!error && !loading && images.length > 0 && currentImage && currentBlobUrl && (
         <div ref={containerRef} className="absolute inset-0 overflow-hidden">
-          {/* Current media (exiting during transition) - uses pre-decoded blob URL */}
-          {isVideoFile(currentImage) ? (
-            <video
-              ref={currentVideoRef}
-              key={`current-video-${currentIndex}`}
-              src={currentBlobUrl}
-              autoPlay
-              playsInline
-              muted={!videoSound}
-              className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
-              style={{
-                transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
-              }}
-              onError={(e) => {
-                console.error('[Photo Slideshow] Failed to display video:', currentImage);
-                console.error('[Photo Slideshow] Error event:', e);
-              }}
-            />
+          {/* Mosaic mode: Two portrait images side by side, always contain (never stretched) */}
+          {useMosaic && mosaicPartner && mosaicPartnerUrl ? (
+            <div className="absolute inset-0 flex justify-between items-center bg-black">
+              {/* Left image - anchored to left, contained within its half */}
+              <div className="h-full flex items-center" style={{ width: '49%' }}>
+                <img
+                  key={`mosaic-left-${currentIndex}`}
+                  src={currentBlobUrl}
+                  alt={`Photo ${currentIndex + 1}`}
+                  style={{
+                    maxHeight: '100%',
+                    maxWidth: '100%',
+                    objectFit: 'contain',
+                    transition: `opacity ${transitionDuration}s ease-in-out`,
+                    ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
+                  }}
+                  onError={(e) => {
+                    console.error('[Photo Slideshow] Failed to display image:', currentImage);
+                    console.error('[Photo Slideshow] Error event:', e);
+                  }}
+                />
+              </div>
+              {/* Right image - anchored to right, contained within its half */}
+              <div className="h-full flex items-center justify-end" style={{ width: '49%' }}>
+                <img
+                  key={`mosaic-right-${nextIdx}`}
+                  src={mosaicPartnerUrl}
+                  alt={`Photo ${nextIdx + 1}`}
+                  style={{
+                    maxHeight: '100%',
+                    maxWidth: '100%',
+                    objectFit: 'contain',
+                    transition: `opacity ${transitionDuration}s ease-in-out`,
+                  }}
+                  onError={(e) => {
+                    console.error('[Photo Slideshow] Failed to display mosaic partner:', mosaicPartner);
+                    console.error('[Photo Slideshow] Error event:', e);
+                  }}
+                />
+              </div>
+            </div>
           ) : (
-            <img
-              key={`current-${currentIndex}`}
-              src={currentBlobUrl}
-              alt={`Photo ${currentIndex + 1} of ${images.length}`}
-              className="absolute inset-0"
-              style={{
-                ...getSmartCropStyle(currentFacePosition),
-                transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
-              }}
-              onError={(e) => {
-                console.error('[Photo Slideshow] Failed to display image:', currentImage);
-                console.error('[Photo Slideshow] Error event:', e);
-              }}
-            />
-          )}
-          
-          {/* Next media (entering during transition) - uses pre-decoded blob URL */}
-          {isTransitioning && nextImage && nextBlobUrl && (
-            isVideoFile(nextImage) ? (
-              <video
-                key={`next-video-${nextIndex}`}
-                src={nextBlobUrl}
-                autoPlay
-                playsInline
-                muted
-                className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
-                style={{
-                  transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                  ...getTransitionStyles(currentTransition, 'enter'),
-                }}
-                onError={(e) => {
-                  console.error('[Photo Slideshow] Failed to display next video:', nextImage);
-                  console.error('[Photo Slideshow] Error event:', e);
-                }}
-              />
-            ) : (
-              <img
-                key={`next-${nextIndex}`}
-                src={nextBlobUrl}
-                alt={`Photo ${nextIndex! + 1} of ${images.length}`}
-                className="absolute inset-0"
-                style={{
-                  ...getSmartCropStyle(nextFacePosition),
-                  transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                  ...getTransitionStyles(currentTransition, 'enter'),
-                }}
-                onError={(e) => {
-                  console.error('[Photo Slideshow] Failed to display next image:', nextImage);
-                  console.error('[Photo Slideshow] Error event:', e);
-                }}
-              />
-            )
+            <>
+              {/* Current media (exiting during transition) - uses pre-decoded blob URL */}
+              {isVideoFile(currentImage) ? (
+                <video
+                  ref={currentVideoRef}
+                  key={`current-video-${currentIndex}`}
+                  src={currentBlobUrl}
+                  autoPlay
+                  playsInline
+                  muted={!videoSound}
+                  className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
+                  style={{
+                    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+                    ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
+                  }}
+                  onError={(e) => {
+                    console.error('[Photo Slideshow] Failed to display video:', currentImage);
+                    console.error('[Photo Slideshow] Error event:', e);
+                  }}
+                />
+              ) : (
+                <img
+                  key={`current-${currentIndex}`}
+                  src={currentBlobUrl}
+                  alt={`Photo ${currentIndex + 1} of ${images.length}`}
+                  className="absolute inset-0"
+                  style={{
+                    ...getSmartCropStyle(currentFacePosition),
+                    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+                    ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
+                  }}
+                  onError={(e) => {
+                    console.error('[Photo Slideshow] Failed to display image:', currentImage);
+                    console.error('[Photo Slideshow] Error event:', e);
+                  }}
+                />
+              )}
+              
+              {/* Next media (entering during transition) - uses pre-decoded blob URL */}
+              {isTransitioning && nextImage && nextBlobUrl && !useMosaic && (
+                isVideoFile(nextImage) ? (
+                  <video
+                    key={`next-video-${nextIndex}`}
+                    src={nextBlobUrl}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
+                    style={{
+                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+                      ...getTransitionStyles(currentTransition, 'enter'),
+                    }}
+                    onError={(e) => {
+                      console.error('[Photo Slideshow] Failed to display next video:', nextImage);
+                      console.error('[Photo Slideshow] Error event:', e);
+                    }}
+                  />
+                ) : (
+                  <img
+                    key={`next-${nextIndex}`}
+                    src={nextBlobUrl}
+                    alt={`Photo ${nextIndex! + 1} of ${images.length}`}
+                    className="absolute inset-0"
+                    style={{
+                      ...getSmartCropStyle(nextFacePosition),
+                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+                      ...getTransitionStyles(currentTransition, 'enter'),
+                    }}
+                    onError={(e) => {
+                      console.error('[Photo Slideshow] Failed to display next image:', nextImage);
+                      console.error('[Photo Slideshow] Error event:', e);
+                    }}
+                  />
+                )
+              )}
+            </>
           )}
         </div>
       )}
