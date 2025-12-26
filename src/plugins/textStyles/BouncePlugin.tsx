@@ -124,7 +124,6 @@ const BounceStyle: React.FC<TextStyleProps> = ({
     const nextRepeat = currentRepeat + 1;
     if (nextRepeat < repeatCount) {
       // Reset for next repeat
-      setDisplayMessage(null);
       setIsFadingOut(false);
       setCurrentRepeat(nextRepeat);
       // Brief pause then show again
@@ -180,20 +179,6 @@ const BounceStyle: React.FC<TextStyleProps> = ({
       };
     }
   }, [message, messageTimestamp, displayDuration, fadeOutDuration, repeatCount, onComplete]);
-
-  // Handle fade-out completion
-  useEffect(() => {
-    if (isFadingOut && displayMessage) {
-      // Set a timer to remove the message after fade-out duration
-      const fadeOutCompleteTimer = setTimeout(() => {
-        handleComplete();
-      }, fadeOutDuration * 1000);
-
-      return () => {
-        clearTimeout(fadeOutCompleteTimer);
-      };
-    }
-  }, [isFadingOut, displayMessage, fadeOutDuration]);
 
   const variants = {
     hidden: { 

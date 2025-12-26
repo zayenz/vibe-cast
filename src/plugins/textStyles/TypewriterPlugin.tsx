@@ -26,6 +26,15 @@ const settingsSchema: SettingDefinition[] = [
   },
   {
     type: 'range',
+    id: 'holdDuration',
+    label: 'Hold Duration (seconds)',
+    min: 0,
+    max: 5,
+    step: 0.1,
+    default: 1,
+  },
+  {
+    type: 'range',
     id: 'fontSize',
     label: 'Font Size (rem)',
     min: 2,
@@ -86,6 +95,7 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
   }, [onComplete]);
 
   const typingSpeed = getNumberSetting(settings.typingSpeed, 80, 30, 200);
+  const holdDuration = getNumberSetting(settings.holdDuration, 1, 0, 5);
   const fontSize = getNumberSetting(settings.fontSize, 4, 2, 12);
   const color = getStringSetting(settings.color, '#ffffff');
   const cursorColor = getStringSetting(settings.cursorColor, '#00ff00');
@@ -105,57 +115,49 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
       return;
     }
 
-    // Reset state when message changes
     completedRef.current = false;
     setDisplayedText('');
-    
-    // Start with first character immediately
-    if (message.length > 0) {
-      setDisplayedText(message[0]);
-    }
-    
-    let currentIndex = 1;
-    let localRepeat = 0;
-    let completeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const typeInterval = setInterval(() => {
-      if (currentIndex < message.length) {
-        setDisplayedText(message.slice(0, currentIndex + 1));
-        currentIndex++;
-      } else {
-        // Finished one pass
-        localRepeat++;
-        if (localRepeat < repeatCount) {
-          // Reset for next repeat
-          currentIndex = 0;
-          setDisplayedText('');
-          // Brief pause before repeating
-          setTimeout(() => {
-            if (!completedRef.current && message.length > 0) {
-              setDisplayedText(message[0]);
-              currentIndex = 1;
-            }
-          }, 500);
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let currentRepeat = 0;
+
+    const startTyping = () => {
+      if (completedRef.current) return;
+      let index = 0;
+      const typeNext = () => {
+        if (completedRef.current) return;
+        if (index < message.length) {
+          setDisplayedText(message.slice(0, index + 1));
+          index += 1;
+          timeout = setTimeout(typeNext, typingSpeed);
         } else {
-          clearInterval(typeInterval);
-          // Wait a bit before calling onComplete
-          completeTimer = setTimeout(() => {
-            if (!completedRef.current) {
+          // Finished one pass, hold before next repeat or completion
+          timeout = setTimeout(() => {
+            if (completedRef.current) return;
+            if (currentRepeat + 1 < repeatCount) {
+              currentRepeat += 1;
+              setDisplayedText('');
+              startTyping();
+            } else {
               completedRef.current = true;
               onCompleteRef.current?.();
             }
-          }, 1000);
+          }, holdDuration * 1000);
         }
-      }
-    }, typingSpeed);
+      };
+      typeNext();
+    };
+
+    // kick off typing
+    startTyping();
 
     return () => {
-      clearInterval(typeInterval);
-      if (completeTimer) {
-        clearTimeout(completeTimer);
+      completedRef.current = true;
+      if (timeout) {
+        clearTimeout(timeout);
       }
     };
-  }, [message, messageTimestamp, typingSpeed, repeatCount]);
+  }, [message, messageTimestamp, typingSpeed, repeatCount, holdDuration]);
 
   if (!message) return null;
 
