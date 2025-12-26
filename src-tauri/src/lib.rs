@@ -606,28 +606,27 @@ async fn get_photos_albums(app: tauri::AppHandle) -> Result<Vec<String>, String>
     {
         use tauri_plugin_shell::ShellExt;
         
+        eprintln!("=== get_photos_albums CALLED ===");
+        
+        // First, get regular albums and folder albums
         let script = r#"
 tell application "Photos"
     set albumNames to {}
     
-    -- Get regular albums
+    -- Get regular albums (top-level)
     repeat with anAlbum in albums
         set end of albumNames to name of anAlbum
     end repeat
     
-    -- Get folders (which contain albums)
+    -- Get folders and albums inside folders
+    -- We use "FOLDER:albumname" format to identify folder albums
     repeat with aFolder in folders
-        set end of albumNames to name of aFolder
-        -- Get albums inside folders
         try
             repeat with anAlbum in albums of aFolder
-                set end of albumNames to ((name of aFolder) & " / " & (name of anAlbum))
+                set end of albumNames to ("FOLDER:" & (name of aFolder) & ":" & (name of anAlbum))
             end repeat
         end try
     end repeat
-    
-    -- Note: Shared albums may not be accessible via standard AppleScript
-    -- They should appear in the regular albums list on most macOS versions
     
     set AppleScript's text item delimiters to "|"
     set albumString to albumNames as text
@@ -643,24 +642,74 @@ end tell
             .await
             .map_err(|e| format!("Failed to execute AppleScript: {}", e))?;
         
-        if !output.status.success() {
+        let mut all_albums: Vec<String> = Vec::new();
+        
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            for album in stdout.trim().split('|').filter(|s| !s.is_empty()) {
+                let album = album.trim();
+                if album.starts_with("FOLDER:") {
+                    // Parse "FOLDER:foldername:albumname" format
+                    let parts: Vec<&str> = album.splitn(3, ':').collect();
+                    if parts.len() == 3 {
+                        // Display as "foldername / albumname" but keep the FOLDER: prefix internally
+                        all_albums.push(format!("{} / {}", parts[1], parts[2]));
+                    }
+                } else {
+                    all_albums.push(album.to_string());
+                }
+            }
+        } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("AppleScript stderr: {}", stderr);
-            return Err(format!("AppleScript error: {}", stderr));
+            eprintln!("AppleScript stderr for albums: {}", stderr);
         }
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        eprintln!("AppleScript stdout: {}", stdout);
+        // Try to get shared albums (may not work on all macOS versions)
+        let shared_script = r#"
+tell application "Photos"
+    set sharedNames to {}
+    try
+        -- Try to access containers which might include shared albums
+        repeat with c in containers
+            try
+                set cName to name of c
+                if cName is not in {"Photos", "People", "Places", "Imports", "Recently Deleted"} then
+                    set end of sharedNames to ("SHARED:" & cName)
+                end if
+            end try
+        end repeat
+    end try
+    
+    set AppleScript's text item delimiters to "|"
+    set sharedString to sharedNames as text
+    set AppleScript's text item delimiters to ""
+    return sharedString
+end tell
+        "#;
         
-        let albums: Vec<String> = stdout
-            .trim()
-            .split("|")
-            .filter(|s| !s.is_empty())
-            .map(|s| s.trim().to_string())
-            .collect();
+        let shared_output = shell.command("osascript")
+            .args(["-e", shared_script])
+            .output()
+            .await;
         
-        eprintln!("Parsed albums: {:?}", albums);
-        Ok(albums)
+        if let Ok(output) = shared_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for album in stdout.trim().split('|').filter(|s| !s.is_empty()) {
+                    let album = album.trim();
+                    if album.starts_with("SHARED:") {
+                        let name = &album[7..];
+                        if !all_albums.contains(&name.to_string()) {
+                            all_albums.push(format!("[Shared] {}", name));
+                        }
+                    }
+                }
+            }
+        }
+        
+        eprintln!("Found {} albums total", all_albums.len());
+        Ok(all_albums)
     }
     
     #[cfg(not(target_os = "macos"))]
@@ -677,78 +726,124 @@ async fn get_photos_from_album(app: tauri::AppHandle, album_name: String) -> Res
     {
         use tauri_plugin_shell::ShellExt;
         
-        eprintln!("Creating temp directory...");
-        
-        // Create a temporary directory for exported photos
+        // Create temp directory for exports
         let temp_dir = std::env::temp_dir().join("vibecast_photos");
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-        
         let temp_path = temp_dir.to_string_lossy().to_string();
         
-        eprintln!("Temp directory: {}", temp_path);
-        eprintln!("Exporting photos from album: {}", album_name);
+        // Generate cache key
+        let cache_key: String = album_name.chars()
+            .filter(|c| c.is_alphanumeric() || *c == ' ')
+            .collect::<String>()
+            .replace(' ', "_");
+        let cache_file = temp_dir.join(format!("cache_{}.txt", cache_key));
         
-        // Check if we already have cached exports for this album
-        let cache_file = temp_dir.join(format!("cache_{}.txt", 
-            album_name.chars()
-                .filter(|c| c.is_alphanumeric() || *c == ' ')
-                .collect::<String>()
-                .replace(' ', "_")
-        ));
+        eprintln!("Album: {}, Cache: {:?}", album_name, cache_file);
         
-        eprintln!("Cache file path: {:?}", cache_file);
-        
-        // Try to use cache if it exists and is recent (less than 1 hour old)
+        // Check cache (valid for 1 hour)
         if cache_file.exists() {
-            eprintln!("Cache file exists, checking if recent enough...");
             if let Ok(metadata) = std::fs::metadata(&cache_file) {
                 if let Ok(modified) = metadata.modified() {
                     if let Ok(elapsed) = modified.elapsed() {
-                        eprintln!("Cache age: {} seconds", elapsed.as_secs());
-                        if elapsed.as_secs() < 3600 { // 1 hour cache
-                            eprintln!("Using cached photo list from: {:?}", cache_file);
-                            if let Ok(cached_content) = std::fs::read_to_string(&cache_file) {
-                                let photos: Vec<String> = cached_content
-                                    .split('|')
+                        if elapsed.as_secs() < 3600 {
+                            if let Ok(content) = std::fs::read_to_string(&cache_file) {
+                                let photos: Vec<String> = content.split('|')
                                     .filter(|s| !s.is_empty())
                                     .map(|s| s.to_string())
                                     .collect();
                                 if !photos.is_empty() {
-                                    eprintln!("Loaded {} photos from cache", photos.len());
+                                    eprintln!("Using cached {} photos", photos.len());
                                     return Ok(photos);
-                                } else {
-                                    eprintln!("Cache was empty");
                                 }
-                            } else {
-                                eprintln!("Failed to read cache file");
                             }
                         }
                     }
                 }
             }
-        } else {
-            eprintln!("No cache file found");
         }
         
-        eprintln!("Running AppleScript to export photos...");
+        // Parse album name to determine type and generate correct AppleScript
+        let (is_shared, is_folder_album, folder_name, actual_album_name) = if album_name.starts_with("[Shared] ") {
+            (true, false, String::new(), album_name[9..].to_string())
+        } else if album_name.contains(" / ") {
+            // Format: "FolderName / AlbumName"
+            let parts: Vec<&str> = album_name.splitn(2, " / ").collect();
+            if parts.len() == 2 {
+                (false, true, parts[0].to_string(), parts[1].to_string())
+            } else {
+                (false, false, String::new(), album_name.clone())
+            }
+        } else {
+            (false, false, String::new(), album_name.clone())
+        };
         
-        // Export photos - this will take time, but we'll cache the result
-        let script = format!(r#"
+        eprintln!("Parsed: is_shared={}, is_folder={}, folder={:?}, album={:?}", 
+                  is_shared, is_folder_album, folder_name, actual_album_name);
+        
+        // Build the AppleScript to get and export photos
+        let album_accessor = if is_folder_album {
+            format!(r#"album "{}" of folder "{}""#, 
+                    actual_album_name.replace("\"", "\\\""),
+                    folder_name.replace("\"", "\\\""))
+        } else if is_shared {
+            // Shared albums might need different access
+            format!(r#"container "{}""#, actual_album_name.replace("\"", "\\\""))
+        } else {
+            format!(r#"album "{}""#, actual_album_name.replace("\"", "\\\""))
+        };
+        
+        eprintln!("Album accessor: {}", album_accessor);
+        
+        // First, try to get photo count to verify album exists
+        let count_script = format!(r#"
 tell application "Photos"
-    set theAlbum to album "{}"
-    
+    try
+        set theAlbum to {}
+        set photoCount to count of media items of theAlbum
+        return photoCount
+    on error errMsg
+        return "ERROR:" & errMsg
+    end try
+end tell
+        "#, album_accessor);
+        
+        let shell = app.shell();
+        let count_output = shell.command("osascript")
+            .args(["-e", &count_script])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to check album: {}", e))?;
+        
+        let count_str = String::from_utf8_lossy(&count_output.stdout).trim().to_string();
+        eprintln!("Album photo count result: {}", count_str);
+        
+        if count_str.starts_with("ERROR:") {
+            return Err(format!("Album not found or inaccessible: {}", &count_str[6..]));
+        }
+        
+        let photo_count: usize = count_str.parse().unwrap_or(0);
+        if photo_count == 0 {
+            return Err("Album is empty or not found".to_string());
+        }
+        
+        eprintln!("Album has {} photos, starting export...", photo_count);
+        
+        // Now export the photos
+        let export_script = format!(r#"
+tell application "Photos"
+    set theAlbum to {}
     set photoList to {{}}
     set exportFolder to POSIX file "{}" as alias
-    set photoCount to count of media items of theAlbum
     
-    -- Export all photos (this may take a while for large albums)
     repeat with aPhoto in media items of theAlbum
         try
             set exportedFiles to export {{aPhoto}} to exportFolder with using originals
             repeat with exportedFile in exportedFiles
                 set end of photoList to POSIX path of exportedFile
             end repeat
+        on error errMsg
+            -- Log but continue
         end try
     end repeat
     
@@ -757,50 +852,34 @@ tell application "Photos"
     set AppleScript's text item delimiters to ""
     return photoString
 end tell
-        "#, 
-            album_name.replace("\"", "\\\""),
-            temp_path.replace("\"", "\\\"")
-        );
+        "#, album_accessor, temp_path.replace("\"", "\\\""));
         
-        eprintln!("Executing AppleScript for album export...");
-        eprintln!("Script length: {} chars", script.len());
+        eprintln!("Executing export script ({} photos)...", photo_count);
         
-        let shell = app.shell();
         let output = shell.command("osascript")
-            .args(["-e", &script])
+            .args(["-e", &export_script])
             .output()
             .await
-            .map_err(|e| {
-                eprintln!("AppleScript execution failed: {}", e);
-                format!("Failed to execute AppleScript: {}", e)
-            })?;
-        
-        eprintln!("AppleScript completed with status: {:?}", output.status);
+            .map_err(|e| format!("Export failed: {}", e))?;
         
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("AppleScript error: {}", stderr));
+            eprintln!("Export error: {}", stderr);
+            return Err(format!("Export error: {}", stderr));
         }
         
         let stdout = String::from_utf8_lossy(&output.stdout);
-        eprintln!("AppleScript output for photos: {} chars", stdout.len());
-        
-        let photos: Vec<String> = stdout
-            .trim()
-            .split("|")
+        let photos: Vec<String> = stdout.trim()
+            .split('|')
             .filter(|s| !s.is_empty())
             .map(|s| s.trim().to_string())
             .collect();
         
-        eprintln!("Exported {} photos from album", photos.len());
+        eprintln!("Exported {} photos successfully", photos.len());
         
-        // Cache the result for future use
+        // Cache the result
         if !photos.is_empty() {
-            if let Err(e) = std::fs::write(&cache_file, stdout.as_ref()) {
-                eprintln!("Warning: Failed to cache photo list: {}", e);
-            } else {
-                eprintln!("Cached photo list to: {:?}", cache_file);
-            }
+            let _ = std::fs::write(&cache_file, stdout.as_ref());
         }
         
         Ok(photos)

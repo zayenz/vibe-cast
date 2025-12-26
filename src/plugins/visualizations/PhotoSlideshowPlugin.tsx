@@ -409,13 +409,27 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     >
       {error && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center p-8 max-w-md">
-            <div className="text-orange-500 text-xl mb-4">📷</div>
-            <div className="text-zinc-300 font-medium mb-2">No Images</div>
-            <div className="text-zinc-500 text-sm">{error}</div>
-            <div className="text-zinc-600 text-xs mt-4">
-              Configure a folder or album in settings.
-            </div>
+          <div className="text-center p-8 max-w-lg">
+            <div className="text-orange-500 text-3xl mb-4">📷</div>
+            <div className="text-zinc-300 font-medium mb-2 text-lg">Unable to Load Images</div>
+            <div className="text-zinc-400 text-sm mb-4 px-4">{error}</div>
+            
+            {sourceType === 'photos' && (
+              <div className="text-zinc-600 text-xs mt-4 space-y-2 bg-zinc-900/50 rounded-lg p-4">
+                <p className="font-medium text-zinc-500">Troubleshooting:</p>
+                <ul className="text-left space-y-1">
+                  <li>• Make sure Photos.app is running</li>
+                  <li>• Try a different album</li>
+                  <li>• For shared albums: export manually to a folder, then use "Local Folder" option</li>
+                </ul>
+              </div>
+            )}
+            
+            {sourceType === 'local' && (
+              <div className="text-zinc-600 text-xs mt-4">
+                Use the "Browse" button in settings to select a folder with images.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -423,14 +437,29 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       {loading && !error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
           <div className="text-zinc-400 text-lg">Loading images...</div>
-          <div className="text-zinc-600 text-sm max-w-md text-center">
+          <div className="text-zinc-600 text-sm max-w-md text-center px-4">
             {sourceType === 'photos' 
-              ? 'Exporting photos from Apple Photos. First time may take a moment, but results will be cached.'
-              : 'Reading images from folder...'}
+              ? (
+                <>
+                  <p>Exporting photos from Apple Photos...</p>
+                  <p className="mt-2 text-zinc-500">Album: <span className="text-zinc-400">{photosAlbumName}</span></p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    First export may take several minutes for large albums.
+                    <br />Results are cached for faster future loads.
+                  </p>
+                </>
+              )
+              : `Reading images from folder...`}
           </div>
-          <div className="w-16 h-1 bg-zinc-800 rounded-full overflow-hidden">
-            <div className="h-full bg-orange-500 animate-pulse" style={{ width: '60%' }} />
+          <div className="w-32 h-1 bg-zinc-800 rounded-full overflow-hidden mt-2">
+            <div className="h-full bg-gradient-to-r from-orange-500 to-orange-400 animate-[loading_1.5s_ease-in-out_infinite]" style={{ width: '100%' }} />
           </div>
+          <style>{`
+            @keyframes loading {
+              0%, 100% { transform: translateX(-100%); }
+              50% { transform: translateX(100%); }
+            }
+          `}</style>
         </div>
       )}
       
