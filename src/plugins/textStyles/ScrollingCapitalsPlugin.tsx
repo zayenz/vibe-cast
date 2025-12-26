@@ -5,7 +5,7 @@
  * The classic marquee style.
  */
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
@@ -80,10 +80,8 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   );
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const animationKeyRef = useRef(0);
-  const currentRepeatRef = useRef(0); // Use ref to track current repeat to avoid stale closures
-  const spanRef = useRef<HTMLSpanElement>(null);
   const lastMessageTimestampRef = useRef<number>(0); // Track last message timestamp to detect new messages
+  const spanRef = useRef<HTMLSpanElement>(null);
 
   const duration = getNumberSetting(settings.duration, 10, 5, 20);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
@@ -114,34 +112,33 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 
   // Helper function to calculate animation parameters
   const calculateAnimationParams = (msg: string) => {
-    const textWidth = msg.length * (fontSize * 0.6 * 16);
+    // Estimate text width: each character is roughly fontSize * 0.6rem
+    const textWidth = msg.length * (fontSize * 0.6 * 16); // Convert rem to px
     const scrollDistance = viewportWidth + textWidth;
-    const scrollSpeed = viewportWidth / duration;
-    const animDuration = scrollDistance / scrollSpeed;
+    // The duration setting should be the total scroll duration
+    // So we scroll the full distance (viewport + text width) in exactly `duration` seconds
+    const animDuration = duration;
     const endPos = `-${scrollDistance}px`;
     return { endPos, animDuration, scrollDistance };
   };
 
 
   // Handle completion - supports repeatCount
-  // Use useCallback to ensure stable reference, but capture latest values via refs/state
-  const handleComplete = useCallback(() => {
+  const handleComplete = () => {
     if (completedRef.current || !displayMessage) return;
     
-    // Use ref to avoid stale closure issues
-    const currentRepeatValue = currentRepeatRef.current;
-    const nextRepeat = currentRepeatValue + 1;
+    const nextRepeat = currentRepeat + 1;
     
     if (nextRepeat < repeatCount) {
-      // More repeats needed - increment repeat counter
-      // The key change (due to currentRepeat in key) will cause remount and restart animation
-      // The end position is calculated directly in render, so it's always current
-      currentRepeatRef.current = nextRepeat;
+      // More repeats needed - restart immediately (like Dot Matrix)
       setCurrentRepeat(nextRepeat);
+      // No delay - the animation will restart immediately when currentRepeat changes
+      // because the useEffect depends on it
     } else {
       // All repeats done
       completedRef.current = true;
       setDisplayMessage(null);
+      setCurrentRepeat(0);
       // Clear safety timeout if it exists
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
@@ -152,22 +149,16 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         onComplete?.();
       }, 300);
     }
-  }, [displayMessage, repeatCount, viewportWidth, fontSize, duration, onComplete]);
+  };
 
-  // Note: We don't need a separate useEffect for repeats because:
-  // 1. handleComplete sets animationEnd before setting currentRepeat
-  // 2. The key includes currentRepeat, so remount happens after state updates
-  // 3. On remount, animationEnd is already set, so animation starts immediately
 
-  // Reset state only when message or messageTimestamp changes (new message triggered)
+  // Reset state when new message is triggered
   useEffect(() => {
     if (message && messageTimestamp !== lastMessageTimestampRef.current) {
       // New message - reset everything
       lastMessageTimestampRef.current = messageTimestamp;
       completedRef.current = false;
-      currentRepeatRef.current = 0;
       setCurrentRepeat(0);
-      animationKeyRef.current = 0;
       // Clear any pending timeouts
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
@@ -176,11 +167,6 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // Immediately show the message
       setDisplayMessage(message);
       
-      // Note: Animation parameters are calculated directly in render
-      
-      // For the first render, use animate prop. For repeats, we'll use controls.
-      // The initial render will use the animate prop with endPos
-      
       // Safety timeout: ensure message is cleared even if animation doesn't complete
       const { animDuration } = calculateAnimationParams(message);
       const totalDuration = animDuration * repeatCount;
@@ -188,6 +174,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         if (!completedRef.current) {
           completedRef.current = true;
           setDisplayMessage(null);
+          setCurrentRepeat(0);
           onComplete?.();
         }
       }, (totalDuration * 1000) + 500); // Add 500ms buffer
@@ -209,13 +196,16 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       {displayMessage && (() => {
         // Calculate end position directly in render to ensure it's always current
         const { endPos, animDuration } = calculateAnimationParams(displayMessage);
+        
         return (
           <motion.div
             key={`${messageTimestamp}-${currentRepeat}`}
             initial={{ x: `${viewportWidth}px` }}
             animate={{ x: endPos }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: animDuration, ease: "linear" }}
+            transition={{ 
+              duration: animDuration, 
+              ease: "linear"
+            }}
             onAnimationComplete={handleComplete}
             className="whitespace-nowrap"
             style={{ willChange: 'transform' }}
