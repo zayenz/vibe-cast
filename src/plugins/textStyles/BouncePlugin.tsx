@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useAnimationControls } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
 
@@ -92,10 +92,10 @@ const BounceStyle: React.FC<TextStyleProps> = ({
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
-  const [isFadingOut, setIsFadingOut] = useState(false);
   const [currentRepeat, setCurrentRepeat] = useState(0);
   const completedRef = useRef(false);
-  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const controls = useAnimationControls();
 
   const displayDuration = getNumberSetting(settings.displayDuration, 4, 2, 10);
   const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.8, 0.3, 2.0);
@@ -118,95 +118,75 @@ const BounceStyle: React.FC<TextStyleProps> = ({
     ? `0 0 ${glowSize}px ${color}, 0 0 ${glowSize * 2}px ${color}40`
     : 'none';
 
-  const handleComplete = () => {
-    if (completedRef.current) return;
-    
-    const nextRepeat = currentRepeat + 1;
-    if (nextRepeat < repeatCount) {
-      // Reset for next repeat
-      setIsFadingOut(false);
-      setCurrentRepeat(nextRepeat);
-      // Brief pause then show again
-      setTimeout(() => {
-        if (!completedRef.current) {
-          setDisplayMessage(message);
-        }
-      }, 100);
-    } else {
-      completedRef.current = true;
-      setDisplayMessage(null);
-      setIsFadingOut(false);
-      setCurrentRepeat(0);
-      onComplete?.();
-    }
-  };
+  const effectiveRepeats = Math.max(1, Math.floor(Number(repeatCount) || 1));
 
   useEffect(() => {
-    if (message) {
-      // Reset completion flag and repeat counter
-      completedRef.current = false;
-      setCurrentRepeat(0);
-      
-      // Immediately show the message
-      setDisplayMessage(message);
-      setIsFadingOut(false);
+    if (!message) return;
 
-      // Start fade out after display duration
-      const fadeOutTimer = setTimeout(() => {
-        setIsFadingOut(true);
-      }, displayDuration * 1000);
+    completedRef.current = false;
+    setDisplayMessage(message);
+    setCurrentRepeat(0);
 
-      // Safety timeout: ensure message is removed even if animation doesn't complete
-      // Account for all repeats
-      const singleCycleDuration = (displayDuration + fadeOutDuration + 0.1) * 1000;
-      const totalDuration = singleCycleDuration * repeatCount;
-      const safetyBuffer = 1000; // 1 second buffer
-      safetyTimeoutRef.current = setTimeout(() => {
-        if (!completedRef.current) {
-          completedRef.current = true;
-          setDisplayMessage(null);
-          setIsFadingOut(false);
-          setCurrentRepeat(0);
-          onComplete?.();
-        }
-      }, totalDuration + safetyBuffer);
-      
-      return () => {
-        clearTimeout(fadeOutTimer);
-        if (safetyTimeoutRef.current) {
-          clearTimeout(safetyTimeoutRef.current);
-        }
-      };
-    }
-  }, [message, messageTimestamp, displayDuration, fadeOutDuration, repeatCount, onComplete]);
+    let localRepeat = 0;
 
-  const variants = {
-    hidden: { 
-      opacity: 0, 
-      scale: 0.3,
-      y: -100 * bounceIntensity,
-    },
-    visible: { 
-      opacity: 1, 
-      scale: 1,
-      y: 0,
-      transition: {
-        type: "spring" as const,
-        stiffness: 300,
-        damping: 20,
-        mass: 0.8,
-      },
-    },
-    fadingOut: { 
-      opacity: 0, 
-      scale: 0.5,
-      y: 50 * bounceIntensity,
-      transition: {
-        opacity: { duration: fadeOutDuration, ease: "easeOut" as const },
-        scale: { duration: fadeOutDuration, ease: "easeOut" as const },
-        y: { duration: fadeOutDuration, ease: "easeOut" as const },
-      },
-    },
+    const runCycle = () => {
+      if (completedRef.current) return;
+
+      // Animate in (bounce)
+      controls.set({ opacity: 0, scale: 0.3, y: -100 * bounceIntensity });
+      controls.start({
+        opacity: 1,
+        scale: 1,
+        y: 0,
+        transition: springTransition,
+      });
+
+      // Start fade-out after display duration (spring settles in ~1s)
+      timeoutRef.current = setTimeout(() => {
+        if (completedRef.current) return;
+        controls.start({
+          opacity: 0,
+          scale: 0.5,
+          y: 50 * bounceIntensity,
+          transition: {
+            opacity: { duration: fadeOutDuration, ease: "easeOut" },
+            scale: { duration: fadeOutDuration, ease: "easeOut" },
+            y: { duration: fadeOutDuration, ease: "easeOut" },
+          },
+        });
+
+        // Complete cycle after fade-out
+        timeoutRef.current = setTimeout(() => {
+          if (completedRef.current) return;
+          localRepeat++;
+          if (localRepeat < effectiveRepeats) {
+            setCurrentRepeat(localRepeat);
+            runCycle(); // Start next cycle
+          } else {
+            completedRef.current = true;
+            setDisplayMessage(null);
+            onComplete?.();
+          }
+        }, fadeOutDuration * 1000);
+      }, (1.0 + displayDuration) * 1000); // 1.0s for spring settle + displayDuration
+    };
+
+    runCycle();
+
+    return () => {
+      completedRef.current = true;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [message, messageTimestamp]);
+
+
+  const springTransition = {
+    type: "spring" as const,
+    stiffness: 300,
+    damping: 20,
+    mass: 0.8,
   };
 
   return (
@@ -218,16 +198,8 @@ const BounceStyle: React.FC<TextStyleProps> = ({
         {displayMessage && (
           <motion.div
             key={`${messageTimestamp}-${currentRepeat}`}
-            initial="hidden"
-            animate={isFadingOut ? "fadingOut" : "visible"}
-            exit="fadingOut"
-            variants={variants}
-            onAnimationComplete={() => {
-              // Call handleComplete when fade-out animation completes
-              if (isFadingOut) {
-                handleComplete();
-              }
-            }}
+            initial={false}
+            animate={controls}
             className="text-center"
           >
             <span

@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useAnimationControls } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
@@ -100,10 +100,10 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   onComplete,
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
-  const [isFadingOut, setIsFadingOut] = useState(false);
   const [currentRepeat, setCurrentRepeat] = useState(0);
   const completedRef = useRef(false);
-  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const controls = useAnimationControls();
 
   const displayDuration = getNumberSetting(settings.displayDuration, 5, 2, 15);
   const fadeInDuration = getNumberSetting(settings.fadeInDuration, 0.5, 0.2, 3);
@@ -123,87 +123,68 @@ const FadeStyle: React.FC<TextStyleProps> = ({
     black: 900,
   };
 
-  const handleComplete = () => {
-    if (completedRef.current) return;
-    
-    const nextRepeat = currentRepeat + 1;
-    if (nextRepeat < repeatCount) {
-      // Reset for next repeat
-      setIsFadingOut(false);
-      setCurrentRepeat(nextRepeat);
-      // Brief pause then show again
-      setTimeout(() => {
-        if (!completedRef.current) {
-          setDisplayMessage(message);
-        }
-      }, 100);
-    } else {
-      completedRef.current = true;
-      setDisplayMessage(null);
-      setIsFadingOut(false);
-      setCurrentRepeat(0);
-      onComplete?.();
-    }
-  };
+  const effectiveRepeats = Math.max(1, Math.floor(Number(repeatCount) || 1));
 
   useEffect(() => {
-    if (message) {
-      // Reset completion flag and repeat counter
-      completedRef.current = false;
-      setCurrentRepeat(0);
-      
-      // Immediately show the message (no artificial delay)
-      setDisplayMessage(message);
-      setIsFadingOut(false);
+    if (!message) return;
 
-      // Start fade out after fade in + display duration
-      const fadeOutTimer = setTimeout(() => {
-        setIsFadingOut(true);
+    completedRef.current = false;
+    setDisplayMessage(message);
+    setCurrentRepeat(0);
+
+    let localRepeat = 0;
+
+    const runCycle = () => {
+      if (completedRef.current) return;
+
+      // Animate in
+      controls.set({ opacity: 0, scale: 0.95 });
+      controls.start({
+        opacity: 1,
+        scale: 1,
+        transition: {
+          opacity: { duration: fadeInDuration, ease: "easeOut" },
+          scale: { duration: fadeInDuration, ease: "easeOut" },
+        },
+      });
+
+      // Start fade-out after fade-in + display duration
+      timeoutRef.current = setTimeout(() => {
+        if (completedRef.current) return;
+        controls.start({
+          opacity: 0,
+          scale: 1.05,
+          transition: {
+            opacity: { duration: fadeOutDuration, ease: "easeOut" },
+            scale: { duration: fadeOutDuration, ease: "easeOut" },
+          },
+        });
+
+        // Complete cycle after fade-out
+        timeoutRef.current = setTimeout(() => {
+          if (completedRef.current) return;
+          localRepeat++;
+          if (localRepeat < effectiveRepeats) {
+            setCurrentRepeat(localRepeat);
+            runCycle(); // Start next cycle
+          } else {
+            completedRef.current = true;
+            setDisplayMessage(null);
+            onComplete?.();
+          }
+        }, fadeOutDuration * 1000);
       }, (fadeInDuration + displayDuration) * 1000);
+    };
 
-      // Safety timeout: ensure message is removed even if animation doesn't complete
-      // Account for all repeats
-      const singleCycleDuration = (fadeInDuration + displayDuration + fadeOutDuration + 0.1) * 1000;
-      const totalDuration = singleCycleDuration * repeatCount;
-      const safetyBuffer = 1000; // 1 second buffer
-      safetyTimeoutRef.current = setTimeout(() => {
-        if (!completedRef.current) {
-          completedRef.current = true;
-          setDisplayMessage(null);
-          setIsFadingOut(false);
-          setCurrentRepeat(0);
-          onComplete?.();
-        }
-      }, totalDuration + safetyBuffer);
-      
-      return () => {
-        clearTimeout(fadeOutTimer);
-        if (safetyTimeoutRef.current) {
-          clearTimeout(safetyTimeoutRef.current);
-        }
-      };
-    }
-  }, [message, messageTimestamp, displayDuration, fadeInDuration, fadeOutDuration, repeatCount, onComplete]);
+    runCycle();
 
-  const variants = {
-    hidden: { opacity: 0, scale: 0.95 },
-    visible: { 
-      opacity: 1, 
-      scale: 1,
-      transition: {
-        opacity: { duration: fadeInDuration, ease: "easeOut" as const },
-        scale: { duration: fadeInDuration, ease: "easeOut" as const },
-      },
-    },
-    fadingOut: { 
-      opacity: 0, 
-      scale: 1.05,
-      transition: {
-        opacity: { duration: fadeOutDuration, ease: "easeOut" as const },
-        scale: { duration: fadeOutDuration, ease: "easeOut" as const },
-      },
-    },
-  };
+    return () => {
+      completedRef.current = true;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [message, messageTimestamp]);
 
   return (
     <div 
@@ -216,16 +197,8 @@ const FadeStyle: React.FC<TextStyleProps> = ({
         {displayMessage && (
           <motion.div
             key={`${messageTimestamp}-${currentRepeat}`}
-            initial="hidden"
-            animate={isFadingOut ? "fadingOut" : "visible"}
-            exit="fadingOut"
-            variants={variants}
-            onAnimationComplete={() => {
-              // Call handleComplete when fade-out animation completes
-              if (isFadingOut) {
-                handleComplete();
-              }
-            }}
+            initial={false}
+            animate={controls}
             className="text-center px-8 py-4 rounded-lg max-w-[80vw]"
             style={{
               backdropFilter: blurAmount > 0 ? `blur(${blurAmount}px)` : undefined,
