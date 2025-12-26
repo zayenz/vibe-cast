@@ -207,6 +207,12 @@ export interface VisualizationPreset {
   
   /** Whether this preset should be shown in the UI (default: true) */
   enabled?: boolean;
+  
+  /** Display order for sorting presets (lower numbers appear first) */
+  order?: number;
+  
+  /** Icon name from the icon set (e.g., 'Flame', 'Music', 'Flower') */
+  icon?: string;
 }
 
 /**

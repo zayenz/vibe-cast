@@ -6,11 +6,13 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Save, Settings2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Save, Settings2, GripVertical } from 'lucide-react';
 import { VisualizationPreset } from '../../plugins/types';
 import { visualizationRegistry, getVisualization } from '../../plugins/visualizations';
 import { SettingsRenderer } from './SettingsRenderer';
 import { getDefaultsFromSchema } from '../../plugins/types';
+import { IconPicker } from './IconPicker';
+import { getIcon } from '../../utils/iconSet';
 
 interface VisualizationPresetsManagerProps {
   presets: VisualizationPreset[];
@@ -31,6 +33,8 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<VisualizationPreset>>({
     name: '',
     visualizationId: visualizationRegistry[0]?.id || '',
@@ -44,11 +48,14 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
     if (!visualization) return;
 
     const defaultSettings = getDefaultsFromSchema(visualization.settingsSchema);
+    const maxOrder = Math.max(...presets.map(p => p.order ?? 0), -1);
     const newPreset: VisualizationPreset = {
       id: Date.now().toString(36) + Math.random().toString(36).substr(2),
       name: formData.name,
       visualizationId: formData.visualizationId,
       settings: { ...defaultSettings, ...formData.settings },
+      order: maxOrder + 1,
+      icon: formData.icon,
     };
 
     onAddPreset(newPreset);
@@ -69,6 +76,7 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
       name: preset.name,
       visualizationId: preset.visualizationId,
       settings: preset.settings,
+      icon: preset.icon,
     });
   };
 
@@ -95,6 +103,50 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   const editingVisualization = editingPreset ? getVisualization(editingPreset.visualizationId) : null;
   const formVisualization = formData.visualizationId ? getVisualization(formData.visualizationId) : null;
 
+  // Sort presets by order (lower numbers first), then by name
+  const sortedPresets = [...presets].sort((a, b) => {
+    const orderA = a.order ?? 999;
+    const orderB = b.order ?? 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.name.localeCompare(b.name);
+  });
+
+  const handleDragStart = (e: React.DragEvent, presetId: string) => {
+    setDraggingId(presetId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, presetId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (draggingId && draggingId !== presetId) {
+      setDragOverId(presetId);
+    }
+  };
+
+  const handleDragEnd = () => {
+    if (draggingId && dragOverId && draggingId !== dragOverId) {
+      const draggedIndex = sortedPresets.findIndex(p => p.id === draggingId);
+      const targetIndex = sortedPresets.findIndex(p => p.id === dragOverId);
+      
+      if (draggedIndex !== -1 && targetIndex !== -1) {
+        // Create new array with reordered presets
+        const newPresets = [...sortedPresets];
+        const [dragged] = newPresets.splice(draggedIndex, 1);
+        newPresets.splice(targetIndex, 0, dragged);
+        
+        // Update orders for all presets
+        newPresets.forEach((preset, index) => {
+          if (preset.order !== index) {
+            onUpdatePreset(preset.id, { order: index });
+          }
+        });
+      }
+    }
+    setDraggingId(null);
+    setDragOverId(null);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -118,12 +170,12 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
       </div>
 
       <div className="space-y-2">
-        {presets.length === 0 ? (
+        {sortedPresets.length === 0 ? (
           <div className="text-center py-8 text-zinc-500 text-sm">
             No presets yet. Create one to get started.
           </div>
         ) : (
-          presets.map((preset) => {
+          sortedPresets.map((preset) => {
             const visualization = getVisualization(preset.visualizationId);
             const isActive = preset.id === activePresetId;
             const isEditing = editingId === preset.id;
@@ -131,8 +183,14 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
             return (
               <div
                 key={preset.id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, preset.id)}
+                onDragOver={(e) => handleDragOver(e, preset.id)}
+                onDragEnd={handleDragEnd}
                 className={`bg-zinc-950 border rounded-lg overflow-hidden transition-all ${
                   isActive ? 'border-orange-500' : 'border-zinc-800'
+                } ${draggingId === preset.id ? 'opacity-50' : ''} ${
+                  dragOverId === preset.id ? 'border-orange-400 border-2' : ''
                 }`}
               >
                 {isEditing ? (
@@ -157,6 +215,17 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                         className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
                         placeholder="Preset name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                        Icon
+                      </label>
+                      <IconPicker
+                        selectedIcon={formData.icon}
+                        onSelect={(icon) => setFormData({ ...formData, icon })}
+                        size={20}
                       />
                     </div>
 
@@ -216,6 +285,12 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                 ) : (
                   <>
                     <div className="flex items-center gap-3 p-3">
+                      <div
+                        className="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors"
+                        title="Drag to reorder"
+                      >
+                        <GripVertical size={16} />
+                      </div>
                       <input
                         type="checkbox"
                         checked={preset.enabled !== false}
@@ -224,6 +299,7 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                         }}
                         className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-zinc-900 cursor-pointer"
                         title="Show in visualization list"
+                        onClick={(e) => e.stopPropagation()}
                       />
                       <button
                         onClick={() => onSetActivePreset(isActive ? null : preset.id)}
@@ -232,8 +308,14 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                         }`}
                       >
                         <div className="flex items-center gap-2 mb-1">
-                          {visualization && (
-                            <Settings2 size={16} className={isActive ? 'text-orange-500' : 'text-zinc-500'} />
+                          {preset.icon ? (
+                            <div className={isActive ? 'text-orange-500' : 'text-zinc-500'}>
+                              {getIcon(preset.icon, 16)}
+                            </div>
+                          ) : (
+                            visualization && (
+                              <Settings2 size={16} className={isActive ? 'text-orange-500' : 'text-zinc-500'} />
+                            )
                           )}
                           <span className="font-medium text-sm">{preset.name}</span>
                           {isActive && (
@@ -308,6 +390,17 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                     className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
                     placeholder="e.g., Fireplace - Cozy"
                     autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                    Icon
+                  </label>
+                  <IconPicker
+                    selectedIcon={formData.icon}
+                    onSelect={(icon) => setFormData({ ...formData, icon })}
+                    size={20}
                   />
                 </div>
 

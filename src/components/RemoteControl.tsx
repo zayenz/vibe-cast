@@ -5,6 +5,7 @@ import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
 import { MessageConfig, VisualizationPreset, MessageTreeNode } from '../plugins/types';
+import { getIcon } from '../utils/iconSet';
 
 // Remote runs in browser on the same origin as the Axum server, so no API base needed
 const API_BASE = '';
@@ -209,7 +210,11 @@ export const RemoteControl: React.FC = () => {
                   key={activePreset.id}
                   active={true}
                   onClick={() => handleSetActivePreset(null)}
-                  icon={viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />}
+                  icon={
+                    activePreset.icon 
+                      ? getIcon(activePreset.icon, 28) || <Settings2 size={28} />
+                      : (viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />)
+                  }
                   label={activePreset.name}
                   disabled={isPending}
                 />

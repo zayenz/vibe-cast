@@ -10,6 +10,7 @@ import {
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw
 } from 'lucide-react';
+import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
@@ -91,6 +92,57 @@ export const ControlPlane: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasMessageStats]); // ONLY hasMessageStats - state is accessed via closure
+
+  // Sync the full SSE state into the store so saves include the live data
+  const stateSyncRef = useRef<string>('');
+  useEffect(() => {
+    if (!state) return;
+
+    // Build a stable snapshot key to avoid unnecessary loads
+    const snapshot = {
+      activeVisualization: state.activeVisualization,
+      activeVisualizationPreset: state.activeVisualizationPreset ?? null,
+      enabledVisualizations: state.enabledVisualizations,
+      commonSettings: state.commonSettings,
+      visualizationSettings: state.visualizationSettings ?? {},
+      visualizationPresets: state.visualizationPresets ?? [],
+      messages: state.messages ?? [],
+      messageTree: state.messageTree ?? [],
+      defaultTextStyle: state.defaultTextStyle,
+      textStyleSettings: state.textStyleSettings ?? {},
+      textStylePresets: state.textStylePresets ?? [],
+      messageStats: state.messageStats ?? {},
+    };
+
+    const snapshotKey = JSON.stringify(snapshot);
+    if (stateSyncRef.current === snapshotKey) return;
+    stateSyncRef.current = snapshotKey;
+
+    // Normalize message tree if SSE didn't send one
+    const normalizedMessageTree: MessageTreeNode[] = (state.messageTree as MessageTreeNode[] | undefined)
+      ?? (state.messages ?? []).map(msg => ({
+        type: 'message' as const,
+        id: msg.id,
+        message: msg,
+      }));
+
+    // Load into the store without re-broadcasting to the backend
+    useStore.getState().loadConfiguration({
+      version: 1,
+      activeVisualization: state.activeVisualization,
+      activeVisualizationPreset: state.activeVisualizationPreset ?? undefined,
+      enabledVisualizations: state.enabledVisualizations,
+      commonSettings: state.commonSettings,
+      visualizationSettings: state.visualizationSettings ?? {},
+      visualizationPresets: state.visualizationPresets ?? [],
+      messages: state.messages ?? [],
+      messageTree: normalizedMessageTree,
+      defaultTextStyle: state.defaultTextStyle,
+      textStyleSettings: state.textStyleSettings ?? {},
+      textStylePresets: state.textStylePresets ?? [],
+      messageStats: state.messageStats ?? {},
+    }, false);
+  }, [state]);
   
   // Store for text style presets
   const textStylePresets = useStore((s) => s.textStylePresets);
@@ -553,10 +605,48 @@ export const ControlPlane: React.FC = () => {
     });
   };
 
+  const buildConfigFromState = (s: any): AppConfiguration => {
+    const msgs = s?.messages ?? [];
+    const tree = s?.messageTree ?? buildFlatTree(msgs);
+    return {
+      version: 1,
+      activeVisualization: s?.activeVisualization ?? 'fireplace',
+      activeVisualizationPreset: s?.activeVisualizationPreset ?? undefined,
+      enabledVisualizations: s?.enabledVisualizations ?? ['fireplace', 'techno'],
+      commonSettings: s?.commonSettings ?? { intensity: 1, dim: 1 },
+      visualizationSettings: s?.visualizationSettings ?? {},
+      visualizationPresets: s?.visualizationPresets ?? [],
+      messages: msgs,
+      messageTree: tree,
+      defaultTextStyle: s?.defaultTextStyle ?? 'scrolling-capitals',
+      textStyleSettings: s?.textStyleSettings ?? {},
+      textStylePresets: s?.textStylePresets ?? [],
+      messageStats: s?.messageStats ?? {},
+    };
+  };
+
   const handleSaveConfig = async () => {
     try {
-      // Get complete configuration from store
-      const config = useStore.getState().getConfiguration();
+      let config: AppConfiguration | null = null;
+
+      // Prefer canonical state from backend to avoid stale store data
+      try {
+        const response = await fetch(`${API_BASE}/api/state`);
+        if (response.ok) {
+          const apiState = await response.json();
+          config = buildConfigFromState(apiState);
+        } else {
+          console.warn('Failed to fetch state from backend, response not ok');
+        }
+      } catch (err) {
+        console.warn('Failed to fetch state from backend, falling back to store', err);
+      }
+
+      if (!config) {
+        // Fallback to local store snapshot (should already be kept in sync via SSE)
+        config = useStore.getState().getConfiguration();
+      }
+
       const json = JSON.stringify(config, null, 2);
       
       // Show save dialog
@@ -789,7 +879,11 @@ export const ControlPlane: React.FC = () => {
                           key={preset.id}
                           active={isActive}
                           onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
-                          icon={viz ? (iconMap[viz.icon] || <Settings2 size={32} />) : <Settings2 size={32} />}
+                          icon={
+                            preset.icon 
+                              ? getIcon(preset.icon, 32) || <Settings2 size={32} />
+                              : (viz ? (iconMap[viz.icon] || <Settings2 size={32} />) : <Settings2 size={32} />)
+                          }
                           title={preset.name}
                           description={viz?.description || `${preset.visualizationId} preset`}
                     disabled={isPending}
