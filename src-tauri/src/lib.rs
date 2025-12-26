@@ -2,6 +2,8 @@ mod audio;
 mod server;
 
 use std::sync::{Arc, Mutex};
+use std::fs;
+use std::path::Path;
 use tauri::{Manager, Emitter};
 use local_ip_address::local_ip;
 use tokio::sync::broadcast;
@@ -292,6 +294,119 @@ impl AppStateSync {
         state.triggered_message = triggered_message;
         // Ignore send errors (no subscribers)
         let _ = self.state_tx.send(state);
+    }
+
+    /// Load configuration from a JSON file
+    pub fn load_config_from_file(&self, config_path: &str) -> Result<(), String> {
+        let path = Path::new(config_path);
+        if !path.exists() {
+            return Err(format!("Config file does not exist: {}", config_path));
+        }
+        
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let config: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
+        
+        // Apply configuration similar to the "load-configuration" command handler
+        if let Some(obj) = config.as_object() {
+            if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
+                if let Ok(mut m) = self.active_visualization.lock() {
+                    *m = viz.to_string();
+                }
+            }
+            if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
+                if let Ok(mut m) = self.enabled_visualizations.lock() {
+                    *m = vizs.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+            if let Some(settings) = obj.get("commonSettings") {
+                if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
+                    if let Ok(mut m) = self.common_settings.lock() {
+                        *m = s;
+                    }
+                }
+            }
+            if let Some(settings) = obj.get("visualizationSettings") {
+                if let Ok(mut m) = self.visualization_settings.lock() {
+                    *m = settings.clone();
+                }
+            }
+            if let Some(msgs) = obj.get("messages") {
+                if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
+                    if let Ok(mut m) = self.messages.lock() {
+                        *m = messages;
+                    }
+                }
+            }
+            if let Some(tree) = obj.get("messageTree") {
+                if let Ok(mut t) = self.message_tree.lock() {
+                    *t = tree.clone();
+                }
+                // Ensure flattened messages match tree
+                let flat = flatten_message_tree_value(&tree);
+                if let Ok(mut m) = self.messages.lock() {
+                    *m = flat;
+                }
+            } else {
+                // If no tree was provided, build a flat tree from messages
+                if let Ok(m) = self.messages.lock() {
+                    if let Ok(mut t) = self.message_tree.lock() {
+                        *t = serde_json::json!(
+                            m.iter()
+                                .map(|msg| serde_json::json!({
+                                    "type": "message",
+                                    "id": msg.id,
+                                    "message": msg
+                                }))
+                                .collect::<Vec<serde_json::Value>>()
+                        );
+                    }
+                }
+            }
+            if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
+                if let Ok(mut m) = self.default_text_style.lock() {
+                    *m = style.to_string();
+                }
+            }
+            if let Some(settings) = obj.get("textStyleSettings") {
+                if let Ok(mut m) = self.text_style_settings.lock() {
+                    *m = settings.clone();
+                }
+            }
+            if let Some(presets) = obj.get("visualizationPresets") {
+                if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
+                    if let Ok(mut m) = self.visualization_presets.lock() {
+                        *m = p;
+                    }
+                }
+            }
+            if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
+                if let Ok(mut m) = self.active_visualization_preset.lock() {
+                    *m = Some(preset_id.to_string());
+                }
+            }
+            if let Some(presets) = obj.get("textStylePresets") {
+                if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
+                    if let Ok(mut m) = self.text_style_presets.lock() {
+                        *m = p;
+                    }
+                }
+            }
+            if let Some(stats) = obj.get("messageStats") {
+                if let Ok(mut m) = self.message_stats.lock() {
+                    *m = stats.clone();
+                }
+            }
+        }
+        
+        // Broadcast the updated state
+        self.broadcast(None);
+        
+        Ok(())
     }
 }
 
@@ -912,6 +1027,31 @@ pub fn run() {
             
             // Create shared app state for syncing
             let app_state_sync = Arc::new(AppStateSync::new());
+            
+            // Parse command-line arguments for config file
+            let args: Vec<String> = std::env::args().collect();
+            let mut config_path: Option<String> = None;
+            
+            for i in 0..args.len() {
+                if args[i] == "--config" || args[i] == "-c" {
+                    if i + 1 < args.len() {
+                        config_path = Some(args[i + 1].clone());
+                    }
+                }
+            }
+            
+            // Load config if provided
+            if let Some(path) = config_path {
+                match app_state_sync.load_config_from_file(&path) {
+                    Ok(_) => {
+                        eprintln!("Successfully loaded config from: {}", path);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load config from {}: {}", path, e);
+                    }
+                }
+            }
+            
             app.manage(app_state_sync.clone());
             
             // Start audio capture and manage the state to keep the stream alive

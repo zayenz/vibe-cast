@@ -34,7 +34,14 @@ export const RemoteControl: React.FC = () => {
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
   const messages = state?.messages ?? [];
   const messageTree: MessageTreeNode[] = state?.messageTree ?? [];
+  const messageStats = state?.messageStats ?? {};
+  const triggeredMessage = state?.triggeredMessage ?? null;
   const isPending = fetcher.state !== 'idle';
+  
+  // Filter to show only active visualization preset
+  const activePreset = activeVisualizationPreset 
+    ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
+    : null;
 
   // Helper to render message tree with folders
   const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
@@ -53,19 +60,36 @@ export const RemoteControl: React.FC = () => {
         );
       } else {
         const msg = node.message;
+        const stats = messageStats[msg.id];
+        const triggerCount = stats?.triggerCount ?? 0;
+        const isPlaying = triggeredMessage?.id === msg.id;
         return (
           <button
             key={msg.id}
             onClick={() => handleTriggerMessage(msg)}
             disabled={isPending}
             style={{ paddingLeft: `${depth * 12 + 20}px` }}
-            className="w-full p-5 bg-zinc-950 border border-zinc-800/50 rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50"
+            className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
+              isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
+            }`}
           >
             <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
             <div className="relative z-10 flex-1 min-w-0">
-              <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
-                {msg.text}
-              </span>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
+                  {msg.text}
+                </span>
+                {isPlaying && (
+                  <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-[9px] font-bold uppercase rounded">
+                    Playing
+                  </span>
+                )}
+                {triggerCount > 0 && (
+                  <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[9px] font-bold rounded tabular-nums">
+                    {triggerCount}
+                  </span>
+                )}
+              </div>
               <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
                 {msg.textStyle.replace('-', ' ')}
               </span>
@@ -176,26 +200,25 @@ export const RemoteControl: React.FC = () => {
           <Signal size={12} />
           Visualization
         </h2>
-        <div className={`grid gap-4 ${visualizationPresets.length > 2 ? 'grid-cols-2' : 'grid-cols-2'}`}>
-          {visualizationPresets.length === 0 ? (
-            <div className="col-span-2 text-center py-8 text-zinc-500 text-xs">
-              No presets available
-            </div>
-          ) : (
-            visualizationPresets.map((preset) => {
-              const viz = getVisualization(preset.visualizationId);
-              const isActive = preset.id === activeVisualizationPreset;
+        <div className="grid gap-4 grid-cols-2">
+          {activePreset ? (
+            (() => {
+              const viz = getVisualization(activePreset.visualizationId);
               return (
                 <RemoteVizCard 
-                  key={preset.id}
-                  active={isActive}
-                  onClick={() => handleSetActivePreset(isActive ? null : preset.id)}
+                  key={activePreset.id}
+                  active={true}
+                  onClick={() => handleSetActivePreset(null)}
                   icon={viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />}
-                  label={preset.name}
+                  label={activePreset.name}
                   disabled={isPending}
                 />
               );
-            })
+            })()
+          ) : (
+            <div className="col-span-2 text-center py-8 text-zinc-500 text-xs">
+              No active visualization
+            </div>
           )}
         </div>
       </section>
@@ -204,25 +227,44 @@ export const RemoteControl: React.FC = () => {
         <h2 className="text-zinc-500 text-[10px] font-bold uppercase mb-6 tracking-[0.2em]">Broadcast</h2>
         <div className="flex-1 space-y-3 overflow-y-auto pb-8 custom-scrollbar">
           {messageTree.length > 0 ? renderMessageTree(messageTree) : (
-            messages.map((msg) => (
-              <button
-                key={msg.id}
-                onClick={() => handleTriggerMessage(msg)}
-                disabled={isPending}
-                className="w-full p-5 bg-zinc-950 border border-zinc-800/50 rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
-                <div className="relative z-10 flex-1 min-w-0">
-                  <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
-                    {msg.text}
-                  </span>
-                  <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
-                    {msg.textStyle.replace('-', ' ')}
-                  </span>
-                </div>
-                <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
-              </button>
-            ))
+            messages.map((msg) => {
+              const stats = messageStats[msg.id];
+              const triggerCount = stats?.triggerCount ?? 0;
+              const isPlaying = triggeredMessage?.id === msg.id;
+              return (
+                <button
+                  key={msg.id}
+                  onClick={() => handleTriggerMessage(msg)}
+                  disabled={isPending}
+                  className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
+                    isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
+                  }`}
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
+                  <div className="relative z-10 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
+                        {msg.text}
+                      </span>
+                      {isPlaying && (
+                        <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-[9px] font-bold uppercase rounded">
+                          Playing
+                        </span>
+                      )}
+                      {triggerCount > 0 && (
+                        <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[9px] font-bold rounded tabular-nums">
+                          {triggerCount}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                      {msg.textStyle.replace('-', ' ')}
+                    </span>
+                  </div>
+                  <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
+                </button>
+              );
+            })
           )}
         </div>
       </section>
