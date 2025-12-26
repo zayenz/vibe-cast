@@ -167,58 +167,75 @@ export const raymarchFragmentShader = /* glsl */ `
     return cid * cellSize;
   }
 
-  // “Realistic but trippy” mushroom: subtle asymmetry + cap lip + gill cavity
+  // Fantasy mushroom: solid dome cap + tapered stem, various types
   vec2 sdMushroom(vec3 p, float id, float t, float audio, float warp) {
     // Random per-cell
     float h = hash11(id * 13.37 + 1.0);
     float h2 = hash11(id * 19.93 + 7.0);
     float h3 = hash11(id * 7.11 + 3.0);
+    float h4 = hash11(id * 23.41 + 5.0);
 
-    // Vary size
+    // Mushroom type (0-3): changes shape dramatically
+    int mtype = int(mod(floor(h4 * 4.0), 4.0));
+
+    // Vary size - make some giant, some tiny
     float sc = clamp(uScale, 0.5, 2.0);
-    float stemH = mix(0.9, 2.6, h) * sc;
-    float stemR = mix(0.10, 0.22, h2) * sc;
-    float capR  = mix(0.35, 0.95, h3) * sc;
+    float sizeVar = mix(0.4, 1.8, h);
+    float stemH = mix(0.5, 1.8, h) * sc * sizeVar;
+    float stemR = mix(0.08, 0.18, h2) * sc * sizeVar;
+    float capR = mix(0.3, 0.7, h3) * sc * sizeVar;
 
-    // Evolution: gentle morph + “demo” wobble
-    float evo = t * (0.35 + 0.25 * h2) + h * 6.2831;
-    float breathe = 1.0 + 0.08 * sin(evo) + 0.06 * sin(evo * 0.7 + 1.7) + 0.08 * audio;
-    float tilt = (h2 - 0.5) * 0.35 + 0.15 * sin(evo * 0.33);
+    // Evolution: gentle growth + wobble
+    float evo = t * (0.25 + 0.20 * h2) + h * 6.2831;
+    float growth = 0.7 + 0.3 * smoothstep(-1.0, 1.0, sin(evo * 0.15)); // slow grow/shrink
+    float breathe = 1.0 + 0.05 * sin(evo) + 0.04 * audio;
+    stemH *= growth;
+    capR *= growth * breathe;
 
-    // Psychedelic warp in local space (small, to keep “real”)
-    float w = 0.12 * warp * (0.35 + 0.65 * h);
-    p.xz *= rot(w * sin(t * 0.7 + id));
-    p.xy *= rot(w * 0.7 * sin(t * 0.45 + id * 2.0));
-
-    // Tilt
+    // Gentle tilt
+    float tilt = (h2 - 0.5) * 0.25;
     p.xz *= rot(tilt);
 
-    // Stem: slightly tapered + noisy bulge
+    // Psychedelic micro-warp
+    float w = 0.08 * warp * h;
+    p.xz *= rot(w * sin(t * 0.5 + id));
+
+    // --- STEM: tapered cylinder ---
     vec3 ps = p;
-    float bulge = 0.10 * (fbm(ps.xz * 2.5 + id) - 0.5);
-    float stem = sdRoundCone(ps, stemR * 1.12, stemR * 0.82, stemH);
-    stem += bulge;
+    float stemTopR = stemR * 0.7;
+    float stem = sdRoundCone(ps, stemR, stemTopR, stemH);
+    // Very subtle bulge
+    stem += 0.02 * (noise(ps.xz * 4.0 + id) - 0.5);
 
-    // Cap: ellipsoid with lip; sits on top
-    vec3 pc = p - vec3(0.0, stemH * 0.92 * breathe, 0.0);
-    pc.y *= 0.7;
-    float cap = sdEllipsoid(pc, vec3(capR * 1.08, capR * 0.55, capR * 1.08));
-    // Lip / skirt
-    float lip = sdEllipsoid(pc - vec3(0.0, 0.12, 0.0), vec3(capR * 1.05, capR * 0.28, capR * 1.05));
-    cap = softMin(cap, lip, 0.18);
+    // --- CAP: solid dome (hemisphere), NO cavity/hole ---
+    vec3 pc = p - vec3(0.0, stemH + capR * 0.3, 0.0);
+    float cap = 1e9;
 
-    // Gill cavity underside
-    vec3 pg = pc + vec3(0.0, 0.20, 0.0);
-    float cavity = sdEllipsoid(pg, vec3(capR * 0.78, capR * 0.22, capR * 0.78));
-    cap = max(cap, -cavity);
+    if (mtype == 0) {
+      // Classic dome cap (Amanita style)
+      float dome = sdSphere(pc, capR);
+      // Flatten bottom
+      float cutPlane = pc.y + capR * 0.35;
+      dome = max(dome, cutPlane);
+      cap = dome;
+    } else if (mtype == 1) {
+      // Flat/wide cap (Parasol style)
+      vec3 pcFlat = pc;
+      pcFlat.y *= 2.5; // squash vertically
+      cap = sdSphere(pcFlat, capR * 0.9);
+      cap = max(cap, pc.y + capR * 0.15);
+    } else if (mtype == 2) {
+      // Tall/conical cap
+      float cone = sdRoundCone(pc + vec3(0.0, capR * 0.4, 0.0), capR * 0.6, capR * 0.1, capR * 0.8);
+      cap = cone;
+    } else {
+      // Bulbous/round cap
+      cap = sdSphere(pc, capR * 0.85);
+    }
 
-    // Spots: only on cap, as micro bumps (domain in cap space)
-    float spots = fbm((pc.xz * 3.8 + id) * rot(h * 6.2831));
-    float spotMask = smoothstep(0.55, 0.78, spots);
-    cap += (spotMask - 0.5) * 0.04;
-
-    float d = min(stem, cap);
-    float m = (cap < stem) ? 2.0 : 1.0;
+    // Smooth blend where stem meets cap
+    float d = softMin(stem, cap, 0.08);
+    float m = (cap < stem + 0.01) ? 2.0 : 1.0;
     return hit(d, m);
   }
 
@@ -347,84 +364,134 @@ export const raymarchFragmentShader = /* glsl */ `
 
   vec3 shade(vec3 p, vec3 n, vec3 rd, float mat, float t, float audio, float styleMix, int styleA, int styleB) {
     vec3 V = -rd;
-    vec3 L1 = normalize(vec3(0.6, 0.9, 0.3));
-    vec3 L2 = normalize(vec3(-0.8, 0.45, -0.25));
-    float diff = 0.7 * max(0.0, dot(n, L1)) + 0.3 * max(0.0, dot(n, L2));
-    float rim = pow(1.0 - max(0.0, dot(n, V)), 2.1);
+    // Dramatic fantasy lighting: warm key, cool fill, rim from behind
+    vec3 L1 = normalize(vec3(0.5, 0.8, 0.2));   // Warm key light
+    vec3 L2 = normalize(vec3(-0.6, 0.3, -0.5)); // Cool fill
+    vec3 L3 = normalize(vec3(0.0, 0.2, -1.0));  // Back rim
+    
+    float diff1 = max(0.0, dot(n, L1));
+    float diff2 = max(0.0, dot(n, L2)) * 0.4;
+    float diff = diff1 + diff2;
+    float rim = pow(1.0 - max(0.0, dot(n, V)), 2.5);
+    float backRim = max(0.0, dot(n, L3)) * 0.6;
 
-    // Illustrative ramp shading: compute a stylized light coordinate and sample ramps.
-    float lit = clamp(0.08 + 0.92 * diff, 0.0, 1.0);
-    lit += 0.35 * rim;
-    lit = clamp(lit, 0.0, 1.0);
+    // Ramp coordinate: emphasize contrast
+    float lit = clamp(0.05 + 0.85 * diff + 0.15 * rim, 0.0, 1.0);
 
     vec3 base;
     if (mat < 0.5) {
-      // Ground: add mild pattern but keep stable
-      float pat = 0.15 * fbm(p.xz * 0.18 + vec2(t * 0.01));
-      base = sampleRamp(uRampGround, clamp(lit + pat, 0.0, 1.0));
+      // Ground: dark mossy, with subtle pattern
+      float pat = 0.08 * fbm(p.xz * 0.25);
+      base = sampleRamp(uRampGround, clamp(lit * 0.7 + pat, 0.0, 0.85)); // Never fully bright
     } else if (mat < 1.5) {
-      float grain = 0.10 * fbm(p.xz * 0.35 + p.y * 0.10);
+      // Stem: soft cream/lavender
+      float grain = 0.06 * noise(p.xz * 2.0 + p.y);
       base = sampleRamp(uRampStem, clamp(lit + grain, 0.0, 1.0));
     } else if (mat < 2.5) {
-      float speck = 0.12 * fbm(p.xz * 0.45 + vec2(t * 0.02, -t * 0.01));
-      base = sampleRamp(uRampCap, clamp(lit + speck, 0.0, 1.0));
+      // Cap: vivid colors with spots
+      // Create white spots on the cap (classic Amanita muscaria look)
+      float spotFreq = 6.0;
+      float spots = noise(p.xz * spotFreq + floor(p.y * 3.0));
+      float spotMask = smoothstep(0.65, 0.72, spots);
+      
+      // Base cap color from ramp
+      float capLit = clamp(lit + 0.05 * noise(p.xz * 1.5), 0.0, 1.0);
+      vec3 capColor = sampleRamp(uRampCap, capLit);
+      
+      // White/cream spots
+      vec3 spotColor = vec3(1.0, 0.98, 0.92);
+      base = mix(capColor, spotColor, spotMask * 0.85);
     } else {
-      // Trees: darker, more silhouette
-      base = mix(vec3(0.02, 0.02, 0.03), vec3(0.12, 0.08, 0.18), 0.15 + 0.35 * rim);
+      // Trees: dark silhouettes with subtle purple tint
+      float treeLit = 0.08 + 0.25 * diff + 0.15 * rim;
+      base = mix(vec3(0.02, 0.015, 0.03), vec3(0.15, 0.08, 0.20), treeLit);
     }
 
-    // Specular sparkle (subtle)
+    // Specular highlight (more visible on caps)
     vec3 H = normalize(L1 + V);
-    float spec = pow(max(0.0, dot(n, H)), 24.0);
+    float specPow = (mat > 1.5 && mat < 2.5) ? 32.0 : 16.0;
+    float spec = pow(max(0.0, dot(n, H)), specPow);
+    float specMask = (mat < 2.5) ? 1.0 : 0.3;
 
-    // Bioluminescent emissive: more on caps, a little on ground (storybook glow)
+    // Bioluminescent glow: caps glow at edges, ground has scattered glow spots
     float emiss = 0.0;
-    if (mat < 0.5) emiss = 0.10 + 0.25 * fbm(p.xz * 0.18 + t * 0.02);
-    else if (mat < 1.5) emiss = 0.20;
-    else if (mat < 2.5) emiss = 0.75;
-    emiss *= (0.55 + 0.45 * audio);
-    emiss *= uGlow;
+    vec3 emissColor = vec3(0.2, 0.8, 1.0); // Cyan-ish glow
+    if (mat < 0.5) {
+      // Ground: scattered glowing spots (like bioluminescent moss)
+      float glowSpots = smoothstep(0.72, 0.80, fbm(p.xz * 0.4 + t * 0.03));
+      emiss = glowSpots * 0.6;
+      emissColor = vec3(0.3, 1.0, 0.5); // Green glow
+    } else if (mat < 1.5) {
+      emiss = 0.15;
+      emissColor = vec3(0.6, 0.4, 1.0); // Purple stem glow
+    } else if (mat < 2.5) {
+      // Caps: edge glow (rim light as emission)
+      emiss = rim * 0.8 + 0.2;
+      // Shift glow color over time
+      float hueShift = sin(t * 0.15) * 0.5 + 0.5;
+      emissColor = mix(vec3(1.0, 0.3, 0.5), vec3(0.3, 0.8, 1.0), hueShift);
+    }
+    emiss *= (0.5 + 0.5 * audio) * uGlow;
 
-    vec3 col = base * (0.20 + 0.90 * diff) + spec * vec3(0.65);
-    col += base * (0.35 * rim + emiss);
+    // Compose final color
+    vec3 col = base * (0.15 + 0.85 * diff);
+    col += spec * vec3(0.9, 0.85, 0.8) * specMask * 0.5;
+    col += base * backRim * 0.4;
+    col += emissColor * emiss * 0.5;
+    
     return col;
   }
 
   // ----------------------------------------------------------------------------
-  // Camera / demo sections
+  // Camera / demo sections - creates distinct "chapters" with different moods
   // ----------------------------------------------------------------------------
   void sectionParams(float t, out float styleMix, out int styleA, out int styleB, out float density, out float camRad, out float camY) {
-    float secLen = max(6.0, uSectionLength);
+    float secLen = max(8.0, uSectionLength);
     float idx = floor(t / secLen);
     float f = fract(t / secLen);
-    float s = smoothstep(0.10, 0.90, f);
+    // Smooth transition with ease-in-out
+    float s = smoothstep(0.0, 0.15, f) * (1.0 - smoothstep(0.85, 1.0, f));
+    float sMix = smoothstep(0.05, 0.95, f);
 
     // Rotate through style indices
     float off = float(uStyleOffset);
     int a = int(mod(idx + off, 5.0));
     int b = int(mod(idx + off + 1.0, 5.0));
-    // Map to palette indices (0..4 are our base palettes, but we treat 0 as deep dream)
-    // We shift so it cycles: deepDream -> aurora -> neon -> forest -> rainbow -> ...
-    int styleMapA = a;
-    int styleMapB = b;
+    styleA = a;
+    styleB = b;
+    styleMix = sMix;
 
-    styleA = styleMapA;
-    styleB = styleMapB;
-    styleMix = s;
-
-    // Density breathes per section (demo evolution)
-    float dA = 0.35 + 0.45 * hash11(idx * 3.1 + 1.0);
-    float dB = 0.35 + 0.45 * hash11((idx + 1.0) * 3.1 + 1.0);
-    density = mix(dA, dB, s);
-
-    // Camera path shifts per section
-    float rA = mix(9.0, 14.0, hash11(idx * 2.3 + 4.0));
-    float rB = mix(9.0, 14.0, hash11((idx + 1.0) * 2.3 + 4.0));
-    camRad = mix(rA, rB, s);
-
-    float yA = mix(2.2, 6.2, hash11(idx * 4.7 + 2.0));
-    float yB = mix(2.2, 6.2, hash11((idx + 1.0) * 4.7 + 2.0));
-    camY = mix(yA, yB, s);
+    // Chapter types: each section has a distinct "feel"
+    int chapter = int(mod(idx, 4.0));
+    
+    if (chapter == 0) {
+      // Wide vista: low camera, looking across the field
+      density = mix(0.5, 0.7, s);
+      camRad = mix(12.0, 16.0, s);
+      camY = mix(1.5, 2.5, s);
+    } else if (chapter == 1) {
+      // Close-up: camera near ground among mushrooms
+      density = mix(0.8, 0.9, s);
+      camRad = mix(4.0, 6.0, s);
+      camY = mix(0.8, 1.5, s);
+    } else if (chapter == 2) {
+      // Bird's eye: higher up, seeing the pattern
+      density = mix(0.4, 0.6, s);
+      camRad = mix(8.0, 12.0, s);
+      camY = mix(6.0, 10.0, s);
+    } else {
+      // Medium: balanced cinematic view
+      density = mix(0.55, 0.75, s);
+      camRad = mix(7.0, 10.0, s);
+      camY = mix(2.5, 4.5, s);
+    }
+    
+    // Add per-section variation
+    float varR = hash11(idx * 2.3 + 4.0);
+    float varY = hash11(idx * 4.7 + 2.0);
+    camRad += (varR - 0.5) * 3.0;
+    camY += (varY - 0.5) * 1.5;
+    camY = max(0.5, camY); // Don't go underground
   }
 
   // Ray direction from camera
@@ -508,23 +575,46 @@ export const raymarchFragmentShader = /* glsl */ `
       d += dist * 0.85;
     }
 
-    // Background: dreamy gradient + stars/sparks (brighter baseline so it's never "invisible")
-    // Sky + portal/glade glow (storybook focal point)
-    float skyU = clamp(0.55 + 0.35 * (1.0 - length(p)), 0.0, 1.0);
-    vec3 bg = sampleRamp(uRampSky, skyU);
-    // Portal centered near horizon
-    vec2 portalCenter = vec2(0.0, -0.10);
-    float pr = length(p - portalCenter);
-    float portal = exp(-pr * pr * 3.5);
-    // Soft ring bands to feel "magical"
-    float bands = 0.5 + 0.5 * sin(12.0 * pr - t * 0.9);
-    portal *= mix(0.55, 1.15, bands);
-    vec3 portalCol = mix(vec3(0.10, 0.85, 1.0), vec3(1.0, 0.25, 0.85), 0.5 + 0.5 * sin(t * 0.25));
-    bg += portalCol * (0.22 * portal);
-    float v = smoothstep(1.2, 0.1, length(p));
-    bg *= v;
-    float stars = smoothstep(0.995, 1.0, noise(uv * uResolution * 0.35 + t * 0.02));
-    bg += stars * vec3(0.08, 0.10, 0.14);
+    // Background: deep fantasy sky with magical glow
+    // Gradient from dark top to glowing horizon
+    float skyGrad = clamp(0.5 + 0.5 * (1.0 - p.y * 0.8), 0.0, 1.0);
+    vec3 bg = sampleRamp(uRampSky, skyGrad);
+    
+    // Moon/portal glow near horizon (large, soft, magical)
+    vec2 moonCenter = vec2(0.0, -0.25);
+    float moonDist = length(p - moonCenter);
+    float moonGlow = exp(-moonDist * moonDist * 2.0);
+    // Pulsing rings
+    float rings = 0.5 + 0.5 * sin(8.0 * moonDist - t * 0.6);
+    moonGlow *= mix(0.7, 1.3, rings);
+    // Color shifts between cyan and magenta
+    vec3 moonCol = mix(vec3(0.2, 0.9, 1.0), vec3(1.0, 0.4, 0.8), 0.5 + 0.5 * sin(t * 0.18));
+    bg += moonCol * moonGlow * 0.45;
+    
+    // Stars: sparse twinkling
+    float starField = noise(uv * uResolution * 0.5);
+    float stars = smoothstep(0.97, 0.99, starField);
+    float twinkle = 0.5 + 0.5 * sin(t * 3.0 + starField * 20.0);
+    bg += stars * twinkle * vec3(0.9, 0.95, 1.0) * 0.3;
+    
+    // Fireflies/spores: scattered glowing particles in the scene
+    // Multiple layers at different depths
+    for (int i = 0; i < 3; i++) {
+      float layer = float(i) * 0.33;
+      vec2 ffUV = uv * mix(8.0, 20.0, layer) + vec2(t * 0.02 * (1.0 + layer), t * 0.015);
+      float ff = noise(ffUV);
+      float ffMask = smoothstep(0.92 - layer * 0.03, 0.96, ff);
+      // Pulse
+      float ffPulse = 0.3 + 0.7 * sin(t * (2.0 + layer) + ff * 10.0);
+      ffPulse = max(0.0, ffPulse);
+      // Color varies per layer
+      vec3 ffCol = mix(vec3(0.3, 1.0, 0.5), vec3(1.0, 0.8, 0.2), layer);
+      bg += ffCol * ffMask * ffPulse * 0.25 * (1.0 - layer * 0.3);
+    }
+    
+    // Subtle vignette already in sky gradient
+    float vigSky = smoothstep(1.4, 0.3, length(p));
+    bg *= mix(0.7, 1.0, vigSky);
 
     if (mat >= 0.0 && d <= maxDist) {
       vec3 pos = ro + rd * d;

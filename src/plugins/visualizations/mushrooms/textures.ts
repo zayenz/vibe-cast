@@ -52,38 +52,52 @@ export type WhimsicalRampSet = {
 };
 
 export function createWhimsicalRamps(): WhimsicalRampSet {
-  // Tuned to the reference collage: candy highlights + deep cool shadows.
+  // Rich, saturated fantasy colors inspired by the reference collage
+  // Key: deep shadows, vivid saturated midtones, bright highlights
+  
+  // Cap: vivid oranges/reds/magentas with spots implied by variation
   const capStops: RampStops = [
-    { t: 0.0, color: '#160a2a' },
-    { t: 0.22, color: '#2a2d7a' },
-    { t: 0.48, color: '#00c2ff' },
-    { t: 0.70, color: '#ff3db8' },
-    { t: 0.86, color: '#ffd25a' },
-    { t: 1.0, color: '#ffffff' },
+    { t: 0.0, color: '#1a0520' },   // Deep purple-black shadow
+    { t: 0.15, color: '#4a1848' },  // Dark magenta
+    { t: 0.30, color: '#8b2252' },  // Rich crimson-magenta
+    { t: 0.45, color: '#ff3366' },  // Vibrant pink-red
+    { t: 0.60, color: '#ff6b35' },  // Vivid orange
+    { t: 0.75, color: '#ffa726' },  // Golden orange
+    { t: 0.88, color: '#ffeb3b' },  // Bright yellow
+    { t: 1.0, color: '#fff8e1' },   // Warm cream highlight
   ];
 
+  // Stem: cream/lavender, softer than cap
   const stemStops: RampStops = [
-    { t: 0.0, color: '#0b0a13' },
-    { t: 0.30, color: '#2b2350' },
-    { t: 0.58, color: '#7b66d6' },
-    { t: 0.82, color: '#ffe7ff' },
-    { t: 1.0, color: '#ffffff' },
+    { t: 0.0, color: '#0d0812' },   // Near black
+    { t: 0.25, color: '#2d1f3d' },  // Dark purple
+    { t: 0.45, color: '#5c4a6e' },  // Muted purple
+    { t: 0.65, color: '#a89cc4' },  // Lavender
+    { t: 0.82, color: '#e8dff0' },  // Pale lavender
+    { t: 1.0, color: '#fff5fa' },   // Cream-white
   ];
 
+  // Ground: dark forest floor, mossy greens, not bright
   const groundStops: RampStops = [
-    { t: 0.0, color: '#05040a' },
-    { t: 0.35, color: '#102a3a' },
-    { t: 0.60, color: '#0f6f6f' },
-    { t: 0.82, color: '#7cffc2' },
-    { t: 1.0, color: '#ffffff' },
+    { t: 0.0, color: '#050808' },   // Almost black
+    { t: 0.20, color: '#0a1a15' },  // Very dark green
+    { t: 0.40, color: '#1a3d2e' },  // Dark forest green
+    { t: 0.55, color: '#2d5a40' },  // Mossy green
+    { t: 0.70, color: '#3d7a52' },  // Richer green
+    { t: 0.85, color: '#5aa469' },  // Leaf green
+    { t: 1.0, color: '#8fbc8f' },   // Soft sage (never pure white)
   ];
 
+  // Sky: deep purple-blue with magical glow at horizon
   const skyStops: RampStops = [
-    { t: 0.0, color: '#06030a' },
-    { t: 0.35, color: '#1b0c3a' },
-    { t: 0.60, color: '#162a7a' },
-    { t: 0.78, color: '#00c2ff' },
-    { t: 1.0, color: '#ffd25a' },
+    { t: 0.0, color: '#030208' },   // Near black at top
+    { t: 0.20, color: '#0a0520' },  // Very dark purple
+    { t: 0.40, color: '#1a0a40' },  // Deep purple
+    { t: 0.55, color: '#2d1875' },  // Rich purple-blue
+    { t: 0.70, color: '#4a3090' },  // Vibrant purple
+    { t: 0.82, color: '#00b4d8' },  // Cyan glow
+    { t: 0.92, color: '#48cae4' },  // Bright cyan
+    { t: 1.0, color: '#90e0ef' },   // Light cyan at horizon
   ];
 
   return {
