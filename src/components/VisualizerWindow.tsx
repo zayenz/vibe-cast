@@ -108,7 +108,7 @@ const VisualizationRenderer: React.FC<{
   if (!plugin) {
     // Fallback to fireplace if visualization not found
     const fallback = getVisualization('fireplace');
-    if (!fallback) return <div className="w-full h-full bg-black" />;
+    if (!fallback) return <div className="absolute inset-0 bg-black" />;
     
     const VizComponent = fallback.component;
     // Merge stored settings with defaults from schema
@@ -117,7 +117,7 @@ const VisualizationRenderer: React.FC<{
     const customSettings = { ...defaultSettings, ...storedSettings };
     
     return (
-      <div className="w-full h-full">
+      <div className="absolute inset-0">
         <VizComponent
           audioData={audioData}
           commonSettings={commonSettings}
@@ -136,7 +136,7 @@ const VisualizationRenderer: React.FC<{
   // Avoid per-frame logging here; it can cause long-run degradation/crashes in WebViews.
 
   return (
-    <div className="w-full h-full">
+    <div className="absolute inset-0">
       <VizComponent
         audioData={audioData}
         commonSettings={commonSettings}
@@ -393,12 +393,6 @@ export const VisualizerWindow: React.FC = () => {
         });
         setRecoveryCount((c) => c + 1);
         setVizRemountKey((k) => k + 1);
-        // Force-enable overlay on recovery so we can see state if it happens again.
-        try {
-          window.localStorage.setItem('vibecast:vizDebug', '1');
-        } catch {
-          // ignore
-        }
       }
     }, 2_000);
     return () => window.clearInterval(interval);
@@ -413,13 +407,11 @@ export const VisualizerWindow: React.FC = () => {
     }
   }, []);
   const [showDevOverlay, setShowDevOverlay] = useState<boolean>(() => {
+    // Only show in dev mode, and only if query param is set
+    // (localStorage disabled by default to avoid showing debug overlay unexpectedly)
     if (!import.meta.env.DEV) return false;
     if (devOverlayEnabledByQuery) return true;
-    try {
-      return window.localStorage.getItem('vibecast:vizDebug') === '1';
-    } catch {
-      return false;
-    }
+    return false;
   });
 
   useEffect(() => {

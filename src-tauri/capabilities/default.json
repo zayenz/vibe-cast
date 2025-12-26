@@ -5,6 +5,17 @@
   "windows": ["main", "viz"],
   "permissions": [
     "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{"path": "**"}]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{"path": "**"}]
+    },
     "opener:default",
     "core:event:default",
     "core:webview:default",

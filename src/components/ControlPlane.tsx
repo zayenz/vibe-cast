@@ -2,6 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import { save, open } from '@tauri-apps/plugin-dialog';
+import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
@@ -552,36 +554,64 @@ export const ControlPlane: React.FC = () => {
   };
 
   const handleSaveConfig = async () => {
-    // Get complete configuration from store
-    const config = useStore.getState().getConfiguration();
-    
-    // Download as JSON file
-    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `vibecast-config-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      // Get complete configuration from store
+      const config = useStore.getState().getConfiguration();
+      const json = JSON.stringify(config, null, 2);
+      
+      // Show save dialog
+      const filePath = await save({
+        defaultPath: `vibecast-config-${new Date().toISOString().slice(0,10)}.json`,
+        filters: [{
+          name: 'JSON',
+          extensions: ['json']
+        }]
+      });
+      
+      // Write file if user didn't cancel
+      if (filePath) {
+        console.log('Saving to:', filePath);
+        await writeTextFile(filePath, json);
+        console.log('File saved successfully!');
+      } else {
+        console.log('Save cancelled by user');
+      }
+    } catch (err) {
+      console.error('Failed to save configuration:', err);
+    }
   };
 
-  const handleLoadConfig = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const text = await file.text();
-        try {
-          const config = JSON.parse(text) as AppConfiguration;
-          sendCommand('load-configuration', config);
-        } catch (err) {
-          console.error('Failed to parse config file:', err);
-        }
+  const handleLoadConfig = async () => {
+    try {
+      // Show open dialog
+      const selected = await open({
+        multiple: false,
+        filters: [{
+          name: 'JSON',
+          extensions: ['json']
+        }]
+      });
+      
+      // Read and parse file if user didn't cancel
+      if (selected && typeof selected === 'string') {
+        console.log('Loading from:', selected);
+        const text = await readTextFile(selected);
+        const config = JSON.parse(text) as AppConfiguration;
+        console.log('Loaded configuration:', config);
+        
+        // Load into local store first
+        useStore.getState().loadConfiguration(config, false);
+        
+        // Then sync to backend and other windows
+        sendCommand('load-configuration', config);
+        
+        console.log('Configuration loaded successfully!');
+      } else {
+        console.log('Load cancelled by user');
       }
-    };
-    input.click();
+    } catch (err) {
+      console.error('Failed to load configuration:', err);
+    }
   };
 
   const remoteUrl = serverInfo ? `http://${serverInfo.ip}:${serverInfo.port}` : '';

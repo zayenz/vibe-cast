@@ -484,6 +484,11 @@ fn emit_state_change(
                         }
                     }
                 }
+                if let Some(tree) = obj.get("messageTree") {
+                    if let Ok(mut t) = state.message_tree.lock() {
+                        *t = tree.clone();
+                    }
+                }
                 if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
                     if let Ok(mut m) = state.default_text_style.lock() {
                         *m = style.to_string();
@@ -544,6 +549,8 @@ fn emit_state_change(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![get_server_info, get_audio_data, restart_viz_window, emit_state_change])
         .setup(|app| {
