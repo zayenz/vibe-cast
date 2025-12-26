@@ -31,12 +31,12 @@
       "name": "Fireplace",
       "visualizationId": "fireplace",
       "settings": {
-        "emberCount": 15,
-        "flameCount": 12,
-        "flameHeight": 1.0,
-        "glowColor": "#ea580c",
-        "showLogs": true
-      },
+      "emberCount": 15,
+      "flameCount": 12,
+      "flameHeight": 1.0,
+      "glowColor": "#ea580c",
+      "showLogs": true
+    },
       "enabled": true
     },
     {
@@ -44,12 +44,12 @@
       "name": "Techno",
       "visualizationId": "techno",
       "settings": {
-        "barCount": 48,
-        "sphereScale": 1.0,
-        "sphereDistort": 0.5,
-        "colorScheme": "rainbow",
+      "barCount": 48,
+      "sphereScale": 1.0,
+      "sphereDistort": 0.5,
+      "colorScheme": "rainbow",
         "showSphere": false,
-        "showBars": true
+      "showBars": true
       },
       "enabled": true
     },
@@ -94,6 +94,27 @@
         "showGround": true,
         "showFog": true,
         "fogDensity": 0.6
+      },
+      "enabled": false
+    },
+    {
+      "id": "photo-slideshow-preset",
+      "name": "Photo Slideshow",
+      "visualizationId": "photo-slideshow",
+      "settings": {
+        "sourceType": "local",
+        "folderPath": "",
+        "photosAlbumName": "",
+        "displayDuration": 5,
+        "transitionDuration": 0.8,
+        "randomOrder": false,
+        "enableFade": true,
+        "enableSlide": true,
+        "enableZoom": true,
+        "enable3DRotate": true,
+        "enableCube": false,
+        "enableFlip": true,
+        "fitMode": "cover"
       },
       "enabled": false
     }

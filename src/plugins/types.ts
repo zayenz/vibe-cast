@@ -64,6 +64,8 @@ export interface TextSetting {
   label: string;
   default: string;
   placeholder?: string;
+  /** Optional action button type for special pickers */
+  actionButton?: 'folder' | 'album';
 }
 
 /**

@@ -12,6 +12,7 @@ import { WavesPlugin } from './WavesPlugin';
 import { ParticlesPlugin } from './ParticlesPlugin';
 import { MushroomsPlugin } from './MushroomsPlugin';
 import { YouTubePlugin } from './YouTubePlugin';
+import { PhotoSlideshowPlugin } from './PhotoSlideshowPlugin';
 
 /**
  * All registered visualization plugins
@@ -23,6 +24,7 @@ export const visualizationRegistry: VisualizationPlugin[] = [
   ParticlesPlugin,
   MushroomsPlugin,
   YouTubePlugin,
+  PhotoSlideshowPlugin,
 ];
 
 /**

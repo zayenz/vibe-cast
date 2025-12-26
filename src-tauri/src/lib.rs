@@ -546,13 +546,287 @@ fn emit_state_change(
     }));
 }
 
+#[tauri::command]
+fn list_images_in_folder(folder_path: String) -> Result<Vec<String>, String> {
+    use std::fs;
+    use std::path::Path;
+    
+    eprintln!("Listing images in folder: {}", folder_path);
+    
+    let path = Path::new(&folder_path);
+    if !path.exists() {
+        eprintln!("ERROR: Folder does not exist: {}", folder_path);
+        return Err(format!("Folder does not exist: {}", folder_path));
+    }
+    
+    if !path.is_dir() {
+        eprintln!("ERROR: Path is not a directory: {}", folder_path);
+        return Err(format!("Path is not a directory: {}", folder_path));
+    }
+    
+    let mut images = Vec::new();
+    let image_extensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"];
+    
+    match fs::read_dir(path) {
+        Ok(entries) => {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let entry_path = entry.path();
+                    if entry_path.is_file() {
+                        if let Some(ext) = entry_path.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            if image_extensions.contains(&ext_str.as_str()) {
+                                if let Some(path_str) = entry_path.to_str() {
+                                    images.push(path_str.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            images.sort();
+            eprintln!("Found {} images in folder", images.len());
+            if images.is_empty() {
+                eprintln!("WARNING: No images found in folder");
+            } else {
+                eprintln!("First image: {}", images[0]);
+            }
+            Ok(images)
+        }
+        Err(e) => {
+            eprintln!("ERROR: Failed to read directory: {}", e);
+            Err(format!("Failed to read directory: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_photos_albums(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_shell::ShellExt;
+        
+        let script = r#"
+tell application "Photos"
+    set albumNames to {}
+    
+    -- Get regular albums
+    repeat with anAlbum in albums
+        set end of albumNames to name of anAlbum
+    end repeat
+    
+    -- Get folders (which contain albums)
+    repeat with aFolder in folders
+        set end of albumNames to name of aFolder
+        -- Get albums inside folders
+        try
+            repeat with anAlbum in albums of aFolder
+                set end of albumNames to ((name of aFolder) & " / " & (name of anAlbum))
+            end repeat
+        end try
+    end repeat
+    
+    -- Note: Shared albums may not be accessible via standard AppleScript
+    -- They should appear in the regular albums list on most macOS versions
+    
+    set AppleScript's text item delimiters to "|"
+    set albumString to albumNames as text
+    set AppleScript's text item delimiters to ""
+    return albumString
+end tell
+        "#;
+        
+        let shell = app.shell();
+        let output = shell.command("osascript")
+            .args(["-e", script])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute AppleScript: {}", e))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("AppleScript stderr: {}", stderr);
+            return Err(format!("AppleScript error: {}", stderr));
+        }
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!("AppleScript stdout: {}", stdout);
+        
+        let albums: Vec<String> = stdout
+            .trim()
+            .split("|")
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        eprintln!("Parsed albums: {:?}", albums);
+        Ok(albums)
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Apple Photos is only available on macOS".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_photos_from_album(app: tauri::AppHandle, album_name: String) -> Result<Vec<String>, String> {
+    eprintln!("=== get_photos_from_album CALLED with album: {} ===", album_name);
+    
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_shell::ShellExt;
+        
+        eprintln!("Creating temp directory...");
+        
+        // Create a temporary directory for exported photos
+        let temp_dir = std::env::temp_dir().join("vibecast_photos");
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+        
+        let temp_path = temp_dir.to_string_lossy().to_string();
+        
+        eprintln!("Temp directory: {}", temp_path);
+        eprintln!("Exporting photos from album: {}", album_name);
+        
+        // Check if we already have cached exports for this album
+        let cache_file = temp_dir.join(format!("cache_{}.txt", 
+            album_name.chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ')
+                .collect::<String>()
+                .replace(' ', "_")
+        ));
+        
+        eprintln!("Cache file path: {:?}", cache_file);
+        
+        // Try to use cache if it exists and is recent (less than 1 hour old)
+        if cache_file.exists() {
+            eprintln!("Cache file exists, checking if recent enough...");
+            if let Ok(metadata) = std::fs::metadata(&cache_file) {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(elapsed) = modified.elapsed() {
+                        eprintln!("Cache age: {} seconds", elapsed.as_secs());
+                        if elapsed.as_secs() < 3600 { // 1 hour cache
+                            eprintln!("Using cached photo list from: {:?}", cache_file);
+                            if let Ok(cached_content) = std::fs::read_to_string(&cache_file) {
+                                let photos: Vec<String> = cached_content
+                                    .split('|')
+                                    .filter(|s| !s.is_empty())
+                                    .map(|s| s.to_string())
+                                    .collect();
+                                if !photos.is_empty() {
+                                    eprintln!("Loaded {} photos from cache", photos.len());
+                                    return Ok(photos);
+                                } else {
+                                    eprintln!("Cache was empty");
+                                }
+                            } else {
+                                eprintln!("Failed to read cache file");
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            eprintln!("No cache file found");
+        }
+        
+        eprintln!("Running AppleScript to export photos...");
+        
+        // Export photos - this will take time, but we'll cache the result
+        let script = format!(r#"
+tell application "Photos"
+    set theAlbum to album "{}"
+    
+    set photoList to {{}}
+    set exportFolder to POSIX file "{}" as alias
+    set photoCount to count of media items of theAlbum
+    
+    -- Export all photos (this may take a while for large albums)
+    repeat with aPhoto in media items of theAlbum
+        try
+            set exportedFiles to export {{aPhoto}} to exportFolder with using originals
+            repeat with exportedFile in exportedFiles
+                set end of photoList to POSIX path of exportedFile
+            end repeat
+        end try
+    end repeat
+    
+    set AppleScript's text item delimiters to "|"
+    set photoString to photoList as text
+    set AppleScript's text item delimiters to ""
+    return photoString
+end tell
+        "#, 
+            album_name.replace("\"", "\\\""),
+            temp_path.replace("\"", "\\\"")
+        );
+        
+        eprintln!("Executing AppleScript for album export...");
+        eprintln!("Script length: {} chars", script.len());
+        
+        let shell = app.shell();
+        let output = shell.command("osascript")
+            .args(["-e", &script])
+            .output()
+            .await
+            .map_err(|e| {
+                eprintln!("AppleScript execution failed: {}", e);
+                format!("Failed to execute AppleScript: {}", e)
+            })?;
+        
+        eprintln!("AppleScript completed with status: {:?}", output.status);
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("AppleScript error: {}", stderr));
+        }
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!("AppleScript output for photos: {} chars", stdout.len());
+        
+        let photos: Vec<String> = stdout
+            .trim()
+            .split("|")
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        eprintln!("Exported {} photos from album", photos.len());
+        
+        // Cache the result for future use
+        if !photos.is_empty() {
+            if let Err(e) = std::fs::write(&cache_file, stdout.as_ref()) {
+                eprintln!("Warning: Failed to cache photo list: {}", e);
+            } else {
+                eprintln!("Cached photo list to: {:?}", cache_file);
+            }
+        }
+        
+        Ok(photos)
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Apple Photos is only available on macOS".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_server_info, get_audio_data, restart_viz_window, emit_state_change])
+        .invoke_handler(tauri::generate_handler![
+            get_server_info,
+            get_audio_data,
+            restart_viz_window,
+            emit_state_change,
+            list_images_in_folder,
+            get_photos_albums,
+            get_photos_from_album
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             

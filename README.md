@@ -13,6 +13,7 @@ A high-performance, multi-window macOS application built with **Tauri v2** and *
   - **Waves**: Flowing audio-reactive wave patterns for a calming, ocean-like visualization.
   - **Particles**: Dynamic particle system with customizable colors and spread.
   - **YouTube**: Loop YouTube videos with Premium account support for ad-free playback.
+  - **Photo Slideshow**: Display images from local folders or Apple Photos with smooth transitions.
 - **Audio Reactivity**: Real-time FFT analysis of system audio (e.g., Spotify) using Rust.
 - **iPhone Remote**: A web-based remote control served over the LAN, accessible via QR code.
 - **Text Message Styles**: Multiple text display styles with full customization:

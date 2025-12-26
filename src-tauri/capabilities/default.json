@@ -8,6 +8,7 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
+    "fs:default",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{"path": "**"}]
@@ -16,6 +17,12 @@
       "identifier": "fs:allow-write-text-file",
       "allow": [{"path": "**"}]
     },
+    {
+      "identifier": "fs:scope",
+      "allow": [{"path": "$HOME/**"}, {"path": "/tmp/**"}, {"path": "/var/folders/**"}, {"path": "/Users/**"}]
+    },
+    "shell:default",
+    "shell:allow-execute",
     "opener:default",
     "core:event:default",
     "core:webview:default",

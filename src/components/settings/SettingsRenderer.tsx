@@ -5,8 +5,11 @@
  * Supports range sliders, color pickers, select dropdowns, and toggles.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { SettingDefinition } from '../../plugins/types';
+import { AlbumSelectorModal } from '../AlbumSelectorModal';
 
 interface SettingsRendererProps {
   schema: SettingDefinition[];
@@ -85,6 +88,7 @@ const SettingControl: React.FC<SettingControlProps> = ({ setting, value, onChang
           label={setting.label}
           value={value as string}
           placeholder={setting.placeholder}
+          actionButton={setting.actionButton}
           onChange={onChange}
         />
       );
@@ -222,23 +226,112 @@ interface TextControlProps {
   label: string;
   value: string;
   placeholder?: string;
+  actionButton?: 'folder' | 'album';
   onChange: (value: string) => void;
 }
 
-const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, onChange }) => {
+const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, actionButton, onChange }) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [albumList, setAlbumList] = useState<string[]>([]);
+  
+  const handleAction = async () => {
+    if (isLoading) {
+      console.log('[Action Button] Already loading, ignoring click');
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      await handleActionInternal();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const handleActionInternal = async () => {
+    if (actionButton === 'folder') {
+      try {
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: 'Select Image Folder'
+        });
+        if (selected && typeof selected === 'string') {
+          onChange(selected);
+        }
+      } catch (err) {
+        console.error('Failed to open folder picker:', err);
+      }
+    } else if (actionButton === 'album') {
+      try {
+        console.log('[Album Picker] Button clicked, requesting albums from Photos app...');
+        const albums = await invoke<string[]>('get_photos_albums');
+        console.log('[Album Picker] Received albums:', albums);
+        console.log('[Album Picker] Album count:', albums?.length);
+        
+        if (!albums || albums.length === 0) {
+          console.log('[Album Picker] No albums found');
+          alert('No albums found in Apple Photos.\n\nMake sure you have albums in the Photos app and have granted access.');
+          return;
+        }
+        
+        console.log('[Album Picker] Found albums:', albums.length, '- showing modal');
+        
+        // Show the searchable modal
+        setAlbumList(albums);
+        setShowAlbumModal(true);
+        
+      } catch (err) {
+        console.error('[Album Picker] ERROR:', err);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        alert(`Error getting albums: ${errorMsg}\n\nMake sure you're running on macOS and have granted Photos access.`);
+      }
+    }
+  };
+
   return (
-    <div className="space-y-2">
-      <label className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
-        {label}
-      </label>
-      <input
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:border-orange-500 outline-none transition-colors"
-      />
-    </div>
+    <>
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
+          {label}
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => onChange(e.target.value)}
+            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:border-orange-500 outline-none transition-colors"
+          />
+          {actionButton && (
+            <button
+              onClick={handleAction}
+              disabled={isLoading}
+              className="px-3 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
+            >
+              {isLoading ? 'Loading...' : (actionButton === 'folder' ? 'Browse...' : 'Select Album')}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Album Selector Modal */}
+      {showAlbumModal && (
+        <AlbumSelectorModal
+          albums={albumList}
+          onSelect={(album) => {
+            console.log('[Album Picker] Album selected:', album);
+            onChange(album);
+            setShowAlbumModal(false);
+          }}
+          onCancel={() => {
+            console.log('[Album Picker] Selection cancelled');
+            setShowAlbumModal(false);
+          }}
+        />
+      )}
+    </>
   );
 };
 
