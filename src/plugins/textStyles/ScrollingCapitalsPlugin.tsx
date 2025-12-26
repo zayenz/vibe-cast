@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useAnimationControls } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
 
@@ -82,6 +82,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageTimestampRef = useRef<number>(0); // Track last message timestamp to detect new messages
   const spanRef = useRef<HTMLSpanElement>(null);
+  const controls = useAnimationControls();
 
   const duration = getNumberSetting(settings.duration, 10, 5, 20);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
@@ -114,12 +115,10 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const calculateAnimationParams = (msg: string) => {
     // Estimate text width: each character is roughly fontSize * 0.6rem
     const textWidth = msg.length * (fontSize * 0.6 * 16); // Convert rem to px
-    const scrollDistance = viewportWidth + textWidth;
-    // The duration setting should be the total scroll duration
-    // So we scroll the full distance (viewport + text width) in exactly `duration` seconds
-    const animDuration = duration;
-    const endPos = `-${scrollDistance}px`;
-    return { endPos, animDuration, scrollDistance };
+    const travelDistance = viewportWidth + textWidth; // Start at right edge, exit when text width is fully off-screen
+    const animDuration = duration; // user-configured total scroll duration
+    const endPos = `-${textWidth}px`; // move left until the tail is off-screen
+    return { endPos, animDuration, scrollDistance: travelDistance };
   };
 
 
@@ -131,9 +130,8 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     
     if (nextRepeat < repeatCount) {
       // More repeats needed - restart immediately (like Dot Matrix)
+      // Just update state - the useEffect will handle restarting the animation
       setCurrentRepeat(nextRepeat);
-      // No delay - the animation will restart immediately when currentRepeat changes
-      // because the useEffect depends on it
     } else {
       // All repeats done
       completedRef.current = true;
@@ -151,6 +149,26 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     }
   };
 
+  // Start animation when message or repeat changes - this restarts immediately on repeat
+  useEffect(() => {
+    if (!displayMessage) return;
+    
+    const { endPos, animDuration } = calculateAnimationParams(displayMessage);
+    
+    // Use requestAnimationFrame to ensure immediate start without delay
+    requestAnimationFrame(() => {
+      controls.set({ x: `${viewportWidth}px` });
+      requestAnimationFrame(() => {
+        controls.start({ 
+          x: endPos, 
+          transition: { 
+            duration: animDuration, 
+            ease: "linear" 
+          } 
+        });
+      });
+    });
+  }, [displayMessage, currentRepeat, viewportWidth, fontSize, duration, controls]);
 
   // Reset state when new message is triggered
   useEffect(() => {
@@ -193,23 +211,14 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
       style={{ transform: `translateY(${verticalOffset}px)` }}
     >
-      {displayMessage && (() => {
-        // Calculate end position directly in render to ensure it's always current
-        const { endPos, animDuration } = calculateAnimationParams(displayMessage);
-        
-        return (
-          <motion.div
-            key={`${messageTimestamp}-${currentRepeat}`}
-            initial={{ x: `${viewportWidth}px` }}
-            animate={{ x: endPos }}
-            transition={{ 
-              duration: animDuration, 
-              ease: "linear"
-            }}
-            onAnimationComplete={handleComplete}
-            className="whitespace-nowrap"
-            style={{ willChange: 'transform' }}
-          >
+      {displayMessage && (
+        <motion.div
+          initial={{ x: `${viewportWidth}px` }}
+          animate={controls}
+          onAnimationComplete={handleComplete}
+          className="whitespace-nowrap"
+          style={{ willChange: 'transform' }}
+        >
           <span 
             ref={spanRef}
             className="font-black uppercase tracking-tighter"
@@ -222,8 +231,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
             {displayMessage}
           </span>
         </motion.div>
-        );
-      })()}
+      )}
     </div>
   );
 };
