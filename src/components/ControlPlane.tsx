@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
@@ -8,7 +9,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import { 
   Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
-  ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw
+  ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw,
+  Play, Square
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
@@ -62,6 +64,9 @@ export const ControlPlane: React.FC = () => {
   const activeMessages = useStore((s) => s.activeMessages);
   const clearActiveMessage = useStore((s) => s.clearActiveMessage);
   const resetMessageStats = useStore((s) => s.resetMessageStats);
+  const folderPlaybackQueue = useStore((s) => s.folderPlaybackQueue);
+  const playFolder = useStore((s) => s.playFolder);
+  const cancelFolderPlayback = useStore((s) => s.cancelFolderPlayback);
   
   // Sync messageStats from SSE to store
   // CRITICAL: Use a ref to track the last synced value and only sync when state changes
@@ -143,6 +148,34 @@ export const ControlPlane: React.FC = () => {
       messageStats: state.messageStats ?? {},
     }, false);
   }, [state]);
+
+  // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)
+  useEffect(() => {
+    const unlistenState = listen<{ type: string; payload: unknown }>('state-changed', (event) => {
+      const { type, payload } = event.payload;
+      
+      switch (type) {
+        case 'CLEAR_MESSAGE': {
+          // Message completed in VisualizerWindow - update local store
+          // IMPORTANT: Use sync=true so queue advancement triggers next message to VisualizerWindow
+          useStore.getState().clearMessage(payload as number, true);
+          break;
+        }
+        case 'CLEAR_ACTIVE_MESSAGE': {
+          // Message explicitly cleared - update local store
+          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
+            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
+            useStore.getState().clearActiveMessage(messageId, timestamp, false);
+          }
+          break;
+        }
+      }
+    });
+
+    return () => {
+      unlistenState.then((u) => u());
+    };
+  }, []);
   
   // Store for text style presets
   const textStylePresets = useStore((s) => s.textStylePresets);
@@ -593,16 +626,31 @@ export const ControlPlane: React.FC = () => {
   };
 
   const handleTriggerMessage = (msg: MessageConfig) => {
+    const activeInstance = activeMessages.find((am) => am.message.id === msg.id);
+    if (activeInstance) {
+      // If already playing, stop instead of retriggering
+      handleClearActiveMessage(msg.id, activeInstance.timestamp);
+      return;
+    }
+    // Optimistically start playing locally, then sync to backend
+    useStore.getState().triggerMessage(msg, false);
     sendCommand('trigger-message', msg);
   };
 
-  const handleClearActiveMessage = (messageId: string) => {
+  const handleClearActiveMessage = (messageId: string, timestamp?: number) => {
     // Find all active instances of this message and clear them
     const activeInstances = activeMessages.filter(am => am.message.id === messageId);
-    activeInstances.forEach(({ timestamp }) => {
-      clearActiveMessage(messageId, timestamp, true);
+    if (timestamp !== undefined) {
+      // Clear specific instance
+      clearActiveMessage(messageId, timestamp, false);
       sendCommand('clear-active-message', { messageId, timestamp });
-    });
+    } else {
+      // Clear all instances
+      activeInstances.forEach(({ timestamp: ts }) => {
+        clearActiveMessage(messageId, ts, false);
+        sendCommand('clear-active-message', { messageId, timestamp: ts });
+      });
+    }
   };
 
   const handleSaveConfig = async () => {
@@ -1140,9 +1188,43 @@ export const ControlPlane: React.FC = () => {
                           </button>
                               )}
                               <div className="ml-auto flex items-center gap-2">
+                                {folderPlaybackQueue?.folderId === folder.id && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-orange-400 font-bold">
+                                      Playing: {folderPlaybackQueue.currentIndex + 1}/{folderPlaybackQueue.messageIds.length}
+                                    </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        // sync=true emits CANCEL_FOLDER_PLAYBACK event to visualizer
+                                        cancelFolderPlayback(true);
+                                      }}
+                                      className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
+                                      title="Cancel folder playback"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                                {(!folderPlaybackQueue || folderPlaybackQueue.folderId !== folder.id) && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const confirmed = window.confirm('Play this folder sequentially?');
+                                      if (confirmed) {
+                                        // sync=true triggers first message with syncState, which visualizer receives
+                                        playFolder(folder.id, messageTreeLocal, true);
+                                      }
+                                    }}
+                                    className="px-2 py-1 bg-zinc-800 text-zinc-400 hover:text-orange-500 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
+                                    title="Play folder sequentially"
+                                  >
+                                    <Play size={12} fill="currentColor" />
+                                  </button>
+                                )}
                                 <div className="text-xs font-bold text-zinc-500 tabular-nums">
                                   {counts.triggered} / {counts.total}
-                        </div>
+                                </div>
                               </div>
                             </div>
                           </motion.div>
@@ -1154,6 +1236,9 @@ export const ControlPlane: React.FC = () => {
                     const stats = messageStats[msg.id];
                     const triggerCount = stats?.triggerCount ?? 0;
                     const isAnimating = activeMessages.some((am) => am.message.id === msg.id);
+                    const isInQueue = folderPlaybackQueue?.messageIds.includes(msg.id) ?? false;
+                    const queuePosition = isInQueue ? folderPlaybackQueue!.messageIds.indexOf(msg.id) + 1 : null;
+                    const queueTotal = folderPlaybackQueue?.messageIds.length ?? null;
 
                     return (
                       <div
@@ -1184,9 +1269,9 @@ export const ControlPlane: React.FC = () => {
                               <GripVertical size={16} />
                             </button>
                             <button
-                              onClick={() => (isAnimating ? handleClearActiveMessage(msg.id) : handleTriggerMessage(msg))}
+                              onClick={() => handleTriggerMessage(msg)}
                               disabled={isPending}
-                              className={`flex-1 text-left text-sm font-medium transition-colors disabled:opacity-50 truncate ${
+                              className={`flex-1 text-left text-sm font-medium transition-all disabled:opacity-50 truncate ${
                                 isAnimating
                                   ? 'text-orange-500 hover:text-orange-400'
                                   : triggerCount > 0
@@ -1216,9 +1301,29 @@ export const ControlPlane: React.FC = () => {
                                   })()}
                                 </span>
                                 {isAnimating && (
-                                  <span className="text-xs text-orange-500 font-bold animate-pulse">ANIMATING</span>
+                                  <span className="text-xs text-orange-500 font-bold animate-pulse">Playing</span>
+                                )}
+                                {isInQueue && !isAnimating && queuePosition && queueTotal && (
+                                  <span className="text-xs text-blue-400 font-bold">
+                                    {queuePosition}/{queueTotal}
+                                  </span>
                                 )}
                               </div>
+                            </button>
+                            {/* Play/Stop button - unified logic; shows stop while active */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleTriggerMessage(msg);
+                              }}
+                              className={`p-1.5 rounded transition-colors ${
+                                isAnimating
+                                  ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                  : 'text-zinc-500 hover:text-orange-500 hover:bg-zinc-800'
+                              }`}
+                              title={isAnimating ? 'Stop message' : 'Play message'}
+                            >
+                              {isAnimating ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                             </button>
                             <div
                               className={`px-2 py-0.5 rounded text-xs font-bold ${
@@ -1230,18 +1335,6 @@ export const ControlPlane: React.FC = () => {
                             >
                               {triggerCount}
                             </div>
-                            {isAnimating && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleClearActiveMessage(msg.id);
-                                }}
-                                className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
-                                title="Clear message"
-                              >
-                                Clear
-                              </button>
-                            )}
                         <button
                           onClick={() => setExpandedMessage(expandedMessage === msg.id ? null : msg.id)}
                           className="p-1 text-zinc-600 hover:text-zinc-400 transition-colors"

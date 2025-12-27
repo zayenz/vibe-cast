@@ -283,6 +283,19 @@ export const VisualizerWindow: React.FC = () => {
         case 'load-configuration':
           loadConfiguration(payload, false);
           break;
+        case 'clear-active-message':
+          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
+            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
+            useStore.getState().clearActiveMessage(messageId, timestamp, false);
+          }
+          break;
+        case 'play-folder':
+          // Folder playback handled by ControlPlane, visualizer just needs to display triggered messages
+          break;
+        case 'cancel-folder-playback':
+          // Cancel folder queue and clear current message
+          useStore.getState().cancelFolderPlayback(false);
+          break;
       }
     });
 
@@ -510,7 +523,7 @@ export const VisualizerWindow: React.FC = () => {
             textStylePresets={textStylePresets}
             verticalOffset={index * 80} // Stack messages with 80px spacing
             repeatCount={message.repeatCount ?? 1}
-            onComplete={() => clearMessage(timestamp, false)}
+            onComplete={() => clearMessage(timestamp, true)}
           />
         ))}
       </div>

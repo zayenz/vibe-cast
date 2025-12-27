@@ -37,6 +37,9 @@ export interface AppState {
   messageTimestamp: number; // Legacy - kept for compatibility
   messageStats: Record<string, MessageStats>;
   
+  // Folder playback queue
+  folderPlaybackQueue: { folderId: string; messageIds: string[]; currentIndex: number } | null;
+  
   // Text style state
   defaultTextStyle: string;
   textStyleSettings: Record<string, Record<string, unknown>>;
@@ -76,6 +79,10 @@ export interface AppState {
   clearMessage: (timestamp: number, sync?: boolean) => void;
   clearActiveMessage: (messageId: string, timestamp: number, sync?: boolean) => void;
   resetMessageStats: (sync?: boolean) => void;
+  
+  // Folder playback actions
+  playFolder: (folderId: string, messageTree: MessageTreeNode[], sync?: boolean) => void;
+  cancelFolderPlayback: (sync?: boolean) => void;
   
   setDefaultTextStyle: (id: string, sync?: boolean) => void;
   setTextStyleSetting: (styleId: string, key: string, value: unknown, sync?: boolean) => void;
@@ -123,6 +130,42 @@ function flattenMessageTree(tree: MessageTreeNode[]): MessageConfig[] {
   };
   walk(tree);
   return out;
+}
+
+/**
+ * Collect all message IDs from a folder recursively
+ */
+function collectMessagesFromFolder(folderId: string, tree: MessageTreeNode[]): string[] {
+  const messageIds: string[] = [];
+  
+  const findFolder = (nodes: MessageTreeNode[]): MessageTreeNode | null => {
+    for (const node of nodes) {
+      if (node.type === 'folder' && node.id === folderId) {
+        return node;
+      }
+      if (node.type === 'folder') {
+        const found = findFolder(node.children ?? []);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  
+  const folder = findFolder(tree);
+  if (!folder || folder.type !== 'folder') {
+    return [];
+  }
+  
+  const collectFromNode = (node: MessageTreeNode) => {
+    if (node.type === 'message') {
+      messageIds.push(node.message.id);
+    } else if (node.type === 'folder') {
+      (node.children ?? []).forEach(collectFromNode);
+    }
+  };
+  
+  (folder.children ?? []).forEach(collectFromNode);
+  return messageIds;
 }
 
 function parseDefaultConfig(): Partial<AppState> {
@@ -241,6 +284,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeMessage: null, // Legacy compatibility
   messageTimestamp: 0, // Legacy compatibility
   messageStats: defaults.messageStats ?? {},
+  folderPlaybackQueue: null,
   
   defaultTextStyle: defaults.defaultTextStyle ?? 'scrolling-capitals',
   textStyleSettings: defaults.textStyleSettings ?? getDefaultTextStyleSettings(),
@@ -465,28 +509,91 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   clearMessage: (timestamp, sync = true) => {
-    set(state => {
-      const newActiveMessages = state.activeMessages.filter(m => m.timestamp !== timestamp);
+    const state = get();
+    const clearedMessage = state.activeMessages.find(m => m.timestamp === timestamp);
+    
+    set(currentState => {
+      const newActiveMessages = currentState.activeMessages.filter(m => m.timestamp !== timestamp);
       // Legacy compatibility - clear if no active messages
       const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
       const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
+      
+      let updatedQueue = currentState.folderPlaybackQueue;
+      const advanceIfPossible = (queue: typeof updatedQueue) => {
+        if (!queue) return { queue: null, triggered: false };
+        const nextIndex = queue.currentIndex + 1;
+        if (nextIndex < queue.messageIds.length) {
+          const nextMessageId = queue.messageIds[nextIndex];
+          const nextMessage = currentState.messages.find(m => m.id === nextMessageId);
+          if (nextMessage) {
+            return { queue: { ...queue, currentIndex: nextIndex }, triggered: true, nextMessage };
+          }
+          return { queue: null, triggered: false };
+        }
+        // Queue complete
+        return { queue: null, triggered: false };
+      };
+
+      // Primary path: advance when the cleared message matches the current index
+      if (updatedQueue && clearedMessage) {
+        const messageIndex = updatedQueue.messageIds.indexOf(clearedMessage.message.id);
+        if (messageIndex === updatedQueue.currentIndex && messageIndex >= 0) {
+          const { queue, triggered, nextMessage } = advanceIfPossible(updatedQueue);
+          updatedQueue = queue;
+          if (triggered && nextMessage) {
+            setTimeout(() => {
+              get().triggerMessage(nextMessage, sync);
+            }, 0);
+          }
+        }
+      }
+
+      // Fallback: if queue exists, no active messages remain, try to advance
+      if (updatedQueue && newActiveMessages.length === 0) {
+        const { queue, triggered, nextMessage } = advanceIfPossible(updatedQueue);
+        updatedQueue = queue;
+        if (triggered && nextMessage) {
+          setTimeout(() => {
+            get().triggerMessage(nextMessage, sync);
+          }, 0);
+        }
+      }
+      
       return {
         activeMessages: newActiveMessages,
         activeMessage: legacyMessage,
         messageTimestamp: legacyTimestamp,
+        folderPlaybackQueue: updatedQueue,
       };
     });
+    
     if (sync) {
       syncState('CLEAR_MESSAGE', timestamp);
     }
   },
 
   clearActiveMessage: (messageId, timestamp, sync = true) => {
-    // Clear all instances of this message that are currently active
+    // Clear instances of this message that are currently active
+    // First try to match by both messageId and timestamp
+    // If no exact match, clear by messageId only (handles cross-window timestamp differences)
     set(state => {
-      const newActiveMessages = state.activeMessages.filter(
-        m => !(m.message.id === messageId && m.timestamp === timestamp)
+      const exactMatch = state.activeMessages.find(
+        m => m.message.id === messageId && m.timestamp === timestamp
       );
+      
+      let newActiveMessages: typeof state.activeMessages;
+      if (exactMatch) {
+        // Exact match found - remove just that one
+        newActiveMessages = state.activeMessages.filter(
+          m => !(m.message.id === messageId && m.timestamp === timestamp)
+        );
+      } else {
+        // No exact match - remove all with this messageId (cross-window case)
+        newActiveMessages = state.activeMessages.filter(
+          m => m.message.id !== messageId
+        );
+      }
+      
       const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
       const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
       return {
@@ -504,6 +611,62 @@ export const useStore = create<AppState>((set, get) => ({
     set({ messageStats: {} });
     if (sync) {
       syncState('RESET_MESSAGE_STATS', {});
+    }
+  },
+
+  // Folder playback actions
+  playFolder: (folderId, messageTree, sync = true) => {
+    const messageIds = collectMessagesFromFolder(folderId, messageTree);
+    if (messageIds.length === 0) {
+      console.warn(`No messages found in folder ${folderId}`);
+      return;
+    }
+    
+    // Cancel any existing folder playback
+    const state = get();
+    if (state.folderPlaybackQueue) {
+      get().cancelFolderPlayback(false);
+    }
+    
+    // Set up new queue
+    set({ folderPlaybackQueue: { folderId, messageIds, currentIndex: 0 } });
+    
+    // Trigger first message
+    const firstMessageId = messageIds[0];
+    const firstMessage = state.messages.find(m => m.id === firstMessageId);
+    if (firstMessage) {
+      get().triggerMessage(firstMessage, sync);
+    } else {
+      console.warn(`Message ${firstMessageId} not found`);
+      set({ folderPlaybackQueue: null });
+    }
+    
+    if (sync) {
+      syncState('PLAY_FOLDER', { folderId, messageIds });
+    }
+  },
+
+  cancelFolderPlayback: (sync = true) => {
+    const state = get();
+    if (!state.folderPlaybackQueue) {
+      return;
+    }
+    
+    // Clear current message if it's part of the queue
+    const currentMessageId = state.folderPlaybackQueue.messageIds[state.folderPlaybackQueue.currentIndex];
+    if (currentMessageId) {
+      const currentActive = state.activeMessages.find(
+        am => am.message.id === currentMessageId
+      );
+      if (currentActive) {
+        get().clearMessage(currentActive.timestamp, false);
+      }
+    }
+    
+    set({ folderPlaybackQueue: null });
+    
+    if (sync) {
+      syncState('CANCEL_FOLDER_PLAYBACK', {});
     }
   },
 

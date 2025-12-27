@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useFetcher } from 'react-router-dom';
-import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2 } from 'lucide-react';
+import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
@@ -39,18 +39,61 @@ export const RemoteControl: React.FC = () => {
   const triggeredMessage = state?.triggeredMessage ?? null;
   const isPending = fetcher.state !== 'idle';
   
+  // Get active messages and folder queue from store (if available) or derive from state
+  // Note: RemoteControl runs in browser, so we need to track this differently
+  // For now, we'll use triggeredMessage as a proxy, but ideally this would come from SSE state
+  const activeMessageIds = triggeredMessage ? [triggeredMessage.id] : [];
+  // Folder playback queue - would need to be added to SSE state for full functionality
+  // For now, we'll just check if folderId matches (would need folderId in state)
+  type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
+  const folderPlaybackQueue = null as FolderQueue | null;
+  
   // Filter to show only active visualization preset
   // Helper to render message tree with folders
   const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
     return nodes.map((node) => {
       if (node.type === 'folder') {
+        const folderQueue: FolderQueue | null = 
+          folderPlaybackQueue !== null && folderPlaybackQueue.folderId === node.id ? folderPlaybackQueue : null;
         return (
           <div key={node.id}>
             <div 
               style={{ paddingLeft: `${depth * 12}px` }} 
-              className="text-xs text-zinc-500 font-bold uppercase tracking-wider mt-4 mb-2 px-2"
+              className="text-xs text-zinc-500 font-bold uppercase tracking-wider mt-4 mb-2 px-2 flex items-center justify-between"
             >
-              {node.name}
+              <span>{node.name}</span>
+              {folderQueue && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-orange-400 font-bold">
+                    {folderQueue.currentIndex + 1}/{folderQueue.messageIds.length}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      sendCommand('cancel-folder-playback', {});
+                    }}
+                    className="p-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded text-xs"
+                    title="Cancel folder playback"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+              {!folderQueue && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const confirmed = window.confirm('Play this folder sequentially?');
+                    if (confirmed) {
+                      sendCommand('play-folder', { folderId: node.id });
+                    }
+                  }}
+                  className="p-1 bg-zinc-800 text-zinc-400 hover:text-orange-500 rounded text-xs"
+                  title="Play folder sequentially"
+                >
+                  <Play size={12} fill="currentColor" />
+                </button>
+              )}
             </div>
             {renderMessageTree(node.children ?? [], depth + 1)}
           </div>
@@ -59,40 +102,71 @@ export const RemoteControl: React.FC = () => {
         const msg = node.message;
         const stats = messageStats[msg.id];
         const triggerCount = stats?.triggerCount ?? 0;
-        const isPlaying = triggeredMessage?.id === msg.id;
+        const isPlaying = activeMessageIds.includes(msg.id);
+        const isInQueue = folderPlaybackQueue !== null && folderPlaybackQueue.messageIds.includes(msg.id);
+        const queuePosition: number | null = isInQueue && folderPlaybackQueue !== null 
+          ? folderPlaybackQueue.messageIds.indexOf(msg.id) + 1 
+          : null;
+        const queueTotal: number | null = folderPlaybackQueue !== null ? folderPlaybackQueue.messageIds.length : null;
+        
         return (
-          <button
-            key={msg.id}
-            onClick={() => handleTriggerMessage(msg)}
-            disabled={isPending}
-            style={{ paddingLeft: `${depth * 12 + 20}px` }}
-            className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
-              isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
-            }`}
-          >
-            <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
-            <div className="relative z-10 flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
-                  {msg.text}
+          <div key={msg.id} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="mb-2">
+            <button
+              onClick={() => handleTriggerMessage(msg)}
+              disabled={isPending}
+              className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
+                isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
+              }`}
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
+              <div className="relative z-10 flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
+                    {msg.text}
+                  </span>
+                  {isPlaying && (
+                    <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-[9px] font-bold uppercase rounded">
+                      Playing
+                    </span>
+                  )}
+                  {isInQueue && !isPlaying && queuePosition && queueTotal && (
+                    <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[9px] font-bold rounded">
+                      {queuePosition}/{queueTotal}
+                    </span>
+                  )}
+                  {triggerCount > 0 && (
+                    <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[9px] font-bold rounded tabular-nums">
+                      {triggerCount}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                  {msg.textStyle.replace('-', ' ')}
                 </span>
-                {isPlaying && (
-                  <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 text-[9px] font-bold uppercase rounded">
-                    Playing
-                  </span>
-                )}
-                {triggerCount > 0 && (
-                  <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[9px] font-bold rounded tabular-nums">
-                    {triggerCount}
-                  </span>
-                )}
               </div>
-              <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
-                {msg.textStyle.replace('-', ' ')}
-              </span>
-            </div>
-            <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors shrink-0 ml-2" />
-          </button>
+              <div className="flex items-center gap-2 shrink-0 ml-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isPlaying) {
+                      sendCommand('clear-active-message', { messageId: msg.id });
+                    } else {
+                      handleTriggerMessage(msg);
+                    }
+                  }}
+                  className={`p-1.5 rounded transition-colors ${
+                    isPlaying
+                      ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                      : 'text-zinc-500 hover:text-orange-500 hover:bg-zinc-800'
+                  }`}
+                  title={isPlaying ? 'Stop message' : 'Play message'}
+                >
+                  {isPlaying ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                </button>
+                <ChevronRight size={18} className="text-zinc-700 group-active:text-orange-500 transition-colors" />
+              </div>
+            </button>
+          </div>
         );
       }
     });
