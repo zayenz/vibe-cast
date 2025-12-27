@@ -361,7 +361,13 @@ export const VisualizerWindow: React.FC = () => {
           break;
         case 'CLEAR_MESSAGE':
           // Clear message by timestamp (handled locally, no sync needed)
-          clearMessage(payload as number, false);
+          // Payload can be { timestamp, messageId } or just timestamp (legacy)
+          if (payload && typeof payload === 'object' && 'timestamp' in payload) {
+            const { timestamp, messageId } = payload as { timestamp: number; messageId?: string };
+            clearMessage(timestamp, false, messageId);
+          } else if (typeof payload === 'number') {
+            clearMessage(payload, false);
+          }
           break;
         case 'CLEAR_ACTIVE_MESSAGE':
           // Clear specific active message
@@ -523,7 +529,7 @@ export const VisualizerWindow: React.FC = () => {
             textStylePresets={textStylePresets}
             verticalOffset={index * 80} // Stack messages with 80px spacing
             repeatCount={message.repeatCount ?? 1}
-            onComplete={() => clearMessage(timestamp, true)}
+            onComplete={() => clearMessage(timestamp, true, message.id)}
           />
         ))}
       </div>

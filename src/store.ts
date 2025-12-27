@@ -76,7 +76,7 @@ export interface AppState {
   updateMessage: (id: string, updates: Partial<MessageConfig>, sync?: boolean) => void;
   removeMessage: (id: string, sync?: boolean) => void;
   triggerMessage: (message: MessageConfig, sync?: boolean) => void;
-  clearMessage: (timestamp: number, sync?: boolean) => void;
+  clearMessage: (timestamp: number, sync?: boolean, messageId?: string) => void;
   clearActiveMessage: (messageId: string, timestamp: number, sync?: boolean) => void;
   resetMessageStats: (sync?: boolean) => void;
   
@@ -508,12 +508,28 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  clearMessage: (timestamp, sync = true) => {
+  clearMessage: (timestamp, sync = true, messageId) => {
     const state = get();
-    const clearedMessage = state.activeMessages.find(m => m.timestamp === timestamp);
+    // First try to find by timestamp, then fall back to messageId (cross-window case)
+    let clearedMessage = state.activeMessages.find(m => m.timestamp === timestamp);
+    if (!clearedMessage && messageId) {
+      clearedMessage = state.activeMessages.find(m => m.message.id === messageId);
+    }
+    
+    // Determine which messages to remove
+    const messageToRemove = clearedMessage;
+    
+    // If no message to remove, nothing to do (prevents infinite event loops)
+    if (!messageToRemove) {
+      return;
+    }
     
     set(currentState => {
-      const newActiveMessages = currentState.activeMessages.filter(m => m.timestamp !== timestamp);
+      // Remove the specific message we found
+      const newActiveMessages = currentState.activeMessages.filter(
+        m => m.timestamp !== messageToRemove.timestamp
+      );
+      
       // Legacy compatibility - clear if no active messages
       const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
       const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
@@ -535,9 +551,9 @@ export const useStore = create<AppState>((set, get) => ({
       };
 
       // Primary path: advance when the cleared message matches the current index
-      if (updatedQueue && clearedMessage) {
-        const messageIndex = updatedQueue.messageIds.indexOf(clearedMessage.message.id);
-        if (messageIndex === updatedQueue.currentIndex && messageIndex >= 0) {
+      if (updatedQueue) {
+        const msgIndex = updatedQueue.messageIds.indexOf(messageToRemove.message.id);
+        if (msgIndex === updatedQueue.currentIndex && msgIndex >= 0) {
           const { queue, triggered, nextMessage } = advanceIfPossible(updatedQueue);
           updatedQueue = queue;
           if (triggered && nextMessage) {
@@ -568,7 +584,8 @@ export const useStore = create<AppState>((set, get) => ({
     });
     
     if (sync) {
-      syncState('CLEAR_MESSAGE', timestamp);
+      // Include messageId in the event for cross-window sync
+      syncState('CLEAR_MESSAGE', { timestamp, messageId: messageToRemove.message.id });
     }
   },
 
@@ -596,10 +613,38 @@ export const useStore = create<AppState>((set, get) => ({
       
       const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
       const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
+      
+      // Handle folder queue advancement for manual stop
+      let updatedQueue = state.folderPlaybackQueue;
+      if (updatedQueue) {
+        const currentQueueMessageId = updatedQueue.messageIds[updatedQueue.currentIndex];
+        if (currentQueueMessageId === messageId) {
+          // User manually stopped the current queue message - advance or clear queue
+          const nextIndex = updatedQueue.currentIndex + 1;
+          if (nextIndex < updatedQueue.messageIds.length) {
+            const nextMessageId = updatedQueue.messageIds[nextIndex];
+            const nextMessage = state.messages.find(m => m.id === nextMessageId);
+            if (nextMessage) {
+              updatedQueue = { ...updatedQueue, currentIndex: nextIndex };
+              // Trigger next message
+              setTimeout(() => {
+                get().triggerMessage(nextMessage, sync);
+              }, 0);
+            } else {
+              updatedQueue = null;
+            }
+          } else {
+            // Queue complete
+            updatedQueue = null;
+          }
+        }
+      }
+      
       return {
         activeMessages: newActiveMessages,
         activeMessage: legacyMessage,
         messageTimestamp: legacyTimestamp,
+        folderPlaybackQueue: updatedQueue,
       };
     });
     if (sync) {
@@ -616,6 +661,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Folder playback actions
   playFolder: (folderId, messageTree, sync = true) => {
+    console.log(`[playFolder] Starting folder ${folderId}, sync=${sync}`);
     const messageIds = collectMessagesFromFolder(folderId, messageTree);
     if (messageIds.length === 0) {
       console.warn(`No messages found in folder ${folderId}`);
@@ -625,16 +671,19 @@ export const useStore = create<AppState>((set, get) => ({
     // Cancel any existing folder playback
     const state = get();
     if (state.folderPlaybackQueue) {
+      console.log('[playFolder] Cancelling existing queue');
       get().cancelFolderPlayback(false);
     }
     
     // Set up new queue
+    console.log(`[playFolder] Setting up queue with ${messageIds.length} messages`);
     set({ folderPlaybackQueue: { folderId, messageIds, currentIndex: 0 } });
     
     // Trigger first message
     const firstMessageId = messageIds[0];
     const firstMessage = state.messages.find(m => m.id === firstMessageId);
     if (firstMessage) {
+      console.log(`[playFolder] Triggering first message: ${firstMessage.text}`);
       get().triggerMessage(firstMessage, sync);
     } else {
       console.warn(`Message ${firstMessageId} not found`);

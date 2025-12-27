@@ -158,7 +158,14 @@ export const ControlPlane: React.FC = () => {
         case 'CLEAR_MESSAGE': {
           // Message completed in VisualizerWindow - update local store
           // IMPORTANT: Use sync=true so queue advancement triggers next message to VisualizerWindow
-          useStore.getState().clearMessage(payload as number, true);
+          // Payload is now { timestamp, messageId } to handle cross-window timestamp differences
+          if (payload && typeof payload === 'object' && 'timestamp' in payload) {
+            const { timestamp, messageId } = payload as { timestamp: number; messageId?: string };
+            useStore.getState().clearMessage(timestamp, true, messageId);
+          } else if (typeof payload === 'number') {
+            // Legacy: just timestamp
+            useStore.getState().clearMessage(payload, true);
+          }
           break;
         }
         case 'CLEAR_ACTIVE_MESSAGE': {
@@ -1210,9 +1217,13 @@ export const ControlPlane: React.FC = () => {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      e.preventDefault();
+                                      console.log('[FolderPlay] Button clicked, showing confirm dialog');
                                       const confirmed = window.confirm('Play this folder sequentially?');
+                                      console.log(`[FolderPlay] Confirm result: ${confirmed}`);
                                       if (confirmed) {
                                         // sync=true triggers first message with syncState, which visualizer receives
+                                        console.log(`[FolderPlay] Calling playFolder for ${folder.id}`);
                                         playFolder(folder.id, messageTreeLocal, true);
                                       }
                                     }}
