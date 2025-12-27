@@ -1266,6 +1266,22 @@ export const ControlPlane: React.FC = () => {
                             className="px-3 pb-3 border-t border-zinc-800/50"
                           >
                             <div className="pt-3 space-y-4">
+                              {/* Message Text Editor */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Message Text
+                                </label>
+                                <textarea
+                                  value={msg.text}
+                                  onChange={(e) => {
+                                    updateMessageById(msg.id, (m) => ({ ...m, text: e.target.value }));
+                                  }}
+                                  rows={3}
+                                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors resize-y"
+                                  placeholder="Enter message text..."
+                                />
+                              </div>
+
                               {/* Text Style Selector (single dropdown) */}
                               <div>
                               <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
