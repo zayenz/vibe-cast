@@ -390,6 +390,7 @@ export const useStore = create<AppState>((set, get) => ({
       id: generateId(),
       text,
       textStyle: state.defaultTextStyle,
+      splitEnabled: false,
     };
     const messages = [...state.messages, newMessage];
     set({ messages });

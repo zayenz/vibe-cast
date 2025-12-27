@@ -96,6 +96,33 @@ describe('Configuration Serialization', () => {
     expect(Array.isArray(config.messageTree)).toBe(true);
     expect(config.messageTree).toHaveLength(1);
   });
+
+  it('preserves message split settings', () => {
+    const store = useStore.getState();
+    const messageTree = [
+      {
+        type: 'message' as const,
+        id: 'msg-2',
+        message: {
+          id: 'msg-2',
+          text: 'A|B',
+          textStyle: 'fade',
+          splitEnabled: true,
+          splitSeparator: '|',
+          repeatCount: 2,
+        },
+      },
+    ];
+
+    store.setMessageTree(messageTree);
+    const roundTrip = store.getConfiguration();
+
+    expect(roundTrip.messageTree?.[0]?.type).toBe('message');
+    const msg = roundTrip.messageTree?.[0] as any;
+    expect(msg?.message?.splitEnabled).toBe(true);
+    expect(msg?.message?.splitSeparator).toBe('|');
+    expect(msg?.message?.repeatCount).toBe(2);
+  });
   
   it('should include common settings', () => {
     const store = useStore.getState();

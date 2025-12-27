@@ -40,10 +40,6 @@ export const RemoteControl: React.FC = () => {
   const isPending = fetcher.state !== 'idle';
   
   // Filter to show only active visualization preset
-  const activePreset = activeVisualizationPreset 
-    ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
-    : null;
-
   // Helper to render message tree with folders
   const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
     return nodes.map((node) => {
@@ -202,27 +198,28 @@ export const RemoteControl: React.FC = () => {
           Visualization
         </h2>
         <div className="grid gap-4 grid-cols-2">
-          {activePreset ? (
-            (() => {
-              const viz = getVisualization(activePreset.visualizationId);
+          {visualizationPresets.length > 0 ? (
+            visualizationPresets.map((preset) => {
+              const viz = getVisualization(preset.visualizationId);
+              const active = activeVisualizationPreset === preset.id;
               return (
                 <RemoteVizCard 
-                  key={activePreset.id}
-                  active={true}
-                  onClick={() => handleSetActivePreset(null)}
+                  key={preset.id}
+                  active={active}
+                  onClick={() => handleSetActivePreset(preset.id)}
                   icon={
-                    activePreset.icon 
-                      ? getIcon(activePreset.icon, 28) || <Settings2 size={28} />
+                    preset.icon 
+                      ? getIcon(preset.icon, 28) || <Settings2 size={28} />
                       : (viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />)
                   }
-                  label={activePreset.name}
+                  label={preset.name}
                   disabled={isPending}
                 />
               );
-            })()
+            })
           ) : (
             <div className="col-span-2 text-center py-8 text-zinc-500 text-xs">
-              No active visualization
+              No presets available
             </div>
           )}
         </div>

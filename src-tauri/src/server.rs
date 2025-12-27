@@ -211,6 +211,8 @@ async fn handle_command(
                         style_overrides: None,
                         repeat_count: None,
                         speed: None,
+                        split_enabled: None,
+                        split_separator: None,
                     })
                 } else if let Ok(msg) = serde_json::from_value::<MessageConfig>(p.clone()) {
                     Some(msg)
@@ -294,6 +296,8 @@ async fn handle_command(
                                 style_overrides: None,
                                 repeat_count: None,
                                 speed: None,
+                                split_enabled: None,
+                                split_separator: None,
                             })
                         })
                         .collect();

@@ -1350,6 +1350,47 @@ export const ControlPlane: React.FC = () => {
                                 </div>
                               </div>
 
+                              {/* Split on */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Split on separator
+                                </label>
+                                <div className="flex items-center gap-3">
+                                  <label className="flex items-center gap-2 text-sm text-zinc-300">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!msg.splitEnabled}
+                                      onChange={(e) => {
+                                        const enabled = e.target.checked;
+                                        updateMessageById(msg.id, (m) => ({
+                                          ...m,
+                                          splitEnabled: enabled,
+                                        }));
+                                      }}
+                                      className="accent-orange-500"
+                                    />
+                                    Enable split
+                                  </label>
+                                  <input
+                                    type="text"
+                                    disabled={!msg.splitEnabled}
+                                    value={msg.splitSeparator ?? ''}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      updateMessageById(msg.id, (m) => ({
+                                        ...m,
+                                        splitSeparator: raw.trim(),
+                                      }));
+                                    }}
+                                    placeholder="Separator (e.g. |)"
+                                    className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 disabled:opacity-50 focus:border-orange-500 outline-none transition-colors"
+                                  />
+                                </div>
+                                <p className="text-xs text-zinc-500 mt-1">
+                                  Parts are trimmed; when enabled, messages cycle through split parts and repeat loops the set.
+                                </p>
+                              </div>
+
                               {/* Speed Multiplier */}
                               <div>
                                 <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">

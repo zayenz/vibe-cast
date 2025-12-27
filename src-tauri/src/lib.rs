@@ -60,6 +60,10 @@ pub struct MessageConfig {
     pub repeat_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_separator: Option<String>,
 }
 
 /// Visualization preset matching the frontend VisualizationPreset type
@@ -183,6 +187,8 @@ impl AppStateSync {
                 style_overrides: None,
                 repeat_count: None,
                 speed: None,
+                split_enabled: None,
+                split_separator: None,
             },
             MessageConfig {
                 id: "2".to_string(),
@@ -192,6 +198,8 @@ impl AppStateSync {
                 style_overrides: None,
                 repeat_count: None,
                 speed: None,
+                split_enabled: None,
+                split_separator: None,
             },
             MessageConfig {
                 id: "3".to_string(),
@@ -201,6 +209,8 @@ impl AppStateSync {
                 style_overrides: None,
                 repeat_count: None,
                 speed: None,
+                split_enabled: None,
+                split_separator: None,
             },
         ];
 

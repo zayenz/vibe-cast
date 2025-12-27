@@ -7,6 +7,7 @@ import {
   MessageStats,
   DEFAULT_COMMON_SETTINGS,
 } from '../plugins/types';
+import { visualizationRegistry, getDefaultVisualizationSettings } from '../plugins/visualizations';
 import type { MessageTreeNode } from '../plugins/types';
 
 /**
@@ -50,14 +51,30 @@ interface UseAppStateOptions {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseSSEState(data: any): AppState {
+  const buildFallbackPresets = (settings: Record<string, Record<string, unknown>> = {}): VisualizationPreset[] => {
+    const defaults = getDefaultVisualizationSettings();
+    return visualizationRegistry.map((viz) => ({
+      id: `${viz.id}-default`,
+      name: `${viz.name} Default`,
+      visualizationId: viz.id,
+      settings: settings[viz.id] ?? defaults[viz.id] ?? {},
+      enabled: true,
+    }));
+  };
+
   // Handle new format
   if (data.activeVisualization !== undefined) {
+    const basePresets: VisualizationPreset[] = data.visualizationPresets ?? [];
+    const effectivePresets = Array.isArray(basePresets) && basePresets.length > 0
+      ? basePresets
+      : buildFallbackPresets(data.visualizationSettings ?? {});
+
     return {
       activeVisualization: data.activeVisualization,
       enabledVisualizations: data.enabledVisualizations ?? ['fireplace', 'techno'],
       commonSettings: data.commonSettings ?? DEFAULT_COMMON_SETTINGS,
       visualizationSettings: data.visualizationSettings ?? {},
-      visualizationPresets: data.visualizationPresets ?? [],
+      visualizationPresets: effectivePresets,
       activeVisualizationPreset: data.activeVisualizationPreset ?? null,
       messages: data.messages ?? [],
       messageTree: data.messageTree ?? undefined,
@@ -72,12 +89,13 @@ function parseSSEState(data: any): AppState {
   }
   
   // Handle legacy format
+  const legacyPresets = buildFallbackPresets();
   return {
     activeVisualization: data.mode ?? 'fireplace',
     enabledVisualizations: ['fireplace', 'techno'],
     commonSettings: DEFAULT_COMMON_SETTINGS,
     visualizationSettings: {},
-    visualizationPresets: [],
+    visualizationPresets: legacyPresets,
     activeVisualizationPreset: null,
     messages: Array.isArray(data.messages) 
       ? data.messages.map((m: unknown, i: number) => 

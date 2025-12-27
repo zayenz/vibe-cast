@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
 import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } from '../plugins/types';
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
+import { computeSplitSequence } from '../utils/messageParts';
 
 /**
  * Text Style Renderer Component
@@ -19,6 +20,31 @@ const TextStyleRenderer: React.FC<{
   repeatCount?: number;
   onComplete: () => void;
 }> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, repeatCount = 1, onComplete }) => {
+  const effectiveRepeatCount = repeatCount ?? 1;
+  const { splitActive, sequence } = useMemo(
+    () => computeSplitSequence({ ...message, repeatCount: effectiveRepeatCount }),
+    [effectiveRepeatCount, message]
+  );
+  const [partIndex, setPartIndex] = useState(0);
+  const [partTimestamp, setPartTimestamp] = useState(messageTimestamp);
+  const currentMessage = sequence[Math.min(partIndex, sequence.length - 1)] ?? '';
+  const pluginRepeatCount = splitActive ? 1 : effectiveRepeatCount;
+
+  useEffect(() => {
+    setPartIndex(0);
+    setPartTimestamp(messageTimestamp);
+  }, [messageTimestamp, message.text, message.splitEnabled, message.splitSeparator, effectiveRepeatCount]);
+
+  const handleComplete = useCallback(() => {
+    if (splitActive && partIndex + 1 < sequence.length) {
+      const nextIndex = partIndex + 1;
+      setPartIndex(nextIndex);
+      setPartTimestamp(messageTimestamp + nextIndex);
+      return;
+    }
+    onComplete?.();
+  }, [splitActive, partIndex, sequence.length, messageTimestamp, onComplete]);
+
   // Determine which text style to use
   const preset = message.textStylePreset 
     ? textStylePresets.find(p => p.id === message.textStylePreset)
@@ -41,12 +67,12 @@ const TextStyleRenderer: React.FC<{
     
     return (
       <TextStyleComponent
-        message={message.text}
-        messageTimestamp={messageTimestamp}
+        message={currentMessage}
+        messageTimestamp={partTimestamp}
         settings={settings}
         verticalOffset={verticalOffset}
-        repeatCount={repeatCount}
-        onComplete={onComplete}
+        repeatCount={pluginRepeatCount}
+        onComplete={handleComplete}
       />
     );
   }
@@ -60,12 +86,12 @@ const TextStyleRenderer: React.FC<{
 
   return (
     <TextStyleComponent
-      message={message.text}
-      messageTimestamp={messageTimestamp}
+      message={currentMessage}
+      messageTimestamp={partTimestamp}
       settings={settings}
       verticalOffset={verticalOffset}
-      repeatCount={repeatCount}
-      onComplete={onComplete}
+      repeatCount={pluginRepeatCount}
+      onComplete={handleComplete}
     />
   );
 };

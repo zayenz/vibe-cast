@@ -262,6 +262,18 @@ export interface MessageConfig {
   
   /** The message text */
   text: string;
+
+  /**
+   * Whether to split the message into multiple parts using a separator.
+   * When enabled, the message text is split into parts and cycled instead of repeating the full text.
+   */
+  splitEnabled?: boolean;
+
+  /**
+   * Separator string used when splitEnabled is true.
+   * Parts are trimmed; empty separators disable splitting.
+   */
+  splitSeparator?: string;
   
   /** Text style plugin ID to use (legacy - kept for backward compatibility) */
   textStyle: string;
