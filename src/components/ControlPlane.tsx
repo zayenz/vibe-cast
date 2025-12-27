@@ -206,6 +206,8 @@ export const ControlPlane: React.FC = () => {
   const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
   const [editingFolderPath, setEditingFolderPath] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState<string>('');
+  // Pending folder play confirmation (to avoid window.confirm issues in Tauri WebView)
+  const [pendingFolderPlay, setPendingFolderPlay] = useState<{ folderId: string } | null>(null);
 
   // Debug flag for message reordering
   const dndDebugRef = useRef<boolean>(false);
@@ -1232,18 +1234,9 @@ export const ControlPlane: React.FC = () => {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       e.preventDefault();
-                                      console.log(`[FolderPlay] Button clicked for folder ${folder.id}`);
-                                      console.log(`[FolderPlay] Current folderPlaybackQueue:`, folderPlaybackQueue);
-                                      console.log(`[FolderPlay] About to show confirm dialog...`);
-                                      const confirmed = window.confirm('Play this folder sequentially?');
-                                      console.log(`[FolderPlay] Confirm returned: ${confirmed}`);
-                                      if (confirmed) {
-                                        console.log(`[FolderPlay] User confirmed, calling playFolder for ${folder.id}`);
-                                        playFolder(folder.id, messageTreeLocal, true);
-                                        console.log(`[FolderPlay] playFolder returned`);
-                                      } else {
-                                        console.log(`[FolderPlay] User cancelled`);
-                                      }
+                                      console.log(`[FolderPlay] Button clicked for folder ${folder.id}, showing confirmation`);
+                                      // Use state-based confirmation to avoid window.confirm issues in Tauri WebView
+                                      setPendingFolderPlay({ folderId: folder.id });
                                     }}
                                     className="px-2 py-1 bg-zinc-800 text-zinc-400 hover:text-orange-500 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
                                     title="Play folder sequentially"
@@ -1721,6 +1714,39 @@ export const ControlPlane: React.FC = () => {
         </div>
       </div>
     </div>
+      )}
+      
+      {/* Folder Play Confirmation Modal */}
+      {pendingFolderPlay && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-sm mx-4 shadow-2xl">
+            <h3 className="text-lg font-bold text-white mb-3">Play Folder?</h3>
+            <p className="text-zinc-400 text-sm mb-6">
+              Play all messages in this folder sequentially?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  console.log('[FolderPlay] User cancelled');
+                  setPendingFolderPlay(null);
+                }}
+                className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  console.log(`[FolderPlay] User confirmed, playing folder ${pendingFolderPlay.folderId}`);
+                  playFolder(pendingFolderPlay.folderId, messageTreeLocal, true);
+                  setPendingFolderPlay(null);
+                }}
+                className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-500 transition-colors"
+              >
+                Play
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
