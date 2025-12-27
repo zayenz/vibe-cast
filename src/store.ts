@@ -550,12 +550,16 @@ export const useStore = create<AppState>((set, get) => ({
         return { queue: null, triggered: false };
       };
 
+      // Track if we already triggered the next message
+      let alreadyAdvanced = false;
+
       // Primary path: advance when the cleared message matches the current index
       if (updatedQueue) {
         const msgIndex = updatedQueue.messageIds.indexOf(messageToRemove.message.id);
         if (msgIndex === updatedQueue.currentIndex && msgIndex >= 0) {
           const { queue, triggered, nextMessage } = advanceIfPossible(updatedQueue);
           updatedQueue = queue;
+          alreadyAdvanced = true;
           if (triggered && nextMessage) {
             setTimeout(() => {
               get().triggerMessage(nextMessage, sync);
@@ -564,8 +568,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Fallback: if queue exists, no active messages remain, try to advance
-      if (updatedQueue && newActiveMessages.length === 0) {
+      // Fallback: if queue exists, no active messages remain, AND we haven't already advanced
+      if (!alreadyAdvanced && updatedQueue && newActiveMessages.length === 0) {
         const { queue, triggered, nextMessage } = advanceIfPossible(updatedQueue);
         updatedQueue = queue;
         if (triggered && nextMessage) {
