@@ -605,48 +605,10 @@ export const ControlPlane: React.FC = () => {
     });
   };
 
-  const buildConfigFromState = (s: any): AppConfiguration => {
-    const msgs = s?.messages ?? [];
-    const tree = s?.messageTree ?? buildFlatTree(msgs);
-    return {
-      version: 1,
-      activeVisualization: s?.activeVisualization ?? 'fireplace',
-      activeVisualizationPreset: s?.activeVisualizationPreset ?? undefined,
-      enabledVisualizations: s?.enabledVisualizations ?? ['fireplace', 'techno'],
-      commonSettings: s?.commonSettings ?? { intensity: 1, dim: 1 },
-      visualizationSettings: s?.visualizationSettings ?? {},
-      visualizationPresets: s?.visualizationPresets ?? [],
-      messages: msgs,
-      messageTree: tree,
-      defaultTextStyle: s?.defaultTextStyle ?? 'scrolling-capitals',
-      textStyleSettings: s?.textStyleSettings ?? {},
-      textStylePresets: s?.textStylePresets ?? [],
-      messageStats: s?.messageStats ?? {},
-    };
-  };
-
   const handleSaveConfig = async () => {
     try {
-      let config: AppConfiguration | null = null;
-
-      // Prefer canonical state from backend to avoid stale store data
-      try {
-        const response = await fetch(`${API_BASE}/api/state`);
-        if (response.ok) {
-          const apiState = await response.json();
-          config = buildConfigFromState(apiState);
-        } else {
-          console.warn('Failed to fetch state from backend, response not ok');
-        }
-      } catch (err) {
-        console.warn('Failed to fetch state from backend, falling back to store', err);
-      }
-
-      if (!config) {
-        // Fallback to local store snapshot (should already be kept in sync via SSE)
-        config = useStore.getState().getConfiguration();
-      }
-
+      // Get complete configuration from store
+      const config = useStore.getState().getConfiguration();
       const json = JSON.stringify(config, null, 2);
       
       // Show save dialog

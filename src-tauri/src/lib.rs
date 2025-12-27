@@ -311,17 +311,12 @@ impl AppStateSync {
         
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
-        eprintln!("Config file size (bytes): {}", content.len());
-        let preview: String = content.chars().take(400).collect();
-        eprintln!("Config file preview (first 400 chars): {}", preview);
         
         let config: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
         
         // Apply configuration similar to the "load-configuration" command handler
         if let Some(obj) = config.as_object() {
-            let keys: Vec<String> = obj.keys().cloned().collect();
-            eprintln!("Config top-level keys: {:?}", keys);
             if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
                 if let Ok(mut m) = self.active_visualization.lock() {
                     *m = viz.to_string();
@@ -347,71 +342,20 @@ impl AppStateSync {
                 }
             }
             if let Some(msgs) = obj.get("messages") {
-                let msgs_str = serde_json::to_string(msgs).unwrap_or_default();
-                eprintln!("Config messages value length (chars): {}", msgs_str.len());
-                let raw_len = msgs.as_array().map(|a| a.len()).unwrap_or(0);
-                let is_array = msgs.is_array();
-                let is_object = msgs.is_object();
-                eprintln!("Config messages raw len: {}, is_array: {}, is_object: {}", raw_len, is_array, is_object);
-                let parsed: Option<Vec<MessageConfig>> = if msgs.is_array() {
-                    serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()).ok()
-                } else if let Some(map) = msgs.as_object() {
-                    // Convert object map to array of values
-                    let vals: Vec<serde_json::Value> = map.values().cloned().collect();
-                    serde_json::from_value::<Vec<MessageConfig>>(serde_json::Value::Array(vals)).ok()
-                } else {
-                    None
-                };
-                match parsed {
-                    Some(messages) => {
-                        let len = messages.len();
-                        if let Ok(mut m) = self.messages.lock() {
-                            *m = messages;
-                        }
-                        eprintln!("Loaded messages from config: {}", len);
-                        if raw_len == 0 && len == 0 {
-                            eprintln!("Warning: messages array is present but empty. Was the config saved before data loaded?");
-                        }
-                    }
-                    None => {
-                        eprintln!("Failed to parse messages from config (unexpected shape)");
-                        // Try best-effort manual parse to salvage entries if array
-                        if let Some(arr) = msgs.as_array() {
-                            let mut recovered: Vec<MessageConfig> = vec![];
-                            for (i, v) in arr.iter().enumerate() {
-                                match serde_json::from_value::<MessageConfig>(v.clone()) {
-                                    Ok(msg) => recovered.push(msg),
-                                    Err(err) => eprintln!("Message {} failed to parse: {}", i, err),
-                                }
-                            }
-                            let len = recovered.len();
-                            if let Ok(mut m) = self.messages.lock() {
-                                *m = recovered;
-                            }
-                            eprintln!("Recovered messages after per-item parse: {}", len);
-                        }
+                if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
+                    if let Ok(mut m) = self.messages.lock() {
+                        *m = messages;
                     }
                 }
             }
             if let Some(tree) = obj.get("messageTree") {
-                let tree_str = serde_json::to_string(tree).unwrap_or_default();
-                eprintln!("Config messageTree value length (chars): {}", tree_str.len());
-                let raw_tree_len = tree.as_array().map(|a| a.len()).unwrap_or(0);
-                let tree_is_array = tree.is_array();
-                let tree_is_object = tree.is_object();
-                eprintln!("Config messageTree raw len: {}, is_array: {}, is_object: {}", raw_tree_len, tree_is_array, tree_is_object);
                 if let Ok(mut t) = self.message_tree.lock() {
                     *t = tree.clone();
                 }
                 // Ensure flattened messages match tree
                 let flat = flatten_message_tree_value(&tree);
-                let flat_len = flat.len();
                 if let Ok(mut m) = self.messages.lock() {
                     *m = flat;
-                }
-                eprintln!("Loaded messageTree from config, flattened messages: {}", flat_len);
-                if raw_tree_len == 0 && flat_len == 0 {
-                    eprintln!("Warning: messageTree is present but empty. Was the config saved before data loaded?");
                 }
             } else {
                 // If no tree was provided, build a flat tree from messages
@@ -467,21 +411,6 @@ impl AppStateSync {
         
         // Broadcast the updated state
         self.broadcast(None);
-
-        // Diagnostics: log what we actually loaded
-        let msg_count = self.messages.lock().map(|m| m.len()).unwrap_or(0);
-        let tree_len = self.message_tree.lock().map(|t| {
-            if let Some(arr) = t.as_array() {
-                arr.len()
-            } else if t.is_null() {
-                0
-            } else {
-                1 // non-array object
-            }
-        }).unwrap_or(0);
-        let preset_count = self.visualization_presets.lock().map(|p| p.len()).unwrap_or(0);
-        let stats_count = self.message_stats.lock().map(|s| s.as_object().map(|o| o.len()).unwrap_or(0)).unwrap_or(0);
-        eprintln!("Loaded config summary: messages={}, tree_nodes={}, presets={}, message_stats={}", msg_count, tree_len, preset_count, stats_count);
         
         Ok(())
     }

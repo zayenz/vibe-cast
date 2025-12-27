@@ -5058,7 +5058,6 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
- "tempfile",
  "tokio",
  "tokio-stream",
  "tower-http 0.5.2",
