@@ -19,7 +19,7 @@ const settingsSchema: SettingDefinition[] = [
     type: 'range',
     id: 'displayDuration',
     label: 'Display Duration (seconds)',
-    min: 2,
+    min: 0,
     max: 15,
     step: 0.5,
     default: 5,
@@ -105,7 +105,7 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const controls = useAnimationControls();
 
-  const displayDuration = getNumberSetting(settings.displayDuration, 5, 2, 15);
+  const displayDuration = getNumberSetting(settings.displayDuration, 5, 0, 15);
   const fadeInDuration = getNumberSetting(settings.fadeInDuration, 0.5, 0.2, 3);
   const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.5, 0.2, 3);
   const fontSize = getNumberSetting(settings.fontSize, 5, 2, 12);

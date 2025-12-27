@@ -19,7 +19,7 @@ const settingsSchema: SettingDefinition[] = [
     type: 'range',
     id: 'displayDuration',
     label: 'Display Duration (seconds)',
-    min: 2,
+    min: 0,
     max: 10,
     step: 0.5,
     default: 4,
@@ -97,7 +97,7 @@ const BounceStyle: React.FC<TextStyleProps> = ({
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const controls = useAnimationControls();
 
-  const displayDuration = getNumberSetting(settings.displayDuration, 4, 2, 10);
+  const displayDuration = getNumberSetting(settings.displayDuration, 4, 0, 10);
   const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.8, 0.3, 2.0);
   const bounceIntensity = getNumberSetting(settings.bounceIntensity, 1.0, 0.5, 2.0);
   const fontSize = getNumberSetting(settings.fontSize, 6, 3, 16);
