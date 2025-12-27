@@ -701,18 +701,25 @@ export const useStore = create<AppState>((set, get) => ({
       return;
     }
     
+    console.log('[cancelFolderPlayback] Cancelling folder playback');
+    
     // Clear current message if it's part of the queue
     const currentMessageId = state.folderPlaybackQueue.messageIds[state.folderPlaybackQueue.currentIndex];
+    
+    // Clear the queue first to prevent queue advancement
+    set({ folderPlaybackQueue: null });
+    
+    // Then clear the currently playing message
     if (currentMessageId) {
       const currentActive = state.activeMessages.find(
         am => am.message.id === currentMessageId
       );
       if (currentActive) {
-        get().clearMessage(currentActive.timestamp, false);
+        // Use clearActiveMessage which handles cross-window sync better
+        console.log(`[cancelFolderPlayback] Clearing message: ${currentMessageId}`);
+        get().clearActiveMessage(currentMessageId, currentActive.timestamp, sync);
       }
     }
-    
-    set({ folderPlaybackQueue: null });
     
     if (sync) {
       syncState('CANCEL_FOLDER_PLAYBACK', {});

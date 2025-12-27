@@ -1203,8 +1203,22 @@ export const ControlPlane: React.FC = () => {
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        // sync=true emits CANCEL_FOLDER_PLAYBACK event to visualizer
-                                        cancelFolderPlayback(true);
+                                        console.log('[FolderCancel] Cancelling folder playback');
+                                        // Get current message before cancelling
+                                        const currentMsgId = folderPlaybackQueue?.messageIds[folderPlaybackQueue.currentIndex];
+                                        const currentActive = currentMsgId ? activeMessages.find(am => am.message.id === currentMsgId) : null;
+                                        
+                                        // Cancel locally
+                                        cancelFolderPlayback(false);
+                                        
+                                        // Send command to backend to clear the message in visualizer
+                                        if (currentActive) {
+                                          sendCommand('clear-active-message', { 
+                                            messageId: currentActive.message.id, 
+                                            timestamp: currentActive.timestamp 
+                                          });
+                                        }
+                                        sendCommand('cancel-folder-playback', {});
                                       }}
                                       className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
                                       title="Cancel folder playback"
@@ -1218,13 +1232,17 @@ export const ControlPlane: React.FC = () => {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       e.preventDefault();
-                                      console.log('[FolderPlay] Button clicked, showing confirm dialog');
+                                      console.log(`[FolderPlay] Button clicked for folder ${folder.id}`);
+                                      console.log(`[FolderPlay] Current folderPlaybackQueue:`, folderPlaybackQueue);
+                                      console.log(`[FolderPlay] About to show confirm dialog...`);
                                       const confirmed = window.confirm('Play this folder sequentially?');
-                                      console.log(`[FolderPlay] Confirm result: ${confirmed}`);
+                                      console.log(`[FolderPlay] Confirm returned: ${confirmed}`);
                                       if (confirmed) {
-                                        // sync=true triggers first message with syncState, which visualizer receives
-                                        console.log(`[FolderPlay] Calling playFolder for ${folder.id}`);
+                                        console.log(`[FolderPlay] User confirmed, calling playFolder for ${folder.id}`);
                                         playFolder(folder.id, messageTreeLocal, true);
+                                        console.log(`[FolderPlay] playFolder returned`);
+                                      } else {
+                                        console.log(`[FolderPlay] User cancelled`);
                                       }
                                     }}
                                     className="px-2 py-1 bg-zinc-800 text-zinc-400 hover:text-orange-500 rounded text-xs font-bold hover:bg-zinc-700 transition-colors"
