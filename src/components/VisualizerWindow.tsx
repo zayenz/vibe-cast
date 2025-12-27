@@ -6,6 +6,7 @@ import { getTextStyle } from '../plugins/textStyles';
 import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } from '../plugins/types';
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
+import { useAppState } from '../hooks/useAppState';
 
 /**
  * Text Style Renderer Component
@@ -128,8 +129,24 @@ const VisualizationRenderer: React.FC<{
   audioData: number[];
   commonSettings: CommonVisualizationSettings;
   visualizationSettings: Record<string, Record<string, unknown>>;
-}> = ({ visualizationId, audioData, commonSettings, visualizationSettings }) => {
+  presetSettings?: Record<string, unknown>;
+}> = ({ visualizationId, audioData, commonSettings, visualizationSettings, presetSettings }) => {
   const plugin = getVisualization(visualizationId);
+  
+  // Debug logging - log once when key settings change
+  const lastLoggedRef = useRef<string>('');
+  const logKey = JSON.stringify({ visualizationId, presetSettings, storedKeys: Object.keys(visualizationSettings) });
+  if (logKey !== lastLoggedRef.current) {
+    lastLoggedRef.current = logKey;
+    console.log('[VisualizationRenderer] Settings update:', {
+      visualizationId,
+      pluginFound: !!plugin,
+      presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
+      presetSettingsValues: presetSettings,
+      storedSettingsKeys: Object.keys(visualizationSettings),
+      storedForThisViz: visualizationSettings[visualizationId],
+    });
+  }
   
   if (!plugin) {
     // Fallback to fireplace if visualization not found
@@ -157,9 +174,19 @@ const VisualizationRenderer: React.FC<{
   // Merge stored settings with defaults from schema
   const defaultSettings = getDefaultsFromSchema(plugin.settingsSchema);
   const storedSettings = visualizationSettings[visualizationId] || {};
-  const customSettings = { ...defaultSettings, ...storedSettings };
+  // If an active preset is selected, merge its settings as well (preset overrides default, but per-visualization stored settings win last)
+  // Order: defaults -> stored -> active preset (preset wins over stored)
+  const customSettings = { ...defaultSettings, ...storedSettings, ...(presetSettings || {}) };
   
-  // Avoid per-frame logging here; it can cause long-run degradation/crashes in WebViews.
+  // Debug log the final merged settings
+  if (logKey !== lastLoggedRef.current || !lastLoggedRef.current) {
+    console.log('[VisualizationRenderer] Final customSettings:', {
+      visualizationId,
+      folderPath: customSettings.folderPath,
+      videoUrl: customSettings.videoUrl,
+      allKeys: Object.keys(customSettings),
+    });
+  }
 
   return (
     <div className="absolute inset-0">
@@ -204,8 +231,69 @@ export const VisualizerWindow: React.FC = () => {
   // Legacy compatibility
   const setMode = useStore((state) => state.setMode);
 
+  // Subscribe to SSE stream for initial configuration load
+  // This ensures VisualizerWindow gets the same config as ControlPlane on startup
+  // Must use the same API base as ControlPlane to connect to the Axum server
+  const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: 'http://localhost:8080' });
+
+  // Load SSE state into local zustand store when it arrives
+  useEffect(() => {
+    console.log('[VisualizerWindow] SSE effect triggered:', {
+      sseState: sseState ? 'received' : 'null',
+      sseConnected,
+    });
+    
+    if (!sseState) {
+      console.log('[VisualizerWindow] SSE state is null, waiting...');
+      return;
+    }
+    
+    console.log('[VisualizerWindow] SSE state received:', {
+      activeVisualization: sseState.activeVisualization,
+      activeVisualizationPreset: sseState.activeVisualizationPreset,
+      presetsCount: sseState.visualizationPresets?.length ?? 0,
+      presetIds: sseState.visualizationPresets?.map(p => ({ id: p.id, name: p.name, vizId: p.visualizationId })),
+    });
+    
+    loadConfiguration({
+      version: 1,
+      activeVisualization: sseState.activeVisualization,
+      activeVisualizationPreset: sseState.activeVisualizationPreset ?? undefined,
+      enabledVisualizations: sseState.enabledVisualizations,
+      commonSettings: sseState.commonSettings,
+      visualizationSettings: sseState.visualizationSettings ?? {},
+      visualizationPresets: sseState.visualizationPresets ?? [],
+      messages: sseState.messages ?? [],
+      messageTree: sseState.messageTree,
+      defaultTextStyle: sseState.defaultTextStyle,
+      textStyleSettings: sseState.textStyleSettings ?? {},
+      textStylePresets: sseState.textStylePresets ?? [],
+      messageStats: sseState.messageStats ?? {},
+    }, false); // sync=false to avoid broadcasting back
+    
+    console.log('[VisualizerWindow] Config loaded into store');
+  }, [sseState, loadConfiguration]);
+
+  // Debug: Log current state after store updates
+  useEffect(() => {
+    console.log('[VisualizerWindow] Store state:', {
+      activeVisualization,
+      activeVisualizationPreset,
+      presetsCount: visualizationPresets.length,
+      presetNames: visualizationPresets.map(p => p.name),
+      activePreset: activePreset ? { 
+        id: activePreset.id, 
+        name: activePreset.name, 
+        vizId: activePreset.visualizationId,
+        settings: activePreset.settings 
+      } : null,
+    });
+  }, [activeVisualization, activeVisualizationPreset, visualizationPresets, activePreset]);
+
   // Determine which visualization and settings to use based on preset
   const targetVizId = activePreset ? activePreset.visualizationId : activeVisualization;
+  
+  console.log('[VisualizerWindow] Target visualization:', targetVizId, 'from preset:', activePreset?.name ?? 'none');
 
   // Health watchdog: detect long-running stalls and attempt a safe remount.
   const [vizRemountKey, setVizRemountKey] = useState(0);
@@ -416,6 +504,16 @@ export const VisualizerWindow: React.FC = () => {
   const vizSettings = activePreset 
     ? { [targetVizId]: activePreset.settings }
     : visualizationSettings;
+  
+  // Debug: Log the settings being computed
+  console.log('[VisualizerWindow] vizSettings computed:', {
+    hasActivePreset: !!activePreset,
+    targetVizId,
+    vizSettingsKeys: Object.keys(vizSettings),
+    presetSettingsForRenderer: activePreset && activePreset.visualizationId === targetVizId
+      ? { hasSettings: true, folderPath: activePreset.settings?.folderPath, videoUrl: activePreset.settings?.videoUrl }
+      : 'undefined (no preset or vizId mismatch)',
+  });
 
   useEffect(() => {
     // Only run in dev; we don't want surprise remounts in production without explicit opt-in.
@@ -516,6 +614,11 @@ export const VisualizerWindow: React.FC = () => {
           audioData={audioData}
           commonSettings={commonSettings}
           visualizationSettings={vizSettings}
+          presetSettings={
+            activePreset && activePreset.visualizationId === targetVizId
+              ? activePreset.settings
+              : undefined
+          }
         />
       </div>
       {/* Render all active messages - they can coexist with higher z-index */}

@@ -497,17 +497,32 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
         
-        // Decode to ensure fully ready
-        const firstImg = new Image();
-        firstImg.src = blobUrl;
-        await firstImg.decode();
-        
-        console.log('[Photo Slideshow] First image ready, showing slideshow');
+        // Store blob URL immediately so image can be displayed
         blobUrls.current.set(firstPath, blobUrl);
-        setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
+        
+        // Show slideshow immediately - don't wait for decode
+        console.log('[Photo Slideshow] First image blob ready, showing slideshow immediately');
         setLoading(false);
         
-        // Run face detection on first image
+        // Decode in background and only add to readyImages when fully decoded
+        const firstImg = new Image();
+        firstImg.src = blobUrl;
+        firstImg.decode()
+          .then(() => {
+            // Detect orientation for mosaic mode
+            const isPortrait = firstImg.naturalHeight > firstImg.naturalWidth;
+            setImageOrientations(prev => new Map(prev).set(firstPath, isPortrait));
+            // Only add to readyImages after full decode (for transition readiness)
+            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
+            console.log('[Photo Slideshow] First image fully decoded');
+          })
+          .catch((err) => {
+            console.warn('[Photo Slideshow] First image decode failed (non-critical):', err);
+            // Still add to readyImages even if decode fails (better than nothing)
+            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
+          });
+        
+        // Run face detection on first image in background
         if (smartCrop) {
           detectFacePosition(blobUrl).then(facePos => {
             setFacePositions(prev => new Map(prev).set(firstPath, facePos));
@@ -530,6 +545,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   useEffect(() => {
     if ((sourceType === 'local' && folderPath) || (sourceType === 'photos' && photosAlbumName)) {
       loadImages();
+    } else {
+      // No valid source configured: clear loading and show guidance instead of spinning
+      setImages([]);
+      setReadyImages(new Map());
+      setError(null);
+      setLoading(false);
     }
   }, [loadImages, sourceType, folderPath, photosAlbumName]);
   
@@ -594,14 +615,14 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     
   }, [currentIndex, images, smartCrop, faceModelsLoaded, facePositions, preloadMedia]);
   
-  // Auto-advance timer - only starts when current media is ready
+  // Auto-advance timer - starts when current media blob URL is available
   useEffect(() => {
     if (images.length === 0 || isTransitioning) return;
     
     const currentPath = images[currentIndex];
-    // Only start timer if current media is ready
-    if (!readyImages.has(currentPath)) {
-      console.log('[Photo Slideshow] Waiting for current media before starting timer...');
+    // Start timer if we have a blob URL (image can be displayed, even if not fully decoded)
+    if (!blobUrls.current.has(currentPath)) {
+      console.log('[Photo Slideshow] Waiting for current media blob URL before starting timer...');
       return;
     }
     
@@ -878,10 +899,13 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                   key={`mosaic-left-${currentIndex}`}
                   src={currentBlobUrl}
                   alt={`Photo ${currentIndex + 1}`}
+                  loading="eager"
                   style={{
                     maxHeight: '100%',
                     maxWidth: '100%',
                     objectFit: 'contain',
+                    imageRendering: 'auto',
+                    willChange: 'opacity, transform',
                     transition: `opacity ${transitionDuration}s ease-in-out`,
                     ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
                   }}
@@ -897,10 +921,13 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                   key={`mosaic-right-${nextIdx}`}
                   src={mosaicPartnerUrl}
                   alt={`Photo ${nextIdx + 1}`}
+                  loading="eager"
                   style={{
                     maxHeight: '100%',
                     maxWidth: '100%',
                     objectFit: 'contain',
+                    imageRendering: 'auto',
+                    willChange: 'opacity',
                     transition: `opacity ${transitionDuration}s ease-in-out`,
                   }}
                   onError={(e) => {
@@ -932,21 +959,33 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                   }}
                 />
               ) : (
-                <img
-                  key={`current-${currentIndex}`}
-                  src={currentBlobUrl}
-                  alt={`Photo ${currentIndex + 1} of ${images.length}`}
-                  className="absolute inset-0"
-                  style={{
-                    ...getSmartCropStyle(currentFacePosition),
-                    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                    ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
-                  }}
-                  onError={(e) => {
-                    console.error('[Photo Slideshow] Failed to display image:', currentImage);
-                    console.error('[Photo Slideshow] Error event:', e);
-                  }}
-                />
+                <>
+                  <img
+                    key={`current-${currentIndex}`}
+                    src={currentBlobUrl}
+                    alt={`Photo ${currentIndex + 1} of ${images.length}`}
+                    loading="eager"
+                    className="absolute inset-0"
+                    style={{
+                      ...getSmartCropStyle(currentFacePosition),
+                      imageRendering: 'auto',
+                      willChange: 'opacity, transform',
+                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+                      ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
+                    }}
+                    onError={(e) => {
+                      console.error('[Photo Slideshow] Failed to display image:', currentImage);
+                      console.error('[Photo Slideshow] Error event:', e);
+                    }}
+                  />
+                  {/* Subtle loading indicator for images still decoding */}
+                  {blobUrls.current.has(currentImage) && !readyImages.has(currentImage) && (
+                    <div className="absolute top-4 right-4 bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+                      <span className="text-xs text-white/80 font-medium">Decoding...</span>
+                    </div>
+                  )}
+                </>
               )}
               
               {/* Next media (entering during transition) - uses pre-decoded blob URL */}
@@ -973,9 +1012,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     key={`next-${nextIndex}`}
                     src={nextBlobUrl}
                     alt={`Photo ${nextIndex! + 1} of ${images.length}`}
+                    loading="eager"
                     className="absolute inset-0"
                     style={{
                       ...getSmartCropStyle(nextFacePosition),
+                      imageRendering: 'auto',
+                      willChange: 'opacity, transform',
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
                       ...getTransitionStyles(currentTransition, 'enter'),
                     }}
