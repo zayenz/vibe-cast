@@ -451,7 +451,7 @@ export const YouTubePlugin: VisualizationPlugin = {
   id: 'youtube',
   name: 'YouTube',
   description: 'Loop YouTube videos with Premium support',
-  icon: 'Youtube',
+  icon: 'Video',
   settingsSchema,
   component: YouTubeVisualization,
 };

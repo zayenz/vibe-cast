@@ -1002,7 +1002,7 @@ export const PhotoSlideshowPlugin: VisualizationPlugin = {
   id: 'photo-slideshow',
   name: 'Photo Slideshow',
   description: 'Display photos and videos from folders or Apple Photos with smooth transitions',
-  icon: 'Images',
+  icon: 'Image',
   settingsSchema,
   component: PhotoSlideshowVisualization,
 };

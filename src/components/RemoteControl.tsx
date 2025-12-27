@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useFetcher } from 'react-router-dom';
-import { Flame, Music, Flower, Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
+import { Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
@@ -10,19 +10,14 @@ import { getIcon } from '../utils/iconSet';
 // Remote runs in browser on the same origin as the Axum server, so no API base needed
 const API_BASE = '';
 
-// Icon map for visualizations
-const iconMap: Record<string, React.ReactNode> = {
-  'Flame': <Flame size={28} />,
-  'Music': <Music size={28} />,
-  'Flower': <Flower size={28} />,
-};
-
 export const RemoteControl: React.FC = () => {
   // SSE-based state - single source of truth for everything
   const { state, isConnected, error } = useAppState({ apiBase: API_BASE });
   
   // Get presets from SSE state (not local store - remote runs in browser without Tauri)
-  const visualizationPresets: VisualizationPreset[] = state?.visualizationPresets ?? [];
+  const allVisualizationPresets: VisualizationPreset[] = state?.visualizationPresets ?? [];
+  // Filter to show only enabled presets (enabled !== false)
+  const visualizationPresets = allVisualizationPresets.filter(p => p.enabled !== false);
   const activeVisualizationPreset: string | null = state?.activeVisualizationPreset ?? null;
   
   // Fetcher for form submissions
@@ -282,9 +277,7 @@ export const RemoteControl: React.FC = () => {
                   active={active}
                   onClick={() => handleSetActivePreset(preset.id)}
                   icon={
-                    preset.icon 
-                      ? getIcon(preset.icon, 28) || <Settings2 size={28} />
-                      : (viz ? (iconMap[viz.icon] || <Settings2 size={28} />) : <Settings2 size={28} />)
+                    getIcon(preset?.icon || viz?.icon, 28) || <Settings2 size={28} />
                   }
                   label={preset.name}
                   disabled={isPending}
