@@ -124,6 +124,15 @@ impl Default for CommonSettings {
     }
 }
 
+/// Folder playback queue state
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPlaybackQueue {
+    pub folder_id: String,
+    pub message_ids: Vec<String>,
+    pub current_index: usize,
+}
+
 /// Application state that gets broadcast via SSE
 #[derive(Clone, serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +153,8 @@ pub struct BroadcastState {
     pub message_stats: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triggered_message: Option<MessageConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_playback_queue: Option<FolderPlaybackQueue>,
     // Legacy compatibility
     pub mode: String,
 }
@@ -162,6 +173,7 @@ pub struct AppStateSync {
     pub text_style_settings: Mutex<serde_json::Value>,
     pub text_style_presets: Mutex<Vec<TextStylePreset>>,
     pub message_stats: Mutex<serde_json::Value>,
+    pub folder_playback_queue: Mutex<Option<FolderPlaybackQueue>>,
     pub server_port: Mutex<u16>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
@@ -239,6 +251,7 @@ impl AppStateSync {
             text_style_settings: Mutex::new(serde_json::json!({})),
             text_style_presets: Mutex::new(vec![]),
             message_stats: Mutex::new(serde_json::json!({})),
+            folder_playback_queue: Mutex::new(None),
             server_port: Mutex::new(8080),
             state_tx,
         }
@@ -282,6 +295,9 @@ impl AppStateSync {
         let message_stats = self.message_stats.lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
+        let folder_playback_queue = self.folder_playback_queue.lock()
+            .map(|m| m.clone())
+            .unwrap_or(None);
         
         // Legacy mode field
         let mode = active_visualization.clone();
@@ -300,6 +316,7 @@ impl AppStateSync {
             text_style_presets,
             message_stats,
             triggered_message: None,
+            folder_playback_queue,
             mode,
         }
     }

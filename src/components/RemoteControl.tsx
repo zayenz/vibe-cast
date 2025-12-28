@@ -34,14 +34,11 @@ export const RemoteControl: React.FC = () => {
   const triggeredMessage = state?.triggeredMessage ?? null;
   const isPending = fetcher.state !== 'idle';
   
-  // Get active messages and folder queue from store (if available) or derive from state
-  // Note: RemoteControl runs in browser, so we need to track this differently
-  // For now, we'll use triggeredMessage as a proxy, but ideally this would come from SSE state
+  // Get active messages and folder queue from SSE state
   const activeMessageIds = triggeredMessage ? [triggeredMessage.id] : [];
-  // Folder playback queue - would need to be added to SSE state for full functionality
-  // For now, we'll just check if folderId matches (would need folderId in state)
+  // Folder playback queue from SSE state
   type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
-  const folderPlaybackQueue = null as FolderQueue | null;
+  const folderPlaybackQueue: FolderQueue | null = state?.folderPlaybackQueue ?? null;
   
   // Filter to show only active visualization preset
   // Helper to render message tree with folders
@@ -143,11 +140,16 @@ export const RemoteControl: React.FC = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    e.preventDefault();
                     if (isPlaying) {
                       sendCommand('clear-active-message', { messageId: msg.id });
                     } else {
                       handleTriggerMessage(msg);
                     }
+                  }}
+                  onPointerDown={(e) => {
+                    // Prevent parent button from receiving pointer events
+                    e.stopPropagation();
                   }}
                   className={`p-1.5 rounded transition-colors ${
                     isPlaying
@@ -176,6 +178,11 @@ export const RemoteControl: React.FC = () => {
   };
 
   const handleTriggerMessage = (msg: MessageConfig) => {
+    // If message is already playing, stop it instead of triggering again
+    if (triggeredMessage?.id === msg.id) {
+      sendCommand('clear-active-message', { messageId: msg.id });
+      return;
+    }
     sendCommand('trigger-message', msg);
   };
 

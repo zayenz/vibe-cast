@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
-use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, TextStylePreset};
+use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, TextStylePreset, FolderPlaybackQueue};
 
 fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
     fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
@@ -66,6 +66,81 @@ fn build_flat_message_tree(messages: &[MessageConfig]) -> serde_json::Value {
             }))
             .collect(),
     )
+}
+
+/// Collect all message IDs from a folder in the message tree
+fn collect_messages_from_folder(folder_id: &str, tree: &serde_json::Value) -> Vec<String> {
+    // First, find the folder node
+    fn find_folder<'a>(folder_id: &str, node: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
+        match node {
+            serde_json::Value::Array(arr) => {
+                for n in arr {
+                    if let Some(found) = find_folder(folder_id, n) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            serde_json::Value::Object(obj) => {
+                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                    if t == "folder" {
+                        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                            if id == folder_id {
+                                return Some(node);
+                            }
+                        }
+                        // Check nested folders
+                        if let Some(children) = obj.get("children") {
+                            if let Some(found) = find_folder(folder_id, children) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    
+    // Then, collect all message IDs from the folder
+    fn collect_ids(node: &serde_json::Value, ids: &mut Vec<String>) {
+        match node {
+            serde_json::Value::Array(arr) => {
+                for n in arr {
+                    collect_ids(n, ids);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                    match t {
+                        "message" => {
+                            if let Some(msg) = obj.get("message") {
+                                if let Some(id) = msg.get("id").and_then(|v| v.as_str()) {
+                                    ids.push(id.to_string());
+                                }
+                            }
+                        }
+                        "folder" => {
+                            if let Some(children) = obj.get("children") {
+                                collect_ids(children, ids);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    let mut ids = Vec::new();
+    if let Some(folder) = find_folder(folder_id, tree) {
+        if let Some(children) = folder.get("children") {
+            collect_ids(children, &mut ids);
+        }
+    }
+    ids
 }
 
 #[derive(Clone)]
@@ -381,6 +456,53 @@ async fn handle_command(
         "clear-active-message" => {
             // This is handled on the frontend, but we acknowledge it
             // The actual clearing happens in the VisualizerWindow
+        }
+        "play-folder" => {
+            if let Some(p) = &payload.payload {
+                if let Some(folder_id) = p.get("folderId").and_then(|v| v.as_str()) {
+                    // Get message tree and collect message IDs from the folder
+                    let message_ids = if let Ok(tree) = state.app_state_sync.message_tree.lock() {
+                        collect_messages_from_folder(folder_id, &tree)
+                    } else {
+                        vec![]
+                    };
+                    
+                    if !message_ids.is_empty() {
+                        // Set up the queue
+                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                            *queue = Some(FolderPlaybackQueue {
+                                folder_id: folder_id.to_string(),
+                                message_ids: message_ids.clone(),
+                                current_index: 0,
+                            });
+                        }
+                        
+                        // Trigger the first message
+                        if let Some(first_id) = message_ids.first() {
+                            if let Ok(messages) = state.app_state_sync.messages.lock() {
+                                if let Some(msg) = messages.iter().find(|m| &m.id == first_id) {
+                                    let msg_clone = msg.clone();
+                                    triggered_message = Some(msg_clone.clone());
+                                    
+                                    // Emit trigger-message remote command to Tauri windows
+                                    // This ensures VisualizerWindow receives the command and actually plays the message
+                                    let trigger_cmd = serde_json::json!({
+                                        "command": "trigger-message",
+                                        "payload": msg_clone
+                                    });
+                                    let _ = state.app_handle.emit("remote-command", trigger_cmd);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "cancel-folder-playback" => {
+            // Clear the folder playback queue
+            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                *queue = None;
+            }
         }
         "reset-message-stats" => {
             if let Ok(mut m) = state.app_state_sync.message_stats.lock() {

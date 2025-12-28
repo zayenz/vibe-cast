@@ -11,6 +11,15 @@ import { visualizationRegistry, getDefaultVisualizationSettings } from '../plugi
 import type { MessageTreeNode } from '../plugins/types';
 
 /**
+ * Folder playback queue state
+ */
+export interface FolderPlaybackQueue {
+  folderId: string;
+  messageIds: string[];
+  currentIndex: number;
+}
+
+/**
  * Application state from the SSE stream
  * Updated to match the new plugin-based architecture
  */
@@ -28,6 +37,7 @@ export interface AppState {
   messageTree?: MessageTreeNode[];
   triggeredMessage?: MessageConfig | null;
   messageStats?: Record<string, MessageStats>;
+  folderPlaybackQueue?: FolderPlaybackQueue | null;
   
   // Text style state
   defaultTextStyle: string;
@@ -80,6 +90,7 @@ function parseSSEState(data: any): AppState {
       messageTree: data.messageTree ?? undefined,
       triggeredMessage: data.triggeredMessage ?? null,
       messageStats: data.messageStats ?? (typeof data.messageStats === 'object' ? data.messageStats : {}),
+      folderPlaybackQueue: data.folderPlaybackQueue ?? null,
       defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: data.textStyleSettings ?? {},
       textStylePresets: data.textStylePresets ?? [],
@@ -109,6 +120,7 @@ function parseSSEState(data: any): AppState {
       ? { id: 'triggered', text: data.triggered_message, textStyle: 'scrolling-capitals' }
       : null,
     messageStats: {},
+    folderPlaybackQueue: null,
     defaultTextStyle: 'scrolling-capitals',
     textStyleSettings: {},
     textStylePresets: [],
