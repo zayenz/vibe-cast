@@ -122,8 +122,10 @@ export const RemoteControl: React.FC = () => {
                 handleTriggerMessage(msg, isPlaying);
               }}
               disabled={isPending || isPlaying}
-              className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
-                isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10 cursor-default' : 'border-zinc-800/50'
+              className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
+                isPlaying 
+                  ? 'border-orange-500/60 shadow-lg shadow-orange-500/10 cursor-default pointer-events-none' 
+                  : 'border-zinc-800/50 active:scale-[0.98]'
               }`}
             >
               <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
@@ -154,7 +156,12 @@ export const RemoteControl: React.FC = () => {
               </div>
               <div className={`flex items-center gap-2 shrink-0 ml-2 ${isPlaying ? 'pointer-events-auto' : ''}`}>
                 <button
-                  onClick={(e) => {
+                  onPointerDown={(e) => {
+                    // Stop propagation immediately on pointer down to prevent parent from receiving it
+                    e.stopPropagation();
+                  }}
+                  onPointerUp={(e) => {
+                    // Handle the action on pointer up (works for both touch and mouse)
                     e.stopPropagation();
                     e.preventDefault();
                     if (isPlaying) {
@@ -162,16 +169,6 @@ export const RemoteControl: React.FC = () => {
                     } else {
                       handleTriggerMessage(msg, isPlaying);
                     }
-                  }}
-                  onMouseDown={(e) => {
-                    // Prevent parent button from receiving the event
-                    e.stopPropagation();
-                    e.preventDefault();
-                  }}
-                  onTouchStart={(e) => {
-                    // Prevent parent button from receiving the event on touch devices
-                    e.stopPropagation();
-                    e.preventDefault();
                   }}
                   className={`p-1.5 rounded transition-colors ${
                     isPlaying
