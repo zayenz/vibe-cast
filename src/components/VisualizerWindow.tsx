@@ -8,6 +8,25 @@ import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
 import { useAppState } from '../hooks/useAppState';
 
+// API base for sending commands to Rust backend
+const API_BASE = 'http://localhost:8080';
+
+/**
+ * Send a command to the Rust backend via HTTP
+ * This is the single source of truth for state changes
+ */
+async function sendCommand(command: string, payload: unknown): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, payload }),
+    });
+  } catch (err) {
+    console.error(`[VisualizerWindow] Failed to send command ${command}:`, err);
+  }
+}
+
 /**
  * Text Style Renderer Component
  * Renders a single message using the appropriate text style plugin
@@ -274,6 +293,21 @@ export const VisualizerWindow: React.FC = () => {
     console.log('[VisualizerWindow] Config loaded into store');
   }, [sseState, loadConfiguration]);
 
+  // Sync folderPlaybackQueue from SSE state to zustand store
+  // This is runtime state (not config), so sync it separately
+  useEffect(() => {
+    if (!sseState) return;
+    
+    const sseQueue = sseState.folderPlaybackQueue;
+    const currentQueue = useStore.getState().folderPlaybackQueue;
+    
+    // Only update if different to avoid unnecessary re-renders
+    if (JSON.stringify(sseQueue) !== JSON.stringify(currentQueue)) {
+      console.log('[VisualizerWindow] Syncing folderPlaybackQueue from SSE:', sseQueue);
+      useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
+    }
+  }, [sseState?.folderPlaybackQueue]);
+
   // Debug: Log current state after store updates
   useEffect(() => {
     console.log('[VisualizerWindow] Store state:', {
@@ -351,14 +385,19 @@ export const VisualizerWindow: React.FC = () => {
             useStore.setState({ visualizationPresets: payload });
           }
           break;
-        case 'trigger-message':
+        case 'trigger-message': {
           // Handle both legacy string and new MessageConfig formats
-          if (typeof payload === 'string') {
-            triggerMessage({ id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }, false);
-          } else {
-            triggerMessage(payload, false);
+          const msg =
+            typeof payload === 'string'
+              ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
+              : (payload as MessageConfig);
+          // Avoid duplicate triggers if already active
+          const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
+          if (!isActive) {
+            triggerMessage(msg, false);
           }
           break;
+        }
         case 'set-common-settings':
           setCommonSettings(payload, false);
           break;
@@ -371,18 +410,24 @@ export const VisualizerWindow: React.FC = () => {
         case 'load-configuration':
           loadConfiguration(payload, false);
           break;
-        case 'clear-active-message':
-          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
-            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
-            useStore.getState().clearActiveMessage(messageId, timestamp, false);
+        case 'clear-active-message': {
+          if (payload && typeof payload === 'object' && 'messageId' in payload) {
+            const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
+            const ts = typeof timestamp === 'number' ? timestamp : 0;
+            useStore.getState().clearActiveMessage(messageId, ts, false);
           }
           break;
+        }
         case 'play-folder':
           // Folder playback handled by ControlPlane, visualizer just needs to display triggered messages
           break;
         case 'cancel-folder-playback':
           // Cancel folder queue and clear current message
           useStore.getState().cancelFolderPlayback(false);
+          break;
+        case 'clear-message':
+          // Clear all active messages (used by folder cancellation)
+          useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
           break;
       }
     });
@@ -403,14 +448,18 @@ export const VisualizerWindow: React.FC = () => {
         case 'SET_MESSAGES':
           setMessages(payload, false);
           break;
-        case 'TRIGGER_MESSAGE':
+        case 'TRIGGER_MESSAGE': {
           // Handle both legacy string and new MessageConfig formats
-          if (typeof payload === 'string') {
-            triggerMessage({ id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }, false);
-          } else {
-            triggerMessage(payload, false);
+          const msg =
+            typeof payload === 'string'
+              ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
+              : (payload as MessageConfig);
+          const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
+          if (!isActive) {
+            triggerMessage(msg, false);
           }
           break;
+        }
         case 'SET_COMMON_SETTINGS':
           setCommonSettings(payload, false);
           break;
@@ -457,13 +506,15 @@ export const VisualizerWindow: React.FC = () => {
             clearMessage(payload, false);
           }
           break;
-        case 'CLEAR_ACTIVE_MESSAGE':
-          // Clear specific active message
-          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
-            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
-            useStore.getState().clearActiveMessage(messageId, timestamp, false);
+        case 'CLEAR_ACTIVE_MESSAGE': {
+          // Clear specific active message; allow missing timestamp (clear by id)
+          if (payload && typeof payload === 'object' && 'messageId' in payload) {
+            const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
+            const ts = typeof timestamp === 'number' ? timestamp : 0;
+            useStore.getState().clearActiveMessage(messageId, ts, false);
           }
           break;
+        }
       }
     });
 
@@ -632,7 +683,12 @@ export const VisualizerWindow: React.FC = () => {
             textStylePresets={textStylePresets}
             verticalOffset={index * 80} // Stack messages with 80px spacing
             repeatCount={message.repeatCount ?? 1}
-            onComplete={() => clearMessage(timestamp, true, message.id)}
+            onComplete={() => {
+              // Clear from local state
+              clearMessage(timestamp, false, message.id);
+              // Notify Rust backend - it handles queue advancement
+              sendCommand('message-complete', { messageId: message.id });
+            }}
           />
         ))}
       </div>

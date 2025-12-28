@@ -454,8 +454,110 @@ async fn handle_command(
             }
         }
         "clear-active-message" => {
-            // This is handled on the frontend, but we acknowledge it
-            // The actual clearing happens in the VisualizerWindow
+            // Manual stop of a message - clear triggered message and handle queue
+            if let Some(p) = &payload.payload {
+                if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
+                    // Check if this message is the current queue message
+                    let mut should_clear_queue = false;
+                    let mut next_message: Option<MessageConfig> = None;
+                    
+                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                        if let Some(ref mut q) = *queue {
+                            if let Some(current_id) = q.message_ids.get(q.current_index) {
+                                if current_id == message_id {
+                                    // User manually stopped the current queue message
+                                    // Advance to next or clear queue
+                                    q.current_index += 1;
+                                    if q.current_index < q.message_ids.len() {
+                                        // Get next message
+                                        if let Some(next_id) = q.message_ids.get(q.current_index) {
+                                            if let Ok(messages) = state.app_state_sync.messages.lock() {
+                                                next_message = messages.iter().find(|m| &m.id == next_id).cloned();
+                                            }
+                                        }
+                                    } else {
+                                        // Queue complete
+                                        should_clear_queue = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if should_clear_queue {
+                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                            *queue = None;
+                        }
+                    }
+                    
+                    // Trigger next message if any
+                    if let Some(msg) = next_message {
+                        triggered_message = Some(msg.clone());
+                        let trigger_cmd = serde_json::json!({
+                            "command": "trigger-message",
+                            "payload": msg
+                        });
+                        let _ = state.app_handle.emit("remote-command", trigger_cmd);
+                    }
+                }
+            }
+        }
+        "message-complete" => {
+            // Message finished playing - handle queue advancement
+            // This is the single source of truth for queue advancement
+            if let Some(p) = &payload.payload {
+                if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
+                    println!("[message-complete] Message {} completed", message_id);
+                    
+                    let mut should_clear_queue = false;
+                    let mut next_message: Option<MessageConfig> = None;
+                    
+                    // Check if we have a folder queue and this message is the current one
+                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                        if let Some(ref mut q) = *queue {
+                            if let Some(current_id) = q.message_ids.get(q.current_index) {
+                                if current_id == message_id {
+                                    println!("[message-complete] Advancing queue from index {} to {}", q.current_index, q.current_index + 1);
+                                    q.current_index += 1;
+                                    
+                                    if q.current_index < q.message_ids.len() {
+                                        // Get next message
+                                        if let Some(next_id) = q.message_ids.get(q.current_index) {
+                                            println!("[message-complete] Next message ID: {}", next_id);
+                                            if let Ok(messages) = state.app_state_sync.messages.lock() {
+                                                next_message = messages.iter().find(|m| &m.id == next_id).cloned();
+                                            }
+                                        }
+                                    } else {
+                                        // Queue complete
+                                        println!("[message-complete] Queue complete");
+                                        should_clear_queue = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if should_clear_queue {
+                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                            *queue = None;
+                        }
+                    }
+                    
+                    // Trigger next message if any
+                    if let Some(msg) = next_message {
+                        println!("[message-complete] Triggering next message: {}", msg.text);
+                        triggered_message = Some(msg.clone());
+                        
+                        // Emit trigger-message to Tauri windows
+                        let trigger_cmd = serde_json::json!({
+                            "command": "trigger-message",
+                            "payload": msg
+                        });
+                        let _ = state.app_handle.emit("remote-command", trigger_cmd);
+                    }
+                }
+            }
         }
         "play-folder" => {
             if let Some(p) = &payload.payload {
@@ -499,10 +601,20 @@ async fn handle_command(
             }
         }
         "cancel-folder-playback" => {
-            // Clear the folder playback queue
+            // Clear the folder playback queue and stop current message
+            println!("[cancel-folder-playback] Cancelling folder playback");
+            
+            // Clear the queue
             if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
                 *queue = None;
             }
+            
+            // Emit clear-message to Tauri windows to stop visualizer
+            let clear_cmd = serde_json::json!({
+                "command": "clear-message",
+                "payload": null
+            });
+            let _ = state.app_handle.emit("remote-command", clear_cmd);
         }
         "reset-message-stats" => {
             if let Ok(mut m) = state.app_state_sync.message_stats.lock() {

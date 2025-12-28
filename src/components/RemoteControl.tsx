@@ -34,18 +34,23 @@ export const RemoteControl: React.FC = () => {
   const triggeredMessage = state?.triggeredMessage ?? null;
   const isPending = fetcher.state !== 'idle';
   
-  // Get active messages and folder queue from SSE state
-  const activeMessageIds = triggeredMessage ? [triggeredMessage.id] : [];
   // Folder playback queue from SSE state
   type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
   const folderPlaybackQueue: FolderQueue | null = state?.folderPlaybackQueue ?? null;
+  // Active message ids: include triggeredMessage and current folder queue item
+  const queueActiveId =
+    folderPlaybackQueue && folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
+      ? folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
+      : null;
+  const activeMessageIds = triggeredMessage ? [triggeredMessage.id] : queueActiveId ? [queueActiveId] : [];
+  const queueIsActive = !!(folderPlaybackQueue && queueActiveId && activeMessageIds.includes(queueActiveId));
   
   // Filter to show only active visualization preset
   // Helper to render message tree with folders
   const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
     return nodes.map((node) => {
       if (node.type === 'folder') {
-        const folderQueue: FolderQueue | null = 
+        const folderQueue: FolderQueue | null =
           folderPlaybackQueue !== null && folderPlaybackQueue.folderId === node.id ? folderPlaybackQueue : null;
         return (
           <div key={node.id}>
@@ -54,7 +59,7 @@ export const RemoteControl: React.FC = () => {
               className="text-xs text-zinc-500 font-bold uppercase tracking-wider mt-4 mb-2 px-2 flex items-center justify-between"
             >
               <span>{node.name}</span>
-              {folderQueue && (
+              {folderQueue && queueIsActive && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-orange-400 font-bold">
                     {folderQueue.currentIndex + 1}/{folderQueue.messageIds.length}
@@ -104,14 +109,25 @@ export const RemoteControl: React.FC = () => {
         return (
           <div key={msg.id} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="mb-2">
             <button
-              onClick={() => handleTriggerMessage(msg)}
-              disabled={isPending}
+              onClick={(e) => {
+                // Don't trigger if message is already playing
+                if (isPlaying) {
+                  return;
+                }
+                // Don't trigger if click target is the stop button or its children
+                const target = e.target as HTMLElement;
+                if (target.closest('button[title*="Stop"], button[title*="Play"]')) {
+                  return;
+                }
+                handleTriggerMessage(msg, isPlaying);
+              }}
+              disabled={isPending || isPlaying}
               className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
-                isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
+                isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10 cursor-default' : 'border-zinc-800/50'
               }`}
             >
               <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-active:opacity-100 transition-opacity" />
-              <div className="relative z-10 flex-1 min-w-0">
+              <div className={`relative z-10 flex-1 min-w-0 ${isPlaying ? 'pointer-events-none' : ''}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-bold text-base text-zinc-200 group-active:text-white transition-colors block truncate">
                     {msg.text}
@@ -136,7 +152,7 @@ export const RemoteControl: React.FC = () => {
                   {msg.textStyle.replace('-', ' ')}
                 </span>
               </div>
-              <div className="flex items-center gap-2 shrink-0 ml-2">
+              <div className={`flex items-center gap-2 shrink-0 ml-2 ${isPlaying ? 'pointer-events-auto' : ''}`}>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -144,12 +160,18 @@ export const RemoteControl: React.FC = () => {
                     if (isPlaying) {
                       sendCommand('clear-active-message', { messageId: msg.id });
                     } else {
-                      handleTriggerMessage(msg);
+                      handleTriggerMessage(msg, isPlaying);
                     }
                   }}
-                  onPointerDown={(e) => {
-                    // Prevent parent button from receiving pointer events
+                  onMouseDown={(e) => {
+                    // Prevent parent button from receiving the event
                     e.stopPropagation();
+                    e.preventDefault();
+                  }}
+                  onTouchStart={(e) => {
+                    // Prevent parent button from receiving the event on touch devices
+                    e.stopPropagation();
+                    e.preventDefault();
                   }}
                   className={`p-1.5 rounded transition-colors ${
                     isPlaying
@@ -177,9 +199,9 @@ export const RemoteControl: React.FC = () => {
     );
   };
 
-  const handleTriggerMessage = (msg: MessageConfig) => {
+  const handleTriggerMessage = (msg: MessageConfig, isPlaying?: boolean) => {
     // If message is already playing, stop it instead of triggering again
-    if (triggeredMessage?.id === msg.id) {
+    if (isPlaying || triggeredMessage?.id === msg.id) {
       sendCommand('clear-active-message', { messageId: msg.id });
       return;
     }

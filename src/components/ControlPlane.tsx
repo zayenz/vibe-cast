@@ -65,8 +65,7 @@ export const ControlPlane: React.FC = () => {
   const clearActiveMessage = useStore((s) => s.clearActiveMessage);
   const resetMessageStats = useStore((s) => s.resetMessageStats);
   const folderPlaybackQueue = useStore((s) => s.folderPlaybackQueue);
-  const playFolder = useStore((s) => s.playFolder);
-  const cancelFolderPlayback = useStore((s) => s.cancelFolderPlayback);
+  // NOTE: playFolder and cancelFolderPlayback are now handled via HTTP commands to Rust backend
   
   // Sync messageStats from SSE to store
   // CRITICAL: Use a ref to track the last synced value and only sync when state changes
@@ -148,6 +147,21 @@ export const ControlPlane: React.FC = () => {
       messageStats: state.messageStats ?? {},
     }, false);
   }, [state]);
+
+  // Sync folderPlaybackQueue from SSE state to zustand store
+  // This is runtime state (not persisted config), synced separately
+  useEffect(() => {
+    if (!state) return;
+    
+    const sseQueue = state.folderPlaybackQueue;
+    const currentQueue = useStore.getState().folderPlaybackQueue;
+    
+    // Only update if different to avoid unnecessary re-renders
+    if (JSON.stringify(sseQueue) !== JSON.stringify(currentQueue)) {
+      console.log('[ControlPlane] Syncing folderPlaybackQueue from SSE:', sseQueue);
+      useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
+    }
+  }, [state?.folderPlaybackQueue]);
 
   // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)
   useEffect(() => {
@@ -1206,21 +1220,10 @@ export const ControlPlane: React.FC = () => {
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         console.log('[FolderCancel] Cancelling folder playback');
-                                        // Get current message before cancelling
-                                        const currentMsgId = folderPlaybackQueue?.messageIds[folderPlaybackQueue.currentIndex];
-                                        const currentActive = currentMsgId ? activeMessages.find(am => am.message.id === currentMsgId) : null;
-                                        
-                                        // Cancel locally
-                                        cancelFolderPlayback(false);
-                                        
-                                        // Send command to backend to clear the message in visualizer
-                                        if (currentActive) {
-                                          sendCommand('clear-active-message', { 
-                                            messageId: currentActive.message.id, 
-                                            timestamp: currentActive.timestamp 
-                                          });
-                                        }
+                                        // Send cancel command to Rust backend - it handles clearing the queue and message
                                         sendCommand('cancel-folder-playback', {});
+                                        // Also clear local active messages for immediate UI feedback
+                                        useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0, folderPlaybackQueue: null });
                                       }}
                                       className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs font-bold hover:bg-red-500/30 transition-colors"
                                       title="Cancel folder playback"
@@ -1737,7 +1740,8 @@ export const ControlPlane: React.FC = () => {
               <button
                 onClick={() => {
                   console.log(`[FolderPlay] User confirmed, playing folder ${pendingFolderPlay.folderId}`);
-                  playFolder(pendingFolderPlay.folderId, messageTreeLocal, true);
+                  // Send play-folder command to Rust backend - it handles the queue
+                  sendCommand('play-folder', { folderId: pendingFolderPlay.folderId });
                   setPendingFolderPlay(null);
                 }}
                 className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-500 transition-colors"
