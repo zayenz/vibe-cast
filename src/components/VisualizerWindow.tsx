@@ -12,6 +12,45 @@ import { useAppState } from '../hooks/useAppState';
 const API_BASE = 'http://localhost:8080';
 
 /**
+ * Helper to calculate the effective height for a message based on its text style settings.
+ * This is used to properly stack multiple simultaneous messages without overlap.
+ */
+function getMessageHeight(
+  message: MessageConfig,
+  textStyleSettings: Record<string, Record<string, unknown>>,
+  textStylePresets: Array<{ id: string; name: string; textStyleId: string; settings: Record<string, unknown> }>
+): number {
+  // Determine which text style to use
+  const preset = message.textStylePreset
+    ? textStylePresets.find(p => p.id === message.textStylePreset)
+    : null;
+  const styleId = preset?.textStyleId || message.textStyle || 'scrolling-capitals';
+  
+  // Get the settings (preset settings take priority, then global settings, then defaults)
+  const baseSettings = preset?.settings || textStyleSettings[styleId] || {};
+  const settings = { ...baseSettings, ...message.styleOverrides };
+  
+  // Get fontSize - different text styles have different default sizes
+  // Most use fontSize in rem, but we need to handle variations
+  let fontSizeRem = 8; // Default for scrolling-capitals
+  
+  if (typeof settings.fontSize === 'number') {
+    fontSizeRem = settings.fontSize;
+  } else if (styleId === 'fade' || styleId === 'bounce' || styleId === 'typewriter') {
+    // These styles typically have smaller defaults
+    fontSizeRem = typeof settings.fontSize === 'number' ? settings.fontSize : 4;
+  } else if (styleId === 'dot-matrix') {
+    // Dot matrix uses charHeight in pixels
+    const charHeight = typeof settings.charHeight === 'number' ? settings.charHeight : 100;
+    return charHeight + 40; // Add some margin
+  }
+  
+  // Convert rem to pixels (1rem = 16px) and add margin
+  const fontSizePx = fontSizeRem * 16;
+  return fontSizePx + 40; // Add 40px margin between messages
+}
+
+/**
  * Send a command to the Rust backend via HTTP
  * This is the single source of truth for state changes
  */
@@ -674,23 +713,35 @@ export const VisualizerWindow: React.FC = () => {
       </div>
       {/* Render all active messages - they can coexist with higher z-index */}
       <div className="absolute inset-0 pointer-events-none z-[100]">
-        {activeMessages.map(({ message, timestamp }, index) => (
-          <TextStyleRenderer
-            key={timestamp}
-            message={message}
-            messageTimestamp={timestamp}
-            textStyleSettings={textStyleSettings}
-            textStylePresets={textStylePresets}
-            verticalOffset={index * 80} // Stack messages with 80px spacing
-            repeatCount={message.repeatCount ?? 1}
-            onComplete={() => {
-              // Clear from local state
-              clearMessage(timestamp, false, message.id);
-              // Notify Rust backend - it handles queue advancement
-              sendCommand('message-complete', { messageId: message.id });
-            }}
-          />
-        ))}
+        {activeMessages.map(({ message, timestamp }, index) => {
+          // Calculate cumulative vertical offset based on heights of previous messages
+          let cumulativeOffset = 0;
+          for (let i = 0; i < index; i++) {
+            cumulativeOffset += getMessageHeight(
+              activeMessages[i].message,
+              textStyleSettings,
+              textStylePresets
+            );
+          }
+          
+          return (
+            <TextStyleRenderer
+              key={timestamp}
+              message={message}
+              messageTimestamp={timestamp}
+              textStyleSettings={textStyleSettings}
+              textStylePresets={textStylePresets}
+              verticalOffset={cumulativeOffset}
+              repeatCount={message.repeatCount ?? 1}
+              onComplete={() => {
+                // Clear from local state
+                clearMessage(timestamp, false, message.id);
+                // Notify Rust backend - it handles queue advancement
+                sendCommand('message-complete', { messageId: message.id });
+              }}
+            />
+          );
+        })}
       </div>
     </div>
   );
