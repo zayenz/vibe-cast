@@ -150,6 +150,15 @@ const settingsSchema: SettingDefinition[] = [
     id: 'videoSound',
     label: 'Play Video Sound',
     default: true
+  },
+  {
+    type: 'range',
+    id: 'videoVolume',
+    label: 'Video Volume',
+    min: 0,
+    max: 100,
+    step: 5,
+    default: 50
   }
 ];
 
@@ -290,6 +299,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const fitMode = getStringSetting(customSettings.fitMode, 'cover');
   const smartCrop = getBooleanSetting(customSettings.smartCrop, true);
   const videoSound = getBooleanSetting(customSettings.videoSound, true);
+  const videoVolume = getNumberSetting(customSettings.videoVolume, 50, 0, 100);
   
   const [images, setImages] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -304,6 +314,8 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const [readyImages, setReadyImages] = useState<Map<string, string>>(new Map());
   // Track whether images are portrait (height > width)
   const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
+  // Track enter animation phase for incoming media (enter -> active triggers CSS transition)
+  const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
   
   const timerRef = useRef<number | null>(null);
   // Store blob URLs for cleanup
@@ -704,6 +716,8 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     
     setCurrentTransition(nextTransition);
     setNextIndex(targetIdx);
+    // Set enterPhase to 'enter' BEFORE isTransitioning so entering element renders in enter position first
+    setEnterPhase('enter');
     setIsTransitioning(true);
     
     setTimeout(() => {
@@ -754,6 +768,22 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       }).catch(console.error);
     }
   }, [currentImage, smartCrop, faceModelsLoaded, facePositions, readyImages]);
+  
+  // Trigger enter animation: transition from 'enter' to 'active' after initial render
+  // The 'enter' phase is set synchronously in advanceToNext before isTransitioning becomes true
+  // This useEffect triggers the CSS transition by changing to 'active' after the element renders
+  useEffect(() => {
+    if (isTransitioning && enterPhase === 'enter') {
+      // Use double RAF for reliable style application across browsers
+      // First RAF waits for the current frame to complete
+      // Second RAF ensures styles are applied before transitioning
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setEnterPhase('active');
+        });
+      });
+    }
+  }, [isTransitioning, enterPhase]);
   
   // Container ref for the image display area
   const containerRef = useRef<HTMLDivElement>(null);
@@ -942,7 +972,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
               {/* Current media (exiting during transition) - uses pre-decoded blob URL */}
               {isVideoFile(currentImage) ? (
                 <video
-                  ref={currentVideoRef}
+                  ref={(el) => {
+                    currentVideoRef.current = el;
+                    if (el) {
+                      el.volume = videoVolume / 100;
+                    }
+                  }}
                   key={`current-video-${currentIndex}`}
                   src={currentBlobUrl}
                   autoPlay
@@ -992,15 +1027,20 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
               {isTransitioning && nextImage && nextBlobUrl && !useMosaic && (
                 isVideoFile(nextImage) ? (
                   <video
+                    ref={(el) => {
+                      if (el) {
+                        el.volume = videoVolume / 100;
+                      }
+                    }}
                     key={`next-video-${nextIndex}`}
                     src={nextBlobUrl}
                     autoPlay
                     playsInline
-                    muted
+                    muted={!videoSound}
                     className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
                     style={{
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                      ...getTransitionStyles(currentTransition, 'enter'),
+                      ...getTransitionStyles(currentTransition, enterPhase),
                     }}
                     onError={(e) => {
                       console.error('[Photo Slideshow] Failed to display next video:', nextImage);
@@ -1019,7 +1059,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       imageRendering: 'auto',
                       willChange: 'opacity, transform',
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                      ...getTransitionStyles(currentTransition, 'enter'),
+                      ...getTransitionStyles(currentTransition, enterPhase),
                     }}
                     onError={(e) => {
                       console.error('[Photo Slideshow] Failed to display next image:', nextImage);
