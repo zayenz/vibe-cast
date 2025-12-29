@@ -281,6 +281,7 @@ async fn handle_command(
                     Some(MessageConfig {
                         id: "triggered".to_string(),
                         text: text.to_string(),
+                        text_file: None,
                         text_style: "scrolling-capitals".to_string(),
                         text_style_preset: None,
                         style_overrides: None,
@@ -366,6 +367,7 @@ async fn handle_command(
                             v.as_str().map(|s| MessageConfig {
                                 id: i.to_string(),
                                 text: s.to_string(),
+                                text_file: None,
                                 text_style: "scrolling-capitals".to_string(),
                                 text_style_preset: None,
                                 style_overrides: None,

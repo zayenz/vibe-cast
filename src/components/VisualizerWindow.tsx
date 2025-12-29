@@ -7,6 +7,7 @@ import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } fro
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
 import { useAppState } from '../hooks/useAppState';
+import { resolveMessageText } from '../utils/messageLoader';
 
 // API base for sending commands to Rust backend
 const API_BASE = 'http://localhost:8080';
@@ -80,9 +81,36 @@ const TextStyleRenderer: React.FC<{
   onComplete: () => void;
 }> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, repeatCount = 1, onComplete }) => {
   const effectiveRepeatCount = repeatCount ?? 1;
+  
+  // State for resolved message (with text loaded from file if needed)
+  const [resolvedMessage, setResolvedMessage] = useState<MessageConfig>(message);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Load message text from file if textFile is specified
+  useEffect(() => {
+    if (message.textFile) {
+      setIsLoading(true);
+      resolveMessageText(message).then(resolved => {
+        setResolvedMessage(resolved);
+        setIsLoading(false);
+      }).catch(err => {
+        console.error('Failed to resolve message text:', err);
+        setResolvedMessage({
+          ...message,
+          text: `[Error loading file: ${message.textFile}]`
+        });
+        setIsLoading(false);
+      });
+    } else {
+      setResolvedMessage(message);
+      setIsLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [message.textFile, message.text, messageTimestamp]);
+  
   const { splitActive, sequence } = useMemo(
-    () => computeSplitSequence({ ...message, repeatCount: effectiveRepeatCount }),
-    [effectiveRepeatCount, message]
+    () => computeSplitSequence({ ...resolvedMessage, repeatCount: effectiveRepeatCount }),
+    [effectiveRepeatCount, resolvedMessage]
   );
   const [partIndex, setPartIndex] = useState(0);
   const [partTimestamp, setPartTimestamp] = useState(messageTimestamp);
@@ -92,8 +120,8 @@ const TextStyleRenderer: React.FC<{
   useEffect(() => {
     setPartIndex(0);
     setPartTimestamp(messageTimestamp);
-  }, [messageTimestamp, message.text, message.splitEnabled, message.splitSeparator, effectiveRepeatCount]);
-
+  }, [messageTimestamp, resolvedMessage.text, resolvedMessage.splitEnabled, resolvedMessage.splitSeparator, effectiveRepeatCount]);
+  
   const handleComplete = useCallback(() => {
     if (splitActive && partIndex + 1 < sequence.length) {
       const nextIndex = partIndex + 1;
@@ -104,12 +132,17 @@ const TextStyleRenderer: React.FC<{
     onComplete?.();
   }, [splitActive, partIndex, sequence.length, messageTimestamp, onComplete]);
 
+  // Don't render while loading text from file
+  if (isLoading) {
+    return null;
+  }
+
   // Determine which text style to use
-  const preset = message.textStylePreset 
-    ? textStylePresets.find(p => p.id === message.textStylePreset)
+  const preset = resolvedMessage.textStylePreset 
+    ? textStylePresets.find(p => p.id === resolvedMessage.textStylePreset)
     : null;
   
-  const styleId = preset?.textStyleId || message.textStyle;
+  const styleId = preset?.textStyleId || resolvedMessage.textStyle;
   const textStylePlugin = getTextStyle(styleId);
   
   if (!textStylePlugin) {
@@ -120,8 +153,8 @@ const TextStyleRenderer: React.FC<{
     const TextStyleComponent = fallback.component;
     const baseSettings = preset?.settings || textStyleSettings['scrolling-capitals'] || {};
     const settings = applySpeedMultiplier(
-      { ...baseSettings, ...message.styleOverrides },
-      message.speed ?? 1.0
+      { ...baseSettings, ...resolvedMessage.styleOverrides },
+      resolvedMessage.speed ?? 1.0
     );
     
     return (
@@ -139,8 +172,8 @@ const TextStyleRenderer: React.FC<{
   const TextStyleComponent = textStylePlugin.component;
   const baseSettings = preset?.settings || textStyleSettings[styleId] || getDefaults(textStylePlugin.settingsSchema);
   const settings = applySpeedMultiplier(
-    { ...baseSettings, ...message.styleOverrides },
-    message.speed ?? 1.0
+    { ...baseSettings, ...resolvedMessage.styleOverrides },
+    resolvedMessage.speed ?? 1.0
   );
 
   // Credits displays all split lines simultaneously as a credits roll

@@ -718,11 +718,22 @@ export const ControlPlane: React.FC = () => {
       // Read and parse file if user didn't cancel
       if (selected && typeof selected === 'string') {
         console.log('Loading from:', selected);
+        
+        // Extract directory path from file path
+        const lastSlash = Math.max(selected.lastIndexOf('/'), selected.lastIndexOf('\\'));
+        const configDir = lastSlash >= 0 ? selected.substring(0, lastSlash) : null;
+        console.log('Config directory:', configDir);
+        
         const text = await readTextFile(selected);
         const config = JSON.parse(text) as AppConfiguration;
         console.log('Loaded configuration:', config);
         
-        // Load into local store first
+        // Store config base path first
+        if (configDir) {
+          useStore.getState().setConfigBasePath(configDir, true);
+        }
+        
+        // Load into local store
         useStore.getState().loadConfiguration(config, false);
         
         // Then sync to backend and other windows

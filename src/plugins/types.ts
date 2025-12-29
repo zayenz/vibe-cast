@@ -264,6 +264,13 @@ export interface MessageConfig {
   text: string;
 
   /**
+   * Optional: Load text from file instead of using 'text' field.
+   * Path can be relative (to config directory) or absolute.
+   * When set, automatically enables splitting by newlines.
+   */
+  textFile?: string;
+
+  /**
    * Whether to split the message into multiple parts using a separator.
    * When enabled, the message text is split into parts and cycled instead of repeating the full text.
    */

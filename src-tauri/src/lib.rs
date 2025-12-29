@@ -51,6 +51,8 @@ fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
 pub struct MessageConfig {
     pub id: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_file: Option<String>,
     pub text_style: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_style_preset: Option<String>,
@@ -174,6 +176,7 @@ pub struct AppStateSync {
     pub text_style_presets: Mutex<Vec<TextStylePreset>>,
     pub message_stats: Mutex<serde_json::Value>,
     pub folder_playback_queue: Mutex<Option<FolderPlaybackQueue>>,
+    pub config_base_path: Mutex<Option<String>>,
     pub server_port: Mutex<u16>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
@@ -194,6 +197,7 @@ impl AppStateSync {
             MessageConfig {
                 id: "1".to_string(),
                 text: "Hello World!".to_string(),
+                text_file: None,
                 text_style: "scrolling-capitals".to_string(),
                 text_style_preset: None,
                 style_overrides: None,
@@ -205,6 +209,7 @@ impl AppStateSync {
             MessageConfig {
                 id: "2".to_string(),
                 text: "Keep it calm...".to_string(),
+                text_file: None,
                 text_style: "fade".to_string(),
                 text_style_preset: None,
                 style_overrides: None,
@@ -216,6 +221,7 @@ impl AppStateSync {
             MessageConfig {
                 id: "3".to_string(),
                 text: "TECHNO TIME".to_string(),
+                text_file: None,
                 text_style: "scrolling-capitals".to_string(),
                 text_style_preset: None,
                 style_overrides: None,
@@ -252,6 +258,7 @@ impl AppStateSync {
             text_style_presets: Mutex::new(vec![]),
             message_stats: Mutex::new(serde_json::json!({})),
             folder_playback_queue: Mutex::new(None),
+            config_base_path: Mutex::new(None),
             server_port: Mutex::new(8080),
             state_tx,
         }
@@ -461,6 +468,54 @@ fn get_audio_data(state: tauri::State<'_, AudioState>) -> Vec<f32> {
     }
 }
 
+/// Helper function to resolve paths relative to config base path
+fn resolve_path(path: &str, base_path: Option<&str>) -> String {
+    let p = Path::new(path);
+    
+    // If absolute, return as-is
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    
+    // If relative and we have a base path, resolve it
+    if let Some(base) = base_path {
+        let base_path = Path::new(base);
+        let resolved = base_path.join(path);
+        return resolved.to_string_lossy().to_string();
+    }
+    
+    // No base path, return as-is
+    path.to_string()
+}
+
+#[tauri::command]
+fn set_config_base_path(
+    state: tauri::State<'_, Arc<AppStateSync>>,
+    path: Option<String>
+) -> Result<(), String> {
+    if let Ok(mut p) = state.config_base_path.lock() {
+        *p = path;
+        Ok(())
+    } else {
+        Err("Failed to lock config_base_path".to_string())
+    }
+}
+
+#[tauri::command]
+fn load_message_text_file(
+    state: tauri::State<'_, Arc<AppStateSync>>,
+    file_path: String
+) -> Result<String, String> {
+    let base_path_opt = state.config_base_path.lock()
+        .ok()
+        .and_then(|p| p.clone());
+    
+    let resolved = resolve_path(&file_path, base_path_opt.as_deref());
+    
+    fs::read_to_string(&resolved)
+        .map_err(|e| format!("Failed to read file '{}': {}", resolved, e))
+}
+
 #[tauri::command]
 fn restart_viz_window(handle: tauri::AppHandle) -> Result<(), String> {
     // Close existing viz window (if any)
@@ -559,6 +614,16 @@ fn emit_state_change(
         "SET_TEXT_STYLE_SETTINGS" => {
             if let Ok(mut m) = state.text_style_settings.lock() {
                 *m = payload_value.clone();
+            }
+        }
+        "SET_CONFIG_BASE_PATH" => {
+            let path_opt = if payload_value.is_null() {
+                None
+            } else {
+                payload_value.as_str().map(|s| s.to_string())
+            };
+            if let Ok(mut m) = state.config_base_path.lock() {
+                *m = path_opt;
             }
         }
         "SET_VISUALIZATION_PRESETS" => {
@@ -695,16 +760,27 @@ fn emit_state_change(
 }
 
 #[tauri::command]
-fn list_images_in_folder(folder_path: String) -> Result<Vec<String>, String> {
+fn list_images_in_folder(
+    state: tauri::State<'_, Arc<AppStateSync>>,
+    folder_path: String
+) -> Result<Vec<String>, String> {
     use std::fs;
     use std::path::Path;
     
     eprintln!("Listing media files in folder: {}", folder_path);
     
-    let path = Path::new(&folder_path);
+    // Resolve path relative to config base path
+    let base_path_opt = state.config_base_path.lock()
+        .ok()
+        .and_then(|p| p.clone());
+    let resolved = resolve_path(&folder_path, base_path_opt.as_deref());
+    
+    eprintln!("Resolved path: {}", resolved);
+    
+    let path = Path::new(&resolved);
     if !path.exists() {
-        eprintln!("ERROR: Folder does not exist: {}", folder_path);
-        return Err(format!("Folder does not exist: {}", folder_path));
+        eprintln!("ERROR: Folder does not exist: {}", resolved);
+        return Err(format!("Folder does not exist: {}", resolved));
     }
     
     if !path.is_dir() {
@@ -1051,6 +1127,8 @@ pub fn run() {
             get_audio_data,
             restart_viz_window,
             emit_state_change,
+            set_config_base_path,
+            load_message_text_file,
             list_images_in_folder,
             get_photos_albums,
             get_photos_from_album

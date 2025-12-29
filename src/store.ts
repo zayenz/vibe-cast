@@ -53,6 +53,9 @@ export interface AppState {
   // Server info (not persisted)
   serverInfo: { ip: string; port: number } | null;
   
+  // Configuration base path (for resolving relative paths)
+  configBasePath: string | null;
+  
   // Legacy compatibility
   mode: 'fireplace' | 'techno';
   
@@ -95,6 +98,9 @@ export interface AppState {
   
   setAudioData: (data: number[]) => void;
   setServerInfo: (info: { ip: string; port: number }) => void;
+  
+  // Configuration base path actions
+  setConfigBasePath: (path: string | null, sync?: boolean) => void;
   
   // Legacy actions for compatibility
   setMode: (mode: 'fireplace' | 'techno', sync?: boolean) => void;
@@ -256,6 +262,7 @@ export const useStore = create<AppState>((set, get) => ({
   
   audioData: new Array(128).fill(0),
   serverInfo: null,
+  configBasePath: null,
   
   // Legacy compatibility
   mode: defaults.mode ?? 'fireplace',
@@ -642,6 +649,14 @@ export const useStore = create<AppState>((set, get) => ({
   // Non-synced state
   setAudioData: (audioData) => set({ audioData }),
   setServerInfo: (serverInfo) => set({ serverInfo }),
+
+  // Configuration base path action
+  setConfigBasePath: (path, sync = true) => {
+    set({ configBasePath: path });
+    if (sync) {
+      syncState('SET_CONFIG_BASE_PATH', path);
+    }
+  },
 
   // Legacy compatibility action
   setMode: (mode, sync = true) => {
