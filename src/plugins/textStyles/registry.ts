@@ -11,6 +11,7 @@ import { FadePlugin } from './FadePlugin';
 import { TypewriterPlugin } from './TypewriterPlugin';
 import { BouncePlugin } from './BouncePlugin';
 import { DotMatrixPlugin } from './DotMatrixPlugin';
+import { CreditsPlugin } from './CreditsPlugin';
 
 /**
  * All registered text style plugins
@@ -21,6 +22,7 @@ export const textStyleRegistry: TextStylePlugin[] = [
   TypewriterPlugin,
   BouncePlugin,
   DotMatrixPlugin,
+  CreditsPlugin,
 ];
 
 /**

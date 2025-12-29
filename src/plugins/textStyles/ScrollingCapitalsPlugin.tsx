@@ -3,10 +3,10 @@
  * 
  * Large uppercase text that scrolls across the screen from right to left.
  * The classic marquee style.
+ * Uses GPU-accelerated CSS animations for smooth 60fps performance.
  */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, useAnimationControls } from 'framer-motion';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
 
@@ -78,11 +78,11 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const [viewportWidth, setViewportWidth] = useState<number>(() => 
     typeof window !== 'undefined' ? window.innerWidth : 1920
   );
+  const [animationKey, setAnimationKey] = useState(0);
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageTimestampRef = useRef<number>(0); // Track last message timestamp to detect new messages
   const spanRef = useRef<HTMLSpanElement>(null);
-  const controls = useAnimationControls();
 
   // Use charDuration if available, otherwise default (old 'duration' setting is ignored)
   const charDuration = getNumberSetting(settings.charDuration, 0.3, 0.1, 2);
@@ -130,16 +130,16 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   };
 
 
-  // Handle completion - supports repeatCount
-  const handleComplete = () => {
+  // Handle animation completion - supports repeatCount
+  const handleAnimationEnd = () => {
     if (completedRef.current || !displayMessage) return;
     
     const nextRepeat = currentRepeat + 1;
     
     if (nextRepeat < repeatCount) {
-      // More repeats needed - restart immediately (like Dot Matrix)
-      // Just update state - the useEffect will handle restarting the animation
+      // More repeats needed - restart immediately
       setCurrentRepeat(nextRepeat);
+      setAnimationKey(prev => prev + 1);
     } else {
       // All repeats done
       completedRef.current = true;
@@ -157,26 +157,12 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     }
   };
 
-  // Start animation when message or repeat changes - this restarts immediately on repeat
+  // Restart animation when repeat changes
   useEffect(() => {
-    if (!displayMessage) return;
-    
-    const { endPos, animDuration } = calculateAnimationParams(displayMessage);
-    
-    // Use requestAnimationFrame to ensure immediate start without delay
-    requestAnimationFrame(() => {
-      controls.set({ x: `${viewportWidth}px` });
-      requestAnimationFrame(() => {
-        controls.start({ 
-          x: endPos, 
-          transition: { 
-            duration: animDuration, 
-            ease: "linear" 
-          } 
-        });
-      });
-    });
-  }, [displayMessage, currentRepeat, viewportWidth, fontSize, charDuration, controls]);
+    if (displayMessage && currentRepeat > 0) {
+      setAnimationKey(prev => prev + 1);
+    }
+  }, [currentRepeat, displayMessage]);
 
   // Reset state when new message is triggered
   useEffect(() => {
@@ -214,31 +200,53 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     }
   }, [message, messageTimestamp, charDuration, fontSize, repeatCount, viewportWidth, onComplete]);
 
+  // Calculate animation parameters for current state
+  const { endPos, animDuration } = displayMessage 
+    ? calculateAnimationParams(displayMessage) 
+    : { endPos: '0px', animDuration: 0 };
+
+  const animationName = `scrollHorizontal-${animationKey}`;
+
   return (
     <div 
       className={`fixed ${positionClass} left-0 w-full overflow-hidden pointer-events-none`}
       style={{ transform: `translateY(${verticalOffset}px)` }}
     >
       {displayMessage && (
-        <motion.div
-          initial={{ x: `${viewportWidth}px` }}
-          animate={controls}
-          onAnimationComplete={handleComplete}
-          className="whitespace-nowrap"
-          style={{ willChange: 'transform' }}
-        >
-          <span 
-            ref={spanRef}
-            className="font-black uppercase tracking-tighter"
-            style={{ 
-              fontSize: `${fontSize}rem`,
-              color,
-              textShadow,
+        <>
+          <style>{`
+            @keyframes ${animationName} {
+              from {
+                transform: translate3d(${viewportWidth}px, 0, 0);
+              }
+              to {
+                transform: translate3d(${endPos}, 0, 0);
+              }
+            }
+          `}</style>
+          <div
+            key={animationKey}
+            className="whitespace-nowrap"
+            style={{
+              animation: `${animationName} ${animDuration}s linear forwards`,
+              willChange: 'transform',
+              backfaceVisibility: 'hidden',
             }}
+            onAnimationEnd={handleAnimationEnd}
           >
-            {displayMessage}
-          </span>
-        </motion.div>
+            <span 
+              ref={spanRef}
+              className="font-black uppercase tracking-tighter"
+              style={{ 
+                fontSize: `${fontSize}rem`,
+                color,
+                textShadow,
+              }}
+            >
+              {displayMessage}
+            </span>
+          </div>
+        </>
       )}
     </div>
   );

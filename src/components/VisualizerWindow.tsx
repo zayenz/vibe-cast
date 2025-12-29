@@ -143,9 +143,15 @@ const TextStyleRenderer: React.FC<{
     message.speed ?? 1.0
   );
 
+  // Credits displays all split lines simultaneously as a credits roll
+  // Join all parts with newlines instead of showing them sequentially
+  const messageToDisplay = (styleId === 'credits' && splitActive)
+    ? sequence.join('\n')
+    : currentMessage;
+
   return (
     <TextStyleComponent
-      message={currentMessage}
+      message={messageToDisplay}
       messageTimestamp={partTimestamp}
       settings={settings}
       verticalOffset={verticalOffset}
