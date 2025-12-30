@@ -224,11 +224,13 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
   // Calculate animation parameters
   const calculateAnimationParams = (lineCount: number) => {
     const totalTextHeight = calculateTextHeight(lineCount);
-    const travelDistance = viewportHeight + totalTextHeight; // Start below, exit above
+    // Start just below the viewport so credits appear immediately (previously we started below by totalTextHeight)
+    const edgePaddingPx = Math.max(24, fontSizePx); // enough space for glow/first line
+    const startPos = viewportHeight + edgePaddingPx;
+    const endPos = -totalTextHeight - edgePaddingPx;
+
+    const travelDistance = startPos - endPos;
     const animDuration = travelDistance / scrollSpeed; // Duration based on scroll speed
-    
-    const startPos = viewportHeight + totalTextHeight; // Start below viewport
-    const endPos = -totalTextHeight; // End above viewport
     
     return { startPos, endPos, animDuration, totalTextHeight };
   };

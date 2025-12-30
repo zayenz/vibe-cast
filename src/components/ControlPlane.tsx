@@ -56,6 +56,7 @@ export const ControlPlane: React.FC = () => {
   const updateVisualizationPreset = useStore((s) => s.updateVisualizationPreset);
   const deleteVisualizationPreset = useStore((s) => s.deleteVisualizationPreset);
   const setActiveVisualizationPreset = useStore((s) => s.setActiveVisualizationPreset);
+  const setVisualizationPresets = useStore((s) => s.setVisualizationPresets);
   // Get message stats from SSE state (source of truth)
   // CRITICAL: Never call hooks conditionally.
   // This must ALWAYS call useStore, otherwise hook order changes between renders when SSE state arrives.
@@ -794,6 +795,12 @@ export const ControlPlane: React.FC = () => {
     sendCommand('set-visualization-presets', updated);
   };
 
+  const handleReorderPresets = (newPresets: VisualizationPreset[]) => {
+    // Persist in one batch (orders already normalized by the manager)
+    setVisualizationPresets(newPresets, false);
+    sendCommand('set-visualization-presets', newPresets);
+  };
+
   const handleDeletePreset = (id: string) => {
     deleteVisualizationPreset(id);
     const filtered = visualizationPresets.filter(p => p.id !== id);
@@ -936,8 +943,14 @@ export const ControlPlane: React.FC = () => {
                       : 'Loading presets...'}
                   </div>
                 ) : (
-                  visualizationPresets
+                  [...visualizationPresets]
                     .filter(p => p.enabled !== false)
+                    .sort((a, b) => {
+                      const orderA = a.order ?? 999;
+                      const orderB = b.order ?? 999;
+                      if (orderA !== orderB) return orderA - orderB;
+                      return a.name.localeCompare(b.name);
+                    })
                     .map((preset) => {
                       const viz = getVisualization(preset.visualizationId);
                       // If we don't have an explicit active preset yet, fall back to the active visualization id
@@ -997,6 +1010,7 @@ export const ControlPlane: React.FC = () => {
                           onUpdatePreset={handleUpdatePreset}
                           onDeletePreset={handleDeletePreset}
                           onSetActivePreset={handleSetActivePreset}
+                        onReorderPresets={handleReorderPresets}
                         />
                     </div>
 

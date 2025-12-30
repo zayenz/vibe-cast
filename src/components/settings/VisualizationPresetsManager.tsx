@@ -21,6 +21,7 @@ interface VisualizationPresetsManagerProps {
   onUpdatePreset: (id: string, updates: Partial<VisualizationPreset>) => void;
   onDeletePreset: (id: string) => void;
   onSetActivePreset: (id: string | null) => void;
+  onReorderPresets: (presets: VisualizationPreset[]) => void;
 }
 
 export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerProps> = ({
@@ -30,6 +31,7 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   onUpdatePreset,
   onDeletePreset,
   onSetActivePreset,
+  onReorderPresets,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -114,6 +116,11 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   const handleDragStart = (e: React.DragEvent, presetId: string) => {
     setDraggingId(presetId);
     e.dataTransfer.effectAllowed = 'move';
+    try {
+      e.dataTransfer.setData('text/plain', presetId);
+    } catch {
+      // ignore
+    }
   };
 
   const handleDragOver = (e: React.DragEvent, presetId: string) => {
@@ -124,25 +131,31 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
     }
   };
 
-  const handleDragEnd = () => {
-    if (draggingId && dragOverId && draggingId !== dragOverId) {
-      const draggedIndex = sortedPresets.findIndex(p => p.id === draggingId);
-      const targetIndex = sortedPresets.findIndex(p => p.id === dragOverId);
-      
-      if (draggedIndex !== -1 && targetIndex !== -1) {
-        // Create new array with reordered presets
-        const newPresets = [...sortedPresets];
-        const [dragged] = newPresets.splice(draggedIndex, 1);
-        newPresets.splice(targetIndex, 0, dragged);
-        
-        // Update orders for all presets
-        newPresets.forEach((preset, index) => {
-          if (preset.order !== index) {
-            onUpdatePreset(preset.id, { order: index });
-          }
-        });
-      }
+  const commitReorder = (draggedId: string, targetId: string) => {
+    const draggedIndex = sortedPresets.findIndex(p => p.id === draggedId);
+    const targetIndex = sortedPresets.findIndex(p => p.id === targetId);
+    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return;
+
+    const newPresets = [...sortedPresets];
+    const [dragged] = newPresets.splice(draggedIndex, 1);
+    newPresets.splice(targetIndex, 0, dragged);
+
+    // Normalize order 0..n-1 in one batch
+    const withOrder = newPresets.map((p, idx) => ({ ...p, order: idx }));
+    onReorderPresets(withOrder);
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    const draggedId = e.dataTransfer.getData('text/plain') || draggingId;
+    if (draggedId && draggedId !== targetId) {
+      commitReorder(draggedId, targetId);
     }
+    setDraggingId(null);
+    setDragOverId(null);
+  };
+
+  const handleDragEnd = () => {
     setDraggingId(null);
     setDragOverId(null);
   };
@@ -186,6 +199,7 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
                 draggable
                 onDragStart={(e) => handleDragStart(e, preset.id)}
                 onDragOver={(e) => handleDragOver(e, preset.id)}
+                onDrop={(e) => handleDrop(e, preset.id)}
                 onDragEnd={handleDragEnd}
                 className={`bg-zinc-950 border rounded-lg overflow-hidden transition-all ${
                   isActive ? 'border-orange-500' : 'border-zinc-800'
