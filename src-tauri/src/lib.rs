@@ -343,6 +343,15 @@ impl AppStateSync {
             return Err(format!("Config file does not exist: {}", config_path));
         }
         
+        // Extract and set the config base path (directory containing the config file)
+        if let Some(parent) = path.parent() {
+            let base_path = parent.to_string_lossy().to_string();
+            eprintln!("[Rust] Setting config base path from file: {}", base_path);
+            if let Ok(mut m) = self.config_base_path.lock() {
+                *m = Some(base_path);
+            }
+        }
+        
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
         
@@ -493,11 +502,31 @@ fn set_config_base_path(
     state: tauri::State<'_, Arc<AppStateSync>>,
     path: Option<String>
 ) -> Result<(), String> {
+    eprintln!("[Rust] set_config_base_path command called with: {:?}", path);
     if let Ok(mut p) = state.config_base_path.lock() {
-        *p = path;
+        *p = path.clone();
+        eprintln!("[Rust] Config base path set successfully to: {:?}", path);
         Ok(())
     } else {
+        eprintln!("[Rust] ERROR: Failed to lock config_base_path");
         Err("Failed to lock config_base_path".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_config_base_path(
+    state: tauri::State<'_, Arc<AppStateSync>>
+) -> Result<Option<String>, String> {
+    match state.config_base_path.lock() {
+        Ok(p) => {
+            let path = p.clone();
+            eprintln!("[Rust] get_config_base_path returning: {:?}", path);
+            Ok(path)
+        }
+        Err(_) => {
+            eprintln!("[Rust] ERROR: Failed to lock config_base_path for reading");
+            Err("Failed to lock config_base_path".to_string())
+        }
     }
 }
 
@@ -510,10 +539,23 @@ fn load_message_text_file(
         .ok()
         .and_then(|p| p.clone());
     
-    let resolved = resolve_path(&file_path, base_path_opt.as_deref());
+    eprintln!("[Rust] load_message_text_file called");
+    eprintln!("[Rust]   file_path: {}", file_path);
+    eprintln!("[Rust]   base_path: {:?}", base_path_opt);
     
-    fs::read_to_string(&resolved)
-        .map_err(|e| format!("Failed to read file '{}': {}", resolved, e))
+    let resolved = resolve_path(&file_path, base_path_opt.as_deref());
+    eprintln!("[Rust]   resolved path: {}", resolved);
+    
+    match fs::read_to_string(&resolved) {
+        Ok(content) => {
+            eprintln!("[Rust]   Successfully read file, length: {}", content.len());
+            Ok(content)
+        }
+        Err(e) => {
+            eprintln!("[Rust]   ERROR reading file: {}", e);
+            Err(format!("Failed to read file '{}': {}", resolved, e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -622,8 +664,10 @@ fn emit_state_change(
             } else {
                 payload_value.as_str().map(|s| s.to_string())
             };
+            eprintln!("[Rust] Setting config base path to: {:?}", path_opt);
             if let Ok(mut m) = state.config_base_path.lock() {
                 *m = path_opt;
+                eprintln!("[Rust] Config base path successfully set");
             }
         }
         "SET_VISUALIZATION_PRESETS" => {
@@ -1128,6 +1172,7 @@ pub fn run() {
             restart_viz_window,
             emit_state_change,
             set_config_base_path,
+            get_config_base_path,
             load_message_text_file,
             list_images_in_folder,
             get_photos_albums,

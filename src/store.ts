@@ -195,10 +195,14 @@ function parseDefaultConfig(): Partial<AppState> {
 
   // Ensure one preset per registered text style exists (even if no textStyleSettings were present)
   const existingTextStyleIds = new Set(textStylePresets.map(p => p.textStyleId));
+  console.log('[Store] Text style registry length:', textStyleRegistry.length);
+  console.log('[Store] Text style registry IDs:', textStyleRegistry.map(s => s.id));
+  console.log('[Store] Existing text style preset IDs:', Array.from(existingTextStyleIds));
   if (Array.isArray(textStyleRegistry) && textStyleRegistry.length > 0) {
     const defaultsByStyleId = getDefaultTextStyleSettings();
     textStyleRegistry.forEach((style) => {
       if (!existingTextStyleIds.has(style.id)) {
+        console.log('[Store] Creating preset for missing text style:', style.id, style.name);
         textStylePresets.push({
           id: generateId(),
           // Default presets should read like the style name, not "Default"/"Preset"
@@ -209,6 +213,7 @@ function parseDefaultConfig(): Partial<AppState> {
       }
     });
   }
+  console.log('[Store] Final text style presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
   
   return {
     activeVisualization: config.activeVisualization ?? 'fireplace',
@@ -652,8 +657,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Configuration base path action
   setConfigBasePath: (path, sync = true) => {
+    console.log('[Store] Setting config base path:', path, 'sync:', sync);
     set({ configBasePath: path });
     if (sync) {
+      console.log('[Store] Syncing config base path to backend');
       syncState('SET_CONFIG_BASE_PATH', path);
     }
   },
@@ -688,10 +695,71 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadConfiguration: (config, sync = true) => {
-    console.log('Loading configuration:', config);
+    console.log('[Store] Loading configuration:', config);
     const mode = (config.activeVisualization ?? 'fireplace') === 'techno' ? 'techno' : 'fireplace';
     const messageTree = config.messageTree ?? buildFlatMessageTree(config.messages ?? []);
-    const messages = config.messages ?? flattenMessageTree(messageTree);
+    let messages = config.messages ?? flattenMessageTree(messageTree);
+    
+    // Ensure all registered text styles have presets
+    const textStylePresets = [...(config.textStylePresets ?? [])];
+    const existingTextStyleIds = new Set(textStylePresets.map(p => p.textStyleId));
+    console.log('[Store] Loaded text style presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
+    console.log('[Store] Checking for missing text styles from registry...');
+    
+    if (Array.isArray(textStyleRegistry) && textStyleRegistry.length > 0) {
+      const defaultsByStyleId = getDefaultTextStyleSettings();
+      textStyleRegistry.forEach((style) => {
+        if (!existingTextStyleIds.has(style.id)) {
+          console.log('[Store] Creating preset for missing text style:', style.id, style.name);
+          textStylePresets.push({
+            id: generateId(),
+            name: style.name,
+            textStyleId: style.id,
+            settings: config.textStyleSettings?.[style.id] || defaultsByStyleId[style.id] || {},
+          });
+        }
+      });
+    }
+    console.log('[Store] Final text style presets after augmentation:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
+    
+    // Fix messages that have textStyle but no textStylePreset
+    console.log('[Store] Assigning presets to messages...');
+    messages = messages.map(msg => {
+      if (msg.textStyle && !msg.textStylePreset) {
+        const matchingPreset = textStylePresets.find(p => p.textStyleId === msg.textStyle);
+        if (matchingPreset) {
+          console.log(`[Store] Assigning preset "${matchingPreset.name}" to message ${msg.id}`);
+          return { ...msg, textStylePreset: matchingPreset.id };
+        }
+      }
+      return msg;
+    });
+    
+    // Also fix messages in the tree
+    const fixMessageTree = (nodes: MessageTreeNode[]): MessageTreeNode[] => {
+      return nodes.map(node => {
+        if (node.type === 'message') {
+          const msg = node.message;
+          if (msg.textStyle && !msg.textStylePreset) {
+            const matchingPreset = textStylePresets.find(p => p.textStyleId === msg.textStyle);
+            if (matchingPreset) {
+              return {
+                ...node,
+                message: { ...msg, textStylePreset: matchingPreset.id }
+              };
+            }
+          }
+          return node;
+        } else {
+          return {
+            ...node,
+            children: fixMessageTree(node.children)
+          };
+        }
+      });
+    };
+    const fixedMessageTree = fixMessageTree(messageTree);
+    
     set({
       activeVisualization: config.activeVisualization ?? 'fireplace',
       activeVisualizationPreset: config.activeVisualizationPreset ?? null,
@@ -700,10 +768,10 @@ export const useStore = create<AppState>((set, get) => ({
       visualizationSettings: config.visualizationSettings ?? {},
       visualizationPresets: config.visualizationPresets ?? [],
       messages,
-      messageTree,
+      messageTree: fixedMessageTree,
       defaultTextStyle: config.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: config.textStyleSettings ?? {},
-      textStylePresets: config.textStylePresets ?? [],
+      textStylePresets,
       messageStats: config.messageStats ?? {},
       mode,
     });

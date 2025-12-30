@@ -722,14 +722,16 @@ export const ControlPlane: React.FC = () => {
         // Extract directory path from file path
         const lastSlash = Math.max(selected.lastIndexOf('/'), selected.lastIndexOf('\\'));
         const configDir = lastSlash >= 0 ? selected.substring(0, lastSlash) : null;
-        console.log('Config directory:', configDir);
+        console.log('[ControlPlane] Loading config from:', selected);
+        console.log('[ControlPlane] Config directory:', configDir);
         
         const text = await readTextFile(selected);
         const config = JSON.parse(text) as AppConfiguration;
-        console.log('Loaded configuration:', config);
+        console.log('[ControlPlane] Loaded configuration:', config);
         
         // Store config base path first
         if (configDir) {
+          console.log('[ControlPlane] Setting config base path to:', configDir);
           useStore.getState().setConfigBasePath(configDir, true);
         }
         
@@ -1408,7 +1410,39 @@ export const ControlPlane: React.FC = () => {
                                   rows={3}
                                   className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors resize-y"
                                   placeholder="Enter message text..."
+                                  disabled={!!msg.textFile}
                                 />
+                                {msg.textFile && (
+                                  <p className="text-xs text-zinc-500 mt-1">
+                                    Text will be loaded from file. Clear the file path below to edit text directly.
+                                  </p>
+                                )}
+                              </div>
+
+                              {/* Text File Path */}
+                              <div>
+                                <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                                  Load from File
+                                </label>
+                                <input
+                                  type="text"
+                                  value={msg.textFile ?? ''}
+                                  onChange={(e) => {
+                                    const path = e.target.value.trim();
+                                    updateMessageById(msg.id, (m) => ({ 
+                                      ...m, 
+                                      textFile: path || undefined,
+                                      // Auto-enable splitting by newlines for file-based text
+                                      splitEnabled: path ? true : m.splitEnabled,
+                                      splitSeparator: path ? '\n' : m.splitSeparator,
+                                    }));
+                                  }}
+                                  placeholder="e.g., credits.txt or /path/to/text.txt"
+                                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                                />
+                                <p className="text-xs text-zinc-500 mt-1">
+                                  Path can be relative to config file or absolute. Text will be split by newlines automatically.
+                                </p>
                               </div>
 
                               {/* Text Style Selector (single dropdown) */}
@@ -1420,16 +1454,30 @@ export const ControlPlane: React.FC = () => {
                                   const currentPresetId = msg.textStylePreset || '';
                                   const hasOverrides = !!(msg.styleOverrides && Object.keys(msg.styleOverrides).length > 0);
                                   
-                                  // If we have overrides but no preset, try to find a preset matching the text style
+                                  // If no preset is assigned, find a matching one based on textStyle
                                   const styleId = msg.textStyle;
-                                  const matchingPreset = !currentPresetId && hasOverrides && styleId
+                                  const matchingPreset = !currentPresetId && styleId
                                     ? textStylePresets.find(p => p.textStyleId === styleId)
                                     : null;
                                   const effectivePresetId = currentPresetId || (matchingPreset?.id || '');
                                   
-                                  const selectedValue = effectivePresetId
-                                    ? (hasOverrides ? `${effectivePresetId}:modified` : effectivePresetId)
+                                  // If still no effective preset, default to first available
+                                  const displayPresetId = effectivePresetId || (textStylePresets.length > 0 ? textStylePresets[0].id : '');
+                                  
+                                  const selectedValue = displayPresetId
+                                    ? (hasOverrides && displayPresetId === currentPresetId ? `${displayPresetId}:modified` : displayPresetId)
                                     : '';
+                                  
+                                  // Debug logging
+                                  if (expandedMessage === msg.id) {
+                                    console.log('[ControlPlane] Text style dropdown for message:', msg.id);
+                                    console.log('  currentPresetId:', currentPresetId);
+                                    console.log('  msg.textStyle:', styleId);
+                                    console.log('  matchingPreset:', matchingPreset?.name);
+                                    console.log('  effectivePresetId:', effectivePresetId);
+                                    console.log('  selectedValue:', selectedValue);
+                                    console.log('  available presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
+                                  }
 
                                   return (
                               <select
