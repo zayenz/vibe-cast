@@ -104,6 +104,7 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   const completedRef = useRef(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const controls = useAnimationControls();
+  const onCompleteRef = useRef(onComplete);
 
   const displayDuration = getNumberSetting(settings.displayDuration, 5, 0, 15);
   const fadeInDuration = getNumberSetting(settings.fadeInDuration, 0.5, 0.2, 3);
@@ -124,6 +125,10 @@ const FadeStyle: React.FC<TextStyleProps> = ({
   };
 
   const effectiveRepeats = Math.max(1, Math.floor(Number(repeatCount) || 1));
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     if (!message) return;
@@ -170,7 +175,7 @@ const FadeStyle: React.FC<TextStyleProps> = ({
           } else {
             completedRef.current = true;
             setDisplayMessage(null);
-            onComplete?.();
+            onCompleteRef.current?.();
           }
         }, fadeOutDuration * 1000);
       }, (fadeInDuration + displayDuration) * 1000);
@@ -184,7 +189,7 @@ const FadeStyle: React.FC<TextStyleProps> = ({
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [message, messageTimestamp]);
+  }, [message, messageTimestamp, fadeInDuration, fadeOutDuration, displayDuration, effectiveRepeats]);
 
   return (
     <div 

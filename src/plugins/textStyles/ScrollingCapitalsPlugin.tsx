@@ -83,6 +83,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageTimestampRef = useRef<number>(0); // Track last message timestamp to detect new messages
   const spanRef = useRef<HTMLSpanElement>(null);
+  const onCompleteRef = useRef(onComplete);
 
   // Use charDuration if available, otherwise default (old 'duration' setting is ignored)
   const charDuration = getNumberSetting(settings.charDuration, 0.3, 0.1, 2);
@@ -111,6 +112,10 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   // Helper function to calculate animation parameters
   const calculateAnimationParams = (msg: string) => {
@@ -152,7 +157,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       }
       // Call onComplete after a brief delay to allow exit animation
       setTimeout(() => {
-        onComplete?.();
+        onCompleteRef.current?.();
       }, 300);
     }
   };
@@ -187,7 +192,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
           completedRef.current = true;
           setDisplayMessage(null);
           setCurrentRepeat(0);
-          onComplete?.();
+          onCompleteRef.current?.();
         }
       }, (totalDuration * 1000) + 500); // Add 500ms buffer
       
@@ -198,7 +203,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, charDuration, fontSize, repeatCount, viewportWidth, onComplete]);
+  }, [message, messageTimestamp, charDuration, fontSize, repeatCount, viewportWidth]);
 
   // Calculate animation parameters for current state
   const { endPos, animDuration } = displayMessage 

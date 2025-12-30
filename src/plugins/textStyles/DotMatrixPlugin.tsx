@@ -185,6 +185,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
 
   const dotSize = getNumberSetting(settings.dotSize, 8, 4, 16);
   const spacing = getNumberSetting(settings.spacing, 4, 2, 8);
@@ -218,6 +219,10 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
   const handleComplete = () => {
     if (completedRef.current) return;
     
@@ -234,7 +239,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
       setDisplayedChars(0);
       setScrollPosition(0);
       setCurrentRepeat(0);
-      onComplete?.();
+      onCompleteRef.current?.();
     }
   };
 

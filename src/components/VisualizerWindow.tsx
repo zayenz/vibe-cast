@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
@@ -81,6 +81,10 @@ const TextStyleRenderer: React.FC<{
   onComplete: () => void;
 }> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, repeatCount = 1, onComplete }) => {
   const effectiveRepeatCount = repeatCount ?? 1;
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
   
   // State for resolved message (with text loaded from file if needed)
   const [resolvedMessage, setResolvedMessage] = useState<MessageConfig>(message);
@@ -115,27 +119,11 @@ const TextStyleRenderer: React.FC<{
   const [partIndex, setPartIndex] = useState(0);
   const [partTimestamp, setPartTimestamp] = useState(messageTimestamp);
   const currentMessage = sequence[Math.min(partIndex, sequence.length - 1)] ?? '';
-  const pluginRepeatCount = splitActive ? 1 : effectiveRepeatCount;
 
   useEffect(() => {
     setPartIndex(0);
     setPartTimestamp(messageTimestamp);
   }, [messageTimestamp, resolvedMessage.text, resolvedMessage.splitEnabled, resolvedMessage.splitSeparator, effectiveRepeatCount]);
-  
-  const handleComplete = useCallback(() => {
-    if (splitActive && partIndex + 1 < sequence.length) {
-      const nextIndex = partIndex + 1;
-      setPartIndex(nextIndex);
-      setPartTimestamp(messageTimestamp + nextIndex);
-      return;
-    }
-    onComplete?.();
-  }, [splitActive, partIndex, sequence.length, messageTimestamp, onComplete]);
-
-  // Don't render while loading text from file
-  if (isLoading) {
-    return null;
-  }
 
   // Determine which text style to use
   const preset = resolvedMessage.textStylePreset 
@@ -143,6 +131,18 @@ const TextStyleRenderer: React.FC<{
     : null;
   
   const styleId = preset?.textStyleId || resolvedMessage.textStyle;
+  const splitForSequencing = splitActive && styleId !== 'credits';
+  const pluginRepeatCount = splitForSequencing ? 1 : effectiveRepeatCount;
+
+  const handleComplete = useCallback(() => {
+    if (splitForSequencing && partIndex + 1 < sequence.length) {
+      const nextIndex = partIndex + 1;
+      setPartIndex(nextIndex);
+      setPartTimestamp(messageTimestamp + nextIndex);
+      return;
+    }
+    onCompleteRef.current?.();
+  }, [splitForSequencing, partIndex, sequence.length, messageTimestamp]);
   const textStylePlugin = getTextStyle(styleId);
   
   if (!textStylePlugin) {
@@ -181,6 +181,11 @@ const TextStyleRenderer: React.FC<{
   const messageToDisplay = (styleId === 'credits' && splitActive)
     ? sequence.join('\n')
     : currentMessage;
+
+  // Don't render while loading text from file (but keep hooks above this point stable)
+  if (isLoading) {
+    return null;
+  }
 
   return (
     <TextStyleComponent
@@ -773,9 +778,16 @@ export const VisualizerWindow: React.FC = () => {
               verticalOffset={cumulativeOffset}
               repeatCount={message.repeatCount ?? 1}
               onComplete={() => {
-                // Clear from local state
+                // 1) Clear local UI immediately
                 clearMessage(timestamp, false, message.id);
-                // Notify Rust backend - it handles queue advancement
+                // 2) Notify ControlPlane immediately (hybrid model)
+                emit('state-changed', {
+                  type: 'CLEAR_MESSAGE',
+                  payload: { timestamp, messageId: message.id },
+                }).catch(() => {
+                  // ignore (best-effort)
+                });
+                // 3) Notify Rust backend - it handles queue advancement + SSE canonical state
                 sendCommand('message-complete', { messageId: message.id });
               }}
             />

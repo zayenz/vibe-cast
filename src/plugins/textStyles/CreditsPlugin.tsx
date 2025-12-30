@@ -6,7 +6,7 @@
  * Uses GPU-accelerated CSS animations for smooth 60fps performance.
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
 import { getNumberSetting, getStringSetting } from '../utils/settings';
 
@@ -57,6 +57,17 @@ const settingsSchema: SettingDefinition[] = [
     step: 0.1,
     default: 1.5,
   },
+  {
+    type: 'select',
+    id: 'align',
+    label: 'Alignment',
+    options: [
+      { value: 'center', label: 'Center' },
+      { value: 'left', label: 'Left' },
+      { value: 'right', label: 'Right' },
+    ],
+    default: 'center',
+  },
 ];
 
 // ============================================================================
@@ -73,6 +84,9 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
 }) => {
   const [displayMessage, setDisplayMessage] = useState<string | null>(null);
   const [currentRepeat, setCurrentRepeat] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1920
+  );
   const [viewportHeight, setViewportHeight] = useState<number>(() => 
     typeof window !== 'undefined' ? window.innerHeight : 1080
   );
@@ -80,12 +94,16 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
   const completedRef = useRef(false);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageTimestampRef = useRef<number>(0);
+  const lastMessageRef = useRef<string>('');
+  const onCompleteRef = useRef(onComplete);
+  const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const scrollSpeed = getNumberSetting(settings.scrollSpeed, 100, 50, 500);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
   const color = getStringSetting(settings.color, '#ffffff');
   const glowIntensity = getNumberSetting(settings.glowIntensity, 0.5, 0, 1);
   const lineSpacing = getNumberSetting(settings.lineSpacing, 1.5, 1.0, 3.0);
+  const align = getStringSetting(settings.align, 'center');
 
   // Text shadow based on glow intensity
   const glowSize = 15 * glowIntensity;
@@ -97,21 +115,108 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleResize = () => {
+      setViewportWidth(window.innerWidth);
       setViewportHeight(window.innerHeight);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Split message by newlines to handle multiple lines
-  const lines = displayMessage ? displayMessage.split('\n').filter(line => line.trim().length > 0) : [];
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  const fontSizePx = fontSize * 16; // Convert rem to px
+  const lineHeightPx = fontSizePx;
+  const spacingPx = fontSizePx * lineSpacing;
+
+  const alignment = (align === 'left' || align === 'right' || align === 'center') ? align : 'center';
+  const textAlign: 'left' | 'center' | 'right' = alignment;
+
+  const ensureCanvas = (): CanvasRenderingContext2D | null => {
+    if (typeof document === 'undefined') return null;
+    if (!measureCanvasRef.current) {
+      measureCanvasRef.current = document.createElement('canvas');
+    }
+    return measureCanvasRef.current.getContext('2d');
+  };
+
+  const wrapLine = (ctx: CanvasRenderingContext2D, line: string, maxWidthPx: number): string[] => {
+    // Preserve blank lines as actual vertical spacing
+    if (line.length === 0) return [''];
+
+    // Fast path: fits as-is
+    if (ctx.measureText(line).width <= maxWidthPx) return [line];
+
+    // Word-wrap with fallback to char-wrap for long tokens
+    const out: string[] = [];
+    const tokens = line.split(/(\s+)/); // keep whitespace tokens
+    let current = '';
+
+    const pushCurrent = () => {
+      out.push(current);
+      current = '';
+    };
+
+    for (const token of tokens) {
+      const next = current + token;
+      if (current.length === 0) {
+        current = token;
+        continue;
+      }
+      if (ctx.measureText(next).width <= maxWidthPx) {
+        current = next;
+        continue;
+      }
+
+      // token would overflow; push current and try to place token
+      pushCurrent();
+
+      // If token itself is too wide, break it by chars
+      if (ctx.measureText(token).width > maxWidthPx) {
+        let chunk = '';
+        for (const ch of token) {
+          const cand = chunk + ch;
+          if (chunk.length > 0 && ctx.measureText(cand).width > maxWidthPx) {
+            out.push(chunk);
+            chunk = ch;
+          } else {
+            chunk = cand;
+          }
+        }
+        current = chunk;
+      } else {
+        current = token;
+      }
+    }
+
+    if (current.length > 0) out.push(current);
+    return out;
+  };
+
+  const wrappedLines = useMemo(() => {
+    const rawLines = displayMessage ? displayMessage.split('\n') : [];
+    if (rawLines.length === 0) return [] as string[];
+
+    const ctx = ensureCanvas();
+    if (!ctx) return rawLines;
+
+    // Approximate font used by the credits lines (font-black)
+    ctx.font = `900 ${fontSizePx}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif`;
+
+    const maxWidthPx = Math.max(200, viewportWidth * 0.9);
+    const out: string[] = [];
+    rawLines.forEach((line) => {
+      out.push(...wrapLine(ctx, line, maxWidthPx));
+    });
+    return out;
+  }, [displayMessage, fontSizePx, viewportWidth]);
 
   // Calculate total text height in pixels
   const calculateTextHeight = (lineCount: number): number => {
     if (lineCount === 0) return 0;
-    const fontSizePx = fontSize * 16; // Convert rem to px
-    const lineHeight = fontSizePx;
-    const spacing = fontSizePx * lineSpacing;
+    const lineHeight = lineHeightPx;
+    const spacing = spacingPx;
     // Total height = (lineCount * lineHeight) + (spacing * (lineCount - 1))
     return (lineCount * lineHeight) + (spacing * (lineCount - 1));
   };
@@ -150,7 +255,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
       }
       // Call onComplete after a brief delay
       setTimeout(() => {
-        onComplete?.();
+        onCompleteRef.current?.();
       }, 300);
     }
   };
@@ -164,9 +269,12 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
 
   // Reset state when new message is triggered
   useEffect(() => {
-    if (message && messageTimestamp !== lastMessageTimestampRef.current) {
+    // IMPORTANT: file-backed messages can update `message` content without changing `messageTimestamp`.
+    // Treat a content change as a "new message" so credits refreshes from the loaded file text.
+    if (message && (messageTimestamp !== lastMessageTimestampRef.current || message !== lastMessageRef.current)) {
       // New message - reset everything
       lastMessageTimestampRef.current = messageTimestamp;
+      lastMessageRef.current = message;
       completedRef.current = false;
       setCurrentRepeat(0);
       // Clear any pending timeouts
@@ -178,7 +286,8 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
       setDisplayMessage(message);
       
       // Safety timeout: ensure message is cleared even if animation doesn't complete
-      const lineCount = message.split('\n').filter(line => line.trim().length > 0).length;
+      const rawLineCount = message.split('\n').length;
+      const lineCount = Math.max(1, rawLineCount);
       const { animDuration } = calculateAnimationParams(lineCount);
       const totalDuration = animDuration * repeatCount;
       safetyTimeoutRef.current = setTimeout(() => {
@@ -186,7 +295,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
           completedRef.current = true;
           setDisplayMessage(null);
           setCurrentRepeat(0);
-          onComplete?.();
+          onCompleteRef.current?.();
         }
       }, (totalDuration * 1000) + 500); // Add 500ms buffer
       
@@ -197,15 +306,11 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, repeatCount, viewportHeight, fontSize, lineSpacing, scrollSpeed, onComplete]);
-
-  const fontSizePx = fontSize * 16; // Convert rem to px
-  const lineHeightPx = fontSizePx;
-  const spacingPx = fontSizePx * lineSpacing;
+  }, [message, messageTimestamp, repeatCount, viewportHeight, viewportWidth, fontSize, lineSpacing, scrollSpeed]);
 
   // Calculate animation parameters for current state
-  const { startPos, endPos, animDuration } = lines.length > 0 
-    ? calculateAnimationParams(lines.length) 
+  const { startPos, endPos, animDuration } = wrappedLines.length > 0 
+    ? calculateAnimationParams(wrappedLines.length) 
     : { startPos: 0, endPos: 0, animDuration: 0 };
 
   const animationName = `creditsScroll-${animationKey}`;
@@ -219,7 +324,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
         transform: `translateY(${verticalOffset}px)` 
       }}
     >
-      {displayMessage && lines.length > 0 && (
+      {displayMessage && wrappedLines.length > 0 && (
         <>
           <style>{`
             @keyframes ${animationName} {
@@ -233,27 +338,34 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
           `}</style>
           <div
             key={animationKey}
-            className="flex flex-col items-center justify-center"
+            className="flex flex-col justify-center"
             style={{
               animation: `${animationName} ${animDuration}s linear forwards`,
               willChange: 'transform',
               backfaceVisibility: 'hidden',
+              width: '100%',
+              maxWidth: '90vw',
+              margin: '0 auto',
+              textAlign,
             }}
             onAnimationEnd={handleAnimationEnd}
           >
-            {lines.map((line, index) => (
+            {wrappedLines.map((line, index) => (
               <div
                 key={index}
-                className="font-black text-center whitespace-nowrap"
+                className="font-black"
                 style={{
                   fontSize: `${fontSize}rem`,
                   color,
                   textShadow,
                   lineHeight: `${lineHeightPx}px`,
-                  marginBottom: index < lines.length - 1 ? `${spacingPx}px` : 0,
+                  marginBottom: index < wrappedLines.length - 1 ? `${spacingPx}px` : 0,
+                  whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
                 }}
               >
-                {line}
+                {line.length === 0 ? '\u00A0' : line}
               </div>
             ))}
           </div>

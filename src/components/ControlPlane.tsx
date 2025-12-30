@@ -171,14 +171,14 @@ export const ControlPlane: React.FC = () => {
       switch (type) {
         case 'CLEAR_MESSAGE': {
           // Message completed in VisualizerWindow - update local store
-          // IMPORTANT: Use sync=true so queue advancement triggers next message to VisualizerWindow
           // Payload is now { timestamp, messageId } to handle cross-window timestamp differences
           if (payload && typeof payload === 'object' && 'timestamp' in payload) {
             const { timestamp, messageId } = payload as { timestamp: number; messageId?: string };
-            useStore.getState().clearMessage(timestamp, true, messageId);
+            // Only clear locally; backend queue advancement is handled by `message-complete`.
+            useStore.getState().clearMessage(timestamp, false, messageId);
           } else if (typeof payload === 'number') {
             // Legacy: just timestamp
-            useStore.getState().clearMessage(payload, true);
+            useStore.getState().clearMessage(payload, false);
           }
           break;
         }
@@ -222,6 +222,7 @@ export const ControlPlane: React.FC = () => {
   const [editingFolderName, setEditingFolderName] = useState<string>('');
   // Pending folder play confirmation (to avoid window.confirm issues in Tauri WebView)
   const [pendingFolderPlay, setPendingFolderPlay] = useState<{ folderId: string } | null>(null);
+  const [fileTextPreview, setFileTextPreview] = useState<Record<string, { path: string; text: string }>>({});
 
   // Debug flag for message reordering
   const dndDebugRef = useRef<boolean>(false);
@@ -309,6 +310,29 @@ export const ControlPlane: React.FC = () => {
   }, [sseMessageTree, sseMessages]);
 
   const messages = flattenTree(messageTreeLocal);
+
+  // When a message uses `textFile`, show a preview of the loaded file text in the Message Text box (read-only).
+  useEffect(() => {
+    if (!expandedMessage) return;
+    const msg = messages.find((m) => m.id === expandedMessage);
+    const path = msg?.textFile;
+    if (!msg || !path) return;
+
+    const existing = fileTextPreview[msg.id];
+    if (existing && existing.path === path) return;
+
+    invoke<string>('load_message_text_file', { filePath: path })
+      .then((text) => {
+        setFileTextPreview((prev) => ({ ...prev, [msg.id]: { path, text } }));
+      })
+      .catch((err) => {
+        setFileTextPreview((prev) => ({
+          ...prev,
+          [msg.id]: { path, text: `[Error loading file: ${path}]` },
+        }));
+        console.error('[ControlPlane] Failed to load message text file preview:', err);
+      });
+  }, [expandedMessage, messages, fileTextPreview]);
 
   const cloneTree = (tree: MessageTreeNode[]) =>
     JSON.parse(JSON.stringify(tree)) as MessageTreeNode[];
@@ -1453,19 +1477,19 @@ export const ControlPlane: React.FC = () => {
                                 {(() => {
                                   const currentPresetId = msg.textStylePreset || '';
                                   const hasOverrides = !!(msg.styleOverrides && Object.keys(msg.styleOverrides).length > 0);
-                                  
-                                  // If no preset is assigned, find a matching one based on textStyle
-                                  const styleId = msg.textStyle;
-                                  const matchingPreset = !currentPresetId && styleId
-                                    ? textStylePresets.find(p => p.textStyleId === styleId)
+
+                                  const styleId = msg.textStyle || '';
+                                  // Preset-only dropdown (defaults are guaranteed by store: default-<styleId>)
+                                  const preset = currentPresetId
+                                    ? textStylePresets.find((p) => p.id === currentPresetId)
                                     : null;
-                                  const effectivePresetId = currentPresetId || (matchingPreset?.id || '');
-                                  
-                                  // If still no effective preset, default to first available
-                                  const displayPresetId = effectivePresetId || (textStylePresets.length > 0 ? textStylePresets[0].id : '');
-                                  
-                                  const selectedValue = displayPresetId
-                                    ? (hasOverrides && displayPresetId === currentPresetId ? `${displayPresetId}:modified` : displayPresetId)
+                                  const matchingPreset = !preset && styleId
+                                    ? textStylePresets.find((p) => p.textStyleId === styleId)
+                                    : null;
+                                  const effectivePresetId = preset?.id || matchingPreset?.id || (textStylePresets[0]?.id ?? '');
+
+                                  const selectedValue = effectivePresetId
+                                    ? `preset:${effectivePresetId}${hasOverrides && effectivePresetId === currentPresetId ? ':modified' : ''}`
                                     : '';
                                   
                                   // Debug logging
@@ -1473,8 +1497,6 @@ export const ControlPlane: React.FC = () => {
                                     console.log('[ControlPlane] Text style dropdown for message:', msg.id);
                                     console.log('  currentPresetId:', currentPresetId);
                                     console.log('  msg.textStyle:', styleId);
-                                    console.log('  matchingPreset:', matchingPreset?.name);
-                                    console.log('  effectivePresetId:', effectivePresetId);
                                     console.log('  selectedValue:', selectedValue);
                                     console.log('  available presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
                                   }
@@ -1484,35 +1506,34 @@ export const ControlPlane: React.FC = () => {
                                       value={selectedValue}
                                       onChange={(e) => {
                                         const raw = e.target.value || '';
-                                        const isModified = raw.endsWith(':modified');
-                                        const presetId = isModified ? raw.slice(0, -':modified'.length) : raw;
-                                        const preset = presetId ? textStylePresets.find((p) => p.id === presetId) : null;
-                                        if (!preset) return;
+                                        if (!raw.startsWith('preset:')) return;
+                                        const rest = raw.slice('preset:'.length);
+                                        const isModified = rest.endsWith(':modified');
+                                        const presetId = isModified ? rest.slice(0, -':modified'.length) : rest;
+                                        const chosen = presetId ? textStylePresets.find((p) => p.id === presetId) : null;
+                                        if (!chosen) return;
 
                                         updateMessageById(msg.id, (m) => ({
                                           ...m,
-                                          textStylePreset: preset.id,
-                                          textStyle: preset.textStyleId,
-                                          // Selecting the base option clears overrides. "(modified)" is only shown when overrides actually differ.
+                                          textStylePreset: chosen.id,
+                                          textStyle: chosen.textStyleId,
+                                          // Selecting base clears overrides; selecting "(modified)" keeps them.
                                           styleOverrides: isModified ? m.styleOverrides : undefined,
                                         }));
                                       }}
                                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
                               >
-                                      {textStylePresets.flatMap((preset) => {
+                                      {textStylePresets.flatMap((p) => {
                                         const opts = [
-                                          <option key={preset.id} value={preset.id}>
-                                            {preset.name}
+                                          <option key={`preset:${p.id}`} value={`preset:${p.id}`}>
+                                            {p.name}
                                           </option>,
                                         ];
-                                        // Show modified option if this preset is selected (or matches the style when no preset is selected) and has overrides
-                                        const isSelected = currentPresetId === preset.id || 
-                                          (!currentPresetId && hasOverrides && preset.textStyleId === styleId);
-                                        if (isSelected && hasOverrides) {
+                                        if (currentPresetId === p.id && hasOverrides) {
                                           opts.push(
-                                            <option key={`${preset.id}:modified`} value={`${preset.id}:modified`}>
-                                              {preset.name} (modified)
-                                  </option>
+                                            <option key={`preset:${p.id}:modified`} value={`preset:${p.id}:modified`}>
+                                              {p.name} (modified)
+                                            </option>
                                           );
                                         }
                                         return opts;

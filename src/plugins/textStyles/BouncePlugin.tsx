@@ -96,6 +96,7 @@ const BounceStyle: React.FC<TextStyleProps> = ({
   const completedRef = useRef(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const controls = useAnimationControls();
+  const onCompleteRef = useRef(onComplete);
 
   const displayDuration = getNumberSetting(settings.displayDuration, 4, 0, 10);
   const fadeOutDuration = getNumberSetting(settings.fadeOutDuration, 0.8, 0.3, 2.0);
@@ -119,6 +120,10 @@ const BounceStyle: React.FC<TextStyleProps> = ({
     : 'none';
 
   const effectiveRepeats = Math.max(1, Math.floor(Number(repeatCount) || 1));
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     if (!message) return;
@@ -165,7 +170,7 @@ const BounceStyle: React.FC<TextStyleProps> = ({
           } else {
             completedRef.current = true;
             setDisplayMessage(null);
-            onComplete?.();
+            onCompleteRef.current?.();
           }
         }, fadeOutDuration * 1000);
       }, (1.0 + displayDuration) * 1000); // 1.0s for spring settle + displayDuration

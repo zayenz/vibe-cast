@@ -138,6 +138,61 @@ function flattenMessageTree(tree: MessageTreeNode[]): MessageConfig[] {
   return out;
 }
 
+let lastAugmentedConfigKeySent = '';
+
+function ensureDefaultTextStylePresets(
+  basePresets: TextStylePreset[],
+  textStyleSettings: Record<string, Record<string, unknown>> | undefined
+): TextStylePreset[] {
+  const presets = [...basePresets];
+  const existingByStyleId = new Map<string, TextStylePreset[]>();
+  presets.forEach((p) => {
+    const arr = existingByStyleId.get(p.textStyleId) ?? [];
+    arr.push(p);
+    existingByStyleId.set(p.textStyleId, arr);
+  });
+
+  const defaultsByStyleId = getDefaultTextStyleSettings();
+
+  textStyleRegistry.forEach((style) => {
+    if ((existingByStyleId.get(style.id) ?? []).length > 0) return;
+    presets.push({
+      id: `default-${style.id}`,
+      name: style.name,
+      textStyleId: style.id,
+      settings: textStyleSettings?.[style.id] || defaultsByStyleId[style.id] || {},
+    });
+  });
+
+  return presets;
+}
+
+function findPresetById(presets: TextStylePreset[], id: string | undefined): TextStylePreset | undefined {
+  if (!id) return undefined;
+  return presets.find((p) => p.id === id);
+}
+
+function findDefaultPresetForStyle(presets: TextStylePreset[], styleId: string): TextStylePreset | undefined {
+  const stableId = `default-${styleId}`;
+  return presets.find((p) => p.id === stableId) ?? presets.find((p) => p.textStyleId === styleId);
+}
+
+function normalizeMessageTextStyle(msg: MessageConfig, presets: TextStylePreset[]): MessageConfig {
+  const styleId = msg.textStyle || 'scrolling-capitals';
+  const preset = findPresetById(presets, msg.textStylePreset);
+  if (preset) {
+    // If preset exists but style doesn't match, keep preset and align style to it (preset is what user selected).
+    if (msg.textStyle !== preset.textStyleId) {
+      return { ...msg, textStyle: preset.textStyleId };
+    }
+    return msg;
+  }
+
+  const fallback = findDefaultPresetForStyle(presets, styleId);
+  if (!fallback) return msg;
+  return { ...msg, textStyle: styleId, textStylePreset: fallback.id };
+}
+
 function parseDefaultConfig(): Partial<AppState> {
   const config = defaultConfig as AppConfiguration;
   
@@ -193,26 +248,11 @@ function parseDefaultConfig(): Partial<AppState> {
     });
   }
 
-  // Ensure one preset per registered text style exists (even if no textStyleSettings were present)
-  const existingTextStyleIds = new Set(textStylePresets.map(p => p.textStyleId));
-  console.log('[Store] Text style registry length:', textStyleRegistry.length);
-  console.log('[Store] Text style registry IDs:', textStyleRegistry.map(s => s.id));
-  console.log('[Store] Existing text style preset IDs:', Array.from(existingTextStyleIds));
-  if (Array.isArray(textStyleRegistry) && textStyleRegistry.length > 0) {
-    const defaultsByStyleId = getDefaultTextStyleSettings();
-    textStyleRegistry.forEach((style) => {
-      if (!existingTextStyleIds.has(style.id)) {
-        console.log('[Store] Creating preset for missing text style:', style.id, style.name);
-        textStylePresets.push({
-          id: generateId(),
-          // Default presets should read like the style name, not "Default"/"Preset"
-          name: style.name,
-          textStyleId: style.id,
-          settings: config.textStyleSettings?.[style.id] || defaultsByStyleId[style.id] || {},
-        });
-      }
-    });
-  }
+  // Ensure one default preset per registered text style exists (stable ids like default-credits)
+  const augmentedTextStylePresets = ensureDefaultTextStylePresets(
+    textStylePresets,
+    config.textStyleSettings ?? {}
+  );
   console.log('[Store] Final text style presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
   
   return {
@@ -226,7 +266,7 @@ function parseDefaultConfig(): Partial<AppState> {
     messageTree: config.messageTree ?? buildFlatMessageTree(config.messages ?? []),
     defaultTextStyle: config.defaultTextStyle ?? 'scrolling-capitals',
     textStyleSettings: config.textStyleSettings ?? {},
-    textStylePresets,
+    textStylePresets: augmentedTextStylePresets,
     messageStats: config.messageStats ?? {},
     mode: (config.activeVisualization ?? 'fireplace') === 'techno' ? 'techno' : 'fireplace',
   };
@@ -700,56 +740,28 @@ export const useStore = create<AppState>((set, get) => ({
     const messageTree = config.messageTree ?? buildFlatMessageTree(config.messages ?? []);
     let messages = config.messages ?? flattenMessageTree(messageTree);
     
-    // Ensure all registered text styles have presets
-    const textStylePresets = [...(config.textStylePresets ?? [])];
-    const existingTextStyleIds = new Set(textStylePresets.map(p => p.textStyleId));
-    console.log('[Store] Loaded text style presets:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
-    console.log('[Store] Checking for missing text styles from registry...');
+    // Ensure all registered text styles have stable default presets (id: default-<styleId>)
+    const originalPresets = config.textStylePresets ?? [];
+    const textStylePresets = ensureDefaultTextStylePresets(
+      originalPresets,
+      config.textStyleSettings ?? {}
+    );
+    const didAugmentPresets = textStylePresets.length !== originalPresets.length;
     
-    if (Array.isArray(textStyleRegistry) && textStyleRegistry.length > 0) {
-      const defaultsByStyleId = getDefaultTextStyleSettings();
-      textStyleRegistry.forEach((style) => {
-        if (!existingTextStyleIds.has(style.id)) {
-          console.log('[Store] Creating preset for missing text style:', style.id, style.name);
-          textStylePresets.push({
-            id: generateId(),
-            name: style.name,
-            textStyleId: style.id,
-            settings: config.textStyleSettings?.[style.id] || defaultsByStyleId[style.id] || {},
-          });
-        }
-      });
-    }
-    console.log('[Store] Final text style presets after augmentation:', textStylePresets.map(p => ({ id: p.id, name: p.name, styleId: p.textStyleId })));
-    
-    // Fix messages that have textStyle but no textStylePreset
-    console.log('[Store] Assigning presets to messages...');
-    messages = messages.map(msg => {
-      if (msg.textStyle && !msg.textStylePreset) {
-        const matchingPreset = textStylePresets.find(p => p.textStyleId === msg.textStyle);
-        if (matchingPreset) {
-          console.log(`[Store] Assigning preset "${matchingPreset.name}" to message ${msg.id}`);
-          return { ...msg, textStylePreset: matchingPreset.id };
-        }
-      }
-      return msg;
-    });
+    // Normalize messages: if preset missing/invalid, assign default-<textStyle>
+    const beforeKey = JSON.stringify(messages.map(m => ({ id: m.id, textStyle: m.textStyle, textStylePreset: m.textStylePreset })));
+    messages = messages.map((m) => normalizeMessageTextStyle(m, textStylePresets));
+    const afterKey = JSON.stringify(messages.map(m => ({ id: m.id, textStyle: m.textStyle, textStylePreset: m.textStylePreset })));
+    const didNormalizeMessages = beforeKey !== afterKey;
     
     // Also fix messages in the tree
     const fixMessageTree = (nodes: MessageTreeNode[]): MessageTreeNode[] => {
       return nodes.map(node => {
         if (node.type === 'message') {
-          const msg = node.message;
-          if (msg.textStyle && !msg.textStylePreset) {
-            const matchingPreset = textStylePresets.find(p => p.textStyleId === msg.textStyle);
-            if (matchingPreset) {
-              return {
-                ...node,
-                message: { ...msg, textStylePreset: matchingPreset.id }
-              };
-            }
-          }
-          return node;
+          return {
+            ...node,
+            message: normalizeMessageTextStyle(node.message, textStylePresets),
+          };
         } else {
           return {
             ...node,
@@ -775,6 +787,27 @@ export const useStore = create<AppState>((set, get) => ({
       messageStats: config.messageStats ?? {},
       mode,
     });
+
+    // Hybrid: if we had to augment presets / normalize messages, sync back once so SSE becomes canonical.
+    // This is idempotent because default preset ids are stable.
+    if (!sync && (didAugmentPresets || didNormalizeMessages)) {
+      const normalizedConfig: AppConfiguration = {
+        ...config,
+        textStylePresets,
+        messages,
+        messageTree: fixedMessageTree,
+      };
+      const key = JSON.stringify({
+        textStylePresets: textStylePresets.map(p => ({ id: p.id, textStyleId: p.textStyleId })),
+        messages: messages.map(m => ({ id: m.id, textStyle: m.textStyle, textStylePreset: m.textStylePreset })),
+      });
+      if (lastAugmentedConfigKeySent !== key) {
+        lastAugmentedConfigKeySent = key;
+        console.log('[Store] Syncing normalized config back to backend (idempotent)');
+        syncState('LOAD_CONFIGURATION', normalizedConfig);
+      }
+    }
+
     if (sync) {
       syncState('LOAD_CONFIGURATION', config);
     }
