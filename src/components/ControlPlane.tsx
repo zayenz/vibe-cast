@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
@@ -582,9 +582,15 @@ export const ControlPlane: React.FC = () => {
 
   const restartViz = async () => {
     try {
-      await invoke('restart_viz_window');
+      // Prefer soft remount (no window recreation / no reposition)
+      await emit('state-changed', { type: 'REMOUNT_VIZ', payload: { reason: 'manual' } });
     } catch (error) {
-      console.error('Error restarting viz window:', error);
+      console.error('Soft remount failed; falling back to window restart:', error);
+      try {
+        await invoke('restart_viz_window');
+      } catch (e2) {
+        console.error('Error restarting viz window:', e2);
+      }
     }
   };
 

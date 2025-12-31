@@ -81,6 +81,33 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
   const glowRef = useRef<HTMLDivElement>(null);
   const floorShadowRef = useRef<HTMLDivElement>(null);
   const flameRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Latest inputs in refs to avoid coupling animation to React render cadence
+  const audioRef = useRef<number[]>(audioData);
+  const settingsRef = useRef({
+    intensity,
+    dim,
+    flameHeight,
+    flameCount,
+  });
+  const lastAppliedRef = useRef({
+    glowScale: 0,
+    glowOpacity: 0,
+    floorOpacity: 0,
+    flameHeights: new Array<number>(20).fill(0),
+    flameOpacities: new Array<number>(20).fill(0),
+  });
+  const rafRef = useRef<number | null>(null);
+  const lastHeavyUpdateRef = useRef<number>(0);
+
+  useEffect(() => {
+    audioRef.current = audioData;
+  }, [audioData]);
+
+  useEffect(() => {
+    settingsRef.current = { intensity, dim, flameHeight, flameCount };
+  }, [intensity, dim, flameHeight, flameCount]);
 
   // Generate stable random values for flames (only regenerate when max count increases)
   const flameRandomValues = useMemo(() => {
@@ -103,36 +130,99 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
     }));
   }, []);
 
-  // Use RAF for smooth audio-reactive updates without triggering React re-renders
+  // RAF loop: decouple animation from React render frequency, reduce compositor churn, and add heartbeat.
   useEffect(() => {
-    const rawIntensity = audioData.slice(0, 15).reduce((a, b) => a + b, 0) / 15;
-    const smoothedIntensity = rawIntensity * intensity;
-    const flickerScale = 1 + smoothedIntensity * 1.5 * flameHeight;
-    
-    // Update glow via direct DOM manipulation
-    if (glowRef.current) {
-      glowRef.current.style.transform = `scale(${flickerScale})`;
-      glowRef.current.style.opacity = String((0.3 + smoothedIntensity * 0.4) * dim);
-    }
-    
-    // Update floor shadow
-    if (floorShadowRef.current) {
-      floorShadowRef.current.style.opacity = String((0.2 + smoothedIntensity * 0.5) * dim);
-    }
-    
-    // Update flames via direct DOM manipulation
-    flameRefs.current.forEach((flameEl, i) => {
-      if (flameEl && i < flameCount) {
-        const rv = flameRandomValues[i];
-        const height = (60 + smoothedIntensity * 40 + rv.heightOffset) * flameHeight;
-        flameEl.style.height = `${height}%`;
-        flameEl.style.opacity = String(0.6 + rv.opacityOffset);
+    let last = performance.now();
+    const tick = (now: number) => {
+      rafRef.current = requestAnimationFrame(tick);
+      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+      last = now;
+
+      // Heartbeat for watchdog (best-effort)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__vibecast_fireplace_lastTick = Date.now();
+      } catch {
+        // ignore
       }
-    });
-  }, [audioData, intensity, dim, flameHeight, flameCount, flameRandomValues]);
+
+      const s = settingsRef.current;
+      const data = audioRef.current;
+      const base = data && data.length > 0 ? data : [];
+      const n = Math.min(15, base.length);
+      let sum = 0;
+      for (let i = 0; i < n; i++) sum += base[i] || 0;
+      const rawIntensity = n > 0 ? sum / n : 0;
+
+      // Smooth intensity to avoid spikes that trigger expensive repaints
+      const target = rawIntensity * s.intensity;
+      // simple EMA
+      const prevScale = lastAppliedRef.current.glowScale || 1;
+      const prevIntensity = Math.max(0, (prevScale - 1) / (1.5 * Math.max(0.5, s.flameHeight)));
+      const alpha = 1 - Math.exp(-dt * 10); // ~100ms time constant
+      const smoothedIntensity = prevIntensity + (target - prevIntensity) * alpha;
+
+      const flickerScale = 1 + smoothedIntensity * 1.5 * s.flameHeight;
+      const glowOpacity = (0.3 + smoothedIntensity * 0.4) * s.dim;
+      const floorOpacity = (0.2 + smoothedIntensity * 0.5) * s.dim;
+
+      // Only update cheap properties frequently; heavy properties at ~30fps.
+      const heavyNow = now - lastHeavyUpdateRef.current >= 33;
+      if (heavyNow) lastHeavyUpdateRef.current = now;
+
+      const eps = 0.003;
+      const apply = lastAppliedRef.current;
+
+      if (glowRef.current) {
+        if (Math.abs(apply.glowScale - flickerScale) > eps) {
+          glowRef.current.style.transform = `scale(${flickerScale.toFixed(4)})`;
+          apply.glowScale = flickerScale;
+        }
+        if (Math.abs(apply.glowOpacity - glowOpacity) > eps) {
+          glowRef.current.style.opacity = String(Math.max(0, Math.min(1, glowOpacity)));
+          apply.glowOpacity = glowOpacity;
+        }
+      }
+
+      if (floorShadowRef.current && heavyNow) {
+        if (Math.abs(apply.floorOpacity - floorOpacity) > eps) {
+          floorShadowRef.current.style.opacity = String(Math.max(0, Math.min(1, floorOpacity)));
+          apply.floorOpacity = floorOpacity;
+        }
+      }
+
+      // Flames: update at ~30fps, thresholded
+      if (heavyNow) {
+        const maxFlames = Math.min(20, Math.max(0, Math.floor(s.flameCount)));
+        for (let i = 0; i < maxFlames; i++) {
+          const flameEl = flameRefs.current[i];
+          if (!flameEl) continue;
+          const rv = flameRandomValues[i];
+          const height = (60 + smoothedIntensity * 40 + rv.heightOffset) * s.flameHeight;
+          const opacity = 0.6 + rv.opacityOffset;
+
+          if (Math.abs(apply.flameHeights[i] - height) > 0.15) {
+            flameEl.style.setProperty('--vibecast-flame-height', `${height.toFixed(2)}%`);
+            apply.flameHeights[i] = height;
+          }
+          if (Math.abs(apply.flameOpacities[i] - opacity) > eps) {
+            flameEl.style.opacity = String(opacity);
+            apply.flameOpacities[i] = opacity;
+          }
+        }
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [flameRandomValues]);
 
   return (
     <div 
+      ref={containerRef}
       className="relative w-full h-full bg-black overflow-hidden flex items-center justify-center"
       style={{ opacity: dim }}
     >
@@ -145,7 +235,7 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
       {/* Dynamic Floor Shadow - using ref for direct updates */}
       <div 
         ref={floorShadowRef}
-        className="absolute bottom-0 w-full h-1/3 blur-3xl transition-opacity duration-150" 
+        className="absolute bottom-0 w-full h-1/3 blur-3xl" 
         style={{ background: `linear-gradient(to top, ${glowColor}4d, transparent)` }}
       />
       
@@ -153,7 +243,7 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
         {/* Core fire glow - using ref for direct updates */}
         <div 
           ref={glowRef}
-          className="absolute inset-0 rounded-full blur-[120px] mix-blend-screen transition-transform duration-150" 
+          className="absolute inset-0 rounded-full blur-[120px] mix-blend-screen" 
           style={{ backgroundColor: glowColor, willChange: 'transform, opacity' }}
         />
         
@@ -168,7 +258,7 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
                 style={{ 
                   transform: `translateX(${flameRandomValues[i].xOffset}px)`,
                   willChange: 'height, opacity',
-                  transition: 'height 0.1s ease-out',
+                  height: 'var(--vibecast-flame-height, 60%)',
                 }}
               />
             ))}

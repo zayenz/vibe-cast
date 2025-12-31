@@ -561,17 +561,31 @@ fn load_message_text_file(
 #[tauri::command]
 fn restart_viz_window(handle: tauri::AppHandle) -> Result<(), String> {
     // Close existing viz window (if any)
+    let mut prev_pos: Option<tauri::PhysicalPosition<i32>> = None;
+    let mut prev_size: Option<tauri::PhysicalSize<u32>> = None;
     if let Some(w) = handle.get_webview_window("viz") {
+        prev_pos = w.outer_position().ok();
+        prev_size = w.inner_size().ok();
         let _ = w.close();
     }
 
     // Recreate it pointing at the app index route. The App component will route by window label.
-    tauri::WebviewWindowBuilder::new(&handle, "viz", tauri::WebviewUrl::App("index.html".into()))
+    let mut builder = tauri::WebviewWindowBuilder::new(&handle, "viz", tauri::WebviewUrl::App("index.html".into()))
         .title("VibeCast")
-        .inner_size(1280.0, 720.0)
         .resizable(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+        ;
+
+    if let Some(size) = prev_size {
+        builder = builder.inner_size(size.width as f64, size.height as f64);
+    } else {
+        builder = builder.inner_size(1280.0, 720.0);
+    }
+
+    if let Some(pos) = prev_pos {
+        builder = builder.position(pos.x as f64, pos.y as f64);
+    }
+
+    builder.build().map_err(|e| e.to_string())?;
 
     Ok(())
 }

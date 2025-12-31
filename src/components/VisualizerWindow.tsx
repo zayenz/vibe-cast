@@ -232,22 +232,23 @@ const VisualizationRenderer: React.FC<{
   commonSettings: CommonVisualizationSettings;
   visualizationSettings: Record<string, Record<string, unknown>>;
   presetSettings?: Record<string, unknown>;
-}> = ({ visualizationId, audioData, commonSettings, visualizationSettings, presetSettings }) => {
+  debug?: boolean;
+}> = ({ visualizationId, audioData, commonSettings, visualizationSettings, presetSettings, debug = false }) => {
   const plugin = getVisualization(visualizationId);
   
-  // Debug logging - log once when key settings change
+  // Debug logging (opt-in): avoid heavy JSON/logging in the hot path for long-running stability.
   const lastLoggedRef = useRef<string>('');
-  const logKey = JSON.stringify({ visualizationId, presetSettings, storedKeys: Object.keys(visualizationSettings) });
-  if (logKey !== lastLoggedRef.current) {
-    lastLoggedRef.current = logKey;
-    console.log('[VisualizationRenderer] Settings update:', {
-      visualizationId,
-      pluginFound: !!plugin,
-      presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
-      presetSettingsValues: presetSettings,
-      storedSettingsKeys: Object.keys(visualizationSettings),
-      storedForThisViz: visualizationSettings[visualizationId],
-    });
+  if (debug && import.meta.env.DEV) {
+    const logKey = `${visualizationId}|${presetSettings ? Object.keys(presetSettings).join(',') : 'none'}|${Object.keys(visualizationSettings).join(',')}`;
+    if (logKey !== lastLoggedRef.current) {
+      lastLoggedRef.current = logKey;
+      console.log('[VisualizationRenderer] Settings update:', {
+        visualizationId,
+        pluginFound: !!plugin,
+        presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
+        storedSettingsKeys: Object.keys(visualizationSettings),
+      });
+    }
   }
   
   if (!plugin) {
@@ -280,13 +281,11 @@ const VisualizationRenderer: React.FC<{
   // Order: defaults -> stored -> active preset (preset wins over stored)
   const customSettings = { ...defaultSettings, ...storedSettings, ...(presetSettings || {}) };
   
-  // Debug log the final merged settings
-  if (logKey !== lastLoggedRef.current || !lastLoggedRef.current) {
-    console.log('[VisualizationRenderer] Final customSettings:', {
+  // Debug log the final merged settings (opt-in)
+  if (debug && import.meta.env.DEV) {
+    console.log('[VisualizationRenderer] Final customSettings keys:', {
       visualizationId,
-      folderPath: customSettings.folderPath,
-      videoUrl: customSettings.videoUrl,
-      allKeys: Object.keys(customSettings),
+      keys: Object.keys(customSettings),
     });
   }
 
@@ -409,8 +408,11 @@ export const VisualizerWindow: React.FC = () => {
 
   // Determine which visualization and settings to use based on preset
   const targetVizId = activePreset ? activePreset.visualizationId : activeVisualization;
-  
-  console.log('[VisualizerWindow] Target visualization:', targetVizId, 'from preset:', activePreset?.name ?? 'none');
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    // Only log on changes (avoid per-frame spam; audio updates cause frequent renders)
+    console.log('[VisualizerWindow] Target visualization:', targetVizId, 'from preset:', activePreset?.name ?? 'none');
+  }, [targetVizId, activePreset?.name]);
 
   // Health watchdog: detect long-running stalls and attempt a safe remount.
   const [vizRemountKey, setVizRemountKey] = useState(0);
@@ -579,6 +581,10 @@ export const VisualizerWindow: React.FC = () => {
         case 'LOAD_CONFIGURATION':
           loadConfiguration(payload, false);
           break;
+        case 'REMOUNT_VIZ':
+          setRecoveryCount((c) => c + 1);
+          setVizRemountKey((k) => k + 1);
+          break;
         case 'CLEAR_MESSAGE':
           // Clear message by timestamp (handled locally, no sync needed)
           // Payload can be { timestamp, messageId } or just timestamp (legacy)
@@ -639,15 +645,15 @@ export const VisualizerWindow: React.FC = () => {
     ? { [targetVizId]: activePreset.settings }
     : visualizationSettings;
   
-  // Debug: Log the settings being computed
-  console.log('[VisualizerWindow] vizSettings computed:', {
-    hasActivePreset: !!activePreset,
-    targetVizId,
-    vizSettingsKeys: Object.keys(vizSettings),
-    presetSettingsForRenderer: activePreset && activePreset.visualizationId === targetVizId
-      ? { hasSettings: true, folderPath: activePreset.settings?.folderPath, videoUrl: activePreset.settings?.videoUrl }
-      : 'undefined (no preset or vizId mismatch)',
-  });
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    // Avoid per-frame logging
+    console.log('[VisualizerWindow] vizSettings computed:', {
+      hasActivePreset: !!activePreset,
+      targetVizId,
+      vizSettingsKeys: Object.keys(vizSettings),
+    });
+  }, [targetVizId, activePreset, vizSettings]);
 
   useEffect(() => {
     // Only run in dev; we don't want surprise remounts in production without explicit opt-in.
@@ -672,6 +678,29 @@ export const VisualizerWindow: React.FC = () => {
         setVizRemountKey((k) => k + 1);
       }
     }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [targetVizId]);
+
+  // Fireplace-specific watchdog (dev + prod): if the fireplace heartbeat stops while visible, remount the viz.
+  useEffect(() => {
+    if (targetVizId !== 'fireplace') return;
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      let lastTick = 0;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        lastTick = Number((window as any).__vibecast_fireplace_lastTick || 0);
+      } catch {
+        lastTick = 0;
+      }
+      if (!lastTick) return;
+      const msSince = Date.now() - lastTick;
+      if (msSince > 20_000) {
+        console.warn('[VisualizerWindow] Fireplace heartbeat stalled; remounting visualization', { msSince });
+        setRecoveryCount((c) => c + 1);
+        setVizRemountKey((k) => k + 1);
+      }
+    }, 5_000);
     return () => window.clearInterval(interval);
   }, [targetVizId]);
 
@@ -748,6 +777,7 @@ export const VisualizerWindow: React.FC = () => {
           audioData={audioData}
           commonSettings={commonSettings}
           visualizationSettings={vizSettings}
+          debug={import.meta.env.DEV && showDevOverlay}
           presetSettings={
             activePreset && activePreset.visualizationId === targetVizId
               ? activePreset.settings
