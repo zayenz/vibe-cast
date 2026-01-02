@@ -1,6 +1,13 @@
-# Visualizer
+# Vibe Cast
 
-A high-performance, multi-window macOS application built with **Tauri v2** and **React**. Designed for immersive visualizations on secondary displays (like Apple TV via AirPlay) with remote control capabilities from an iPhone.
+A fully vibe-coded application
+built with **Tauri v2** and **React**. Designed for  visualizations on secondary displays (like Apple TV via AirPlay) with remote control capabilities from an iPhone.
+
+> [!WARNING] 
+> This application has only been vibe-coded and developed 
+> for a single use-case, it is not meant for general usage 
+> nor has it been tested or audited. It has a lot of bugs, no 
+> documentation and several known crashes.
 
 ## 🚀 Features
 
