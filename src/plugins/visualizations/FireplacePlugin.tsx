@@ -135,81 +135,101 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
     let last = performance.now();
     const tick = (now: number) => {
       rafRef.current = requestAnimationFrame(tick);
-      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
-      last = now;
-
-      // Heartbeat for watchdog (best-effort)
+      
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (window as any).__vibecast_fireplace_lastTick = Date.now();
-      } catch {
-        // ignore
-      }
+        const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+        last = now;
 
-      const s = settingsRef.current;
-      const data = audioRef.current;
-      const base = data && data.length > 0 ? data : [];
-      const n = Math.min(15, base.length);
-      let sum = 0;
-      for (let i = 0; i < n; i++) sum += base[i] || 0;
-      const rawIntensity = n > 0 ? sum / n : 0;
-
-      // Smooth intensity to avoid spikes that trigger expensive repaints
-      const target = rawIntensity * s.intensity;
-      // simple EMA
-      const prevScale = lastAppliedRef.current.glowScale || 1;
-      const prevIntensity = Math.max(0, (prevScale - 1) / (1.5 * Math.max(0.5, s.flameHeight)));
-      const alpha = 1 - Math.exp(-dt * 10); // ~100ms time constant
-      const smoothedIntensity = prevIntensity + (target - prevIntensity) * alpha;
-
-      const flickerScale = 1 + smoothedIntensity * 1.5 * s.flameHeight;
-      const glowOpacity = (0.3 + smoothedIntensity * 0.4) * s.dim;
-      const floorOpacity = (0.2 + smoothedIntensity * 0.5) * s.dim;
-
-      // Only update cheap properties frequently; heavy properties at ~30fps.
-      const heavyNow = now - lastHeavyUpdateRef.current >= 33;
-      if (heavyNow) lastHeavyUpdateRef.current = now;
-
-      const eps = 0.003;
-      const apply = lastAppliedRef.current;
-
-      if (glowRef.current) {
-        if (Math.abs(apply.glowScale - flickerScale) > eps) {
-          glowRef.current.style.transform = `scale(${flickerScale.toFixed(4)})`;
-          apply.glowScale = flickerScale;
+        // Heartbeat for watchdog (best-effort)
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).__vibecast_fireplace_lastTick = Date.now();
+        } catch {
+          // ignore
         }
-        if (Math.abs(apply.glowOpacity - glowOpacity) > eps) {
-          glowRef.current.style.opacity = String(Math.max(0, Math.min(1, glowOpacity)));
-          apply.glowOpacity = glowOpacity;
-        }
-      }
 
-      if (floorShadowRef.current && heavyNow) {
-        if (Math.abs(apply.floorOpacity - floorOpacity) > eps) {
-          floorShadowRef.current.style.opacity = String(Math.max(0, Math.min(1, floorOpacity)));
-          apply.floorOpacity = floorOpacity;
-        }
-      }
+        const s = settingsRef.current;
+        const data = audioRef.current;
+        const base = data && data.length > 0 ? data : [];
+        const n = Math.min(15, base.length);
+        let sum = 0;
+        for (let i = 0; i < n; i++) sum += base[i] || 0;
+        const rawIntensity = n > 0 ? sum / n : 0;
 
-      // Flames: update at ~30fps, thresholded
-      if (heavyNow) {
-        const maxFlames = Math.min(20, Math.max(0, Math.floor(s.flameCount)));
-        for (let i = 0; i < maxFlames; i++) {
-          const flameEl = flameRefs.current[i];
-          if (!flameEl) continue;
-          const rv = flameRandomValues[i];
-          const height = (60 + smoothedIntensity * 40 + rv.heightOffset) * s.flameHeight;
-          const opacity = 0.6 + rv.opacityOffset;
+        // Smooth intensity to avoid spikes that trigger expensive repaints
+        const target = rawIntensity * s.intensity;
+        // simple EMA
+        const prevScale = lastAppliedRef.current.glowScale || 1;
+        const prevIntensity = Math.max(0, (prevScale - 1) / (1.5 * Math.max(0.5, s.flameHeight)));
+        const alpha = 1 - Math.exp(-dt * 10); // ~100ms time constant
+        const smoothedIntensity = prevIntensity + (target - prevIntensity) * alpha;
 
-          if (Math.abs(apply.flameHeights[i] - height) > 0.15) {
-            flameEl.style.setProperty('--vibecast-flame-height', `${height.toFixed(2)}%`);
-            apply.flameHeights[i] = height;
+        const flickerScale = 1 + smoothedIntensity * 1.5 * s.flameHeight;
+        const glowOpacity = (0.3 + smoothedIntensity * 0.4) * s.dim;
+        const floorOpacity = (0.2 + smoothedIntensity * 0.5) * s.dim;
+
+        // Only update cheap properties frequently; heavy properties at ~30fps.
+        const heavyNow = now - lastHeavyUpdateRef.current >= 33;
+        if (heavyNow) lastHeavyUpdateRef.current = now;
+
+        const eps = 0.003;
+        const apply = lastAppliedRef.current;
+
+        // Safe DOM updates with error handling
+        try {
+          if (glowRef.current) {
+            if (Math.abs(apply.glowScale - flickerScale) > eps) {
+              glowRef.current.style.transform = `scale(${flickerScale.toFixed(4)})`;
+              apply.glowScale = flickerScale;
+            }
+            if (Math.abs(apply.glowOpacity - glowOpacity) > eps) {
+              glowRef.current.style.opacity = String(Math.max(0, Math.min(1, glowOpacity)));
+              apply.glowOpacity = glowOpacity;
+            }
           }
-          if (Math.abs(apply.flameOpacities[i] - opacity) > eps) {
-            flameEl.style.opacity = String(opacity);
-            apply.flameOpacities[i] = opacity;
+        } catch (err) {
+          console.warn('[Fireplace] Error updating glow:', err);
+        }
+
+        try {
+          if (floorShadowRef.current && heavyNow) {
+            if (Math.abs(apply.floorOpacity - floorOpacity) > eps) {
+              floorShadowRef.current.style.opacity = String(Math.max(0, Math.min(1, floorOpacity)));
+              apply.floorOpacity = floorOpacity;
+            }
+          }
+        } catch (err) {
+          console.warn('[Fireplace] Error updating floor shadow:', err);
+        }
+
+        // Flames: update at ~30fps, thresholded
+        if (heavyNow) {
+          try {
+            const maxFlames = Math.min(20, Math.max(0, Math.floor(s.flameCount)));
+            for (let i = 0; i < maxFlames; i++) {
+              const flameEl = flameRefs.current[i];
+              if (!flameEl) continue;
+              const rv = flameRandomValues[i];
+              const height = (60 + smoothedIntensity * 40 + rv.heightOffset) * s.flameHeight;
+              const opacity = 0.6 + rv.opacityOffset;
+
+              if (Math.abs(apply.flameHeights[i] - height) > 0.15) {
+                flameEl.style.setProperty('--vibecast-flame-height', `${height.toFixed(2)}%`);
+                apply.flameHeights[i] = height;
+              }
+              if (Math.abs(apply.flameOpacities[i] - opacity) > eps) {
+                flameEl.style.opacity = String(opacity);
+                apply.flameOpacities[i] = opacity;
+              }
+            }
+          } catch (err) {
+            console.warn('[Fireplace] Error updating flames:', err);
           }
         }
+      } catch (err) {
+        // Catch any unexpected errors in the animation loop to prevent crashes
+        console.error('[Fireplace] Error in animation tick:', err);
+        // Continue the loop - don't let one error stop the animation
       }
     };
 
@@ -295,19 +315,56 @@ interface EmberProps {
   config: EmberConfig;
 }
 
+// Shared registry to track and reuse keyframes across ember instances
+// This prevents DOM bloat from accumulating thousands of style elements
+const keyframeRegistry = new Map<string, { count: number; styleId: string }>();
+const MAX_KEYFRAMES = 50; // Limit total keyframes in DOM
+
 /**
  * Ember component using pure CSS animations for better performance
  * No framer-motion overhead - just CSS keyframes
+ * 
+ * Memory leak fix: Cleanup CSS keyframes on unmount and reuse existing keyframes
+ * when possible to prevent DOM bloat during long-running sessions.
  */
 const Ember: React.FC<EmberProps> = ({ config }) => {
-  // Generate unique animation keyframes for this ember
-  const keyframeName = useMemo(() => `ember-float-${Math.random().toString(36).substr(2, 9)}`, []);
+  // Generate a stable keyframe name based on config to enable reuse
+  const configHash = `${config.initialX.toFixed(1)}-${config.animateX.toFixed(1)}-${config.duration.toFixed(1)}`;
+  const keyframeName = useMemo(() => {
+    // Check if we can reuse an existing keyframe with the same config
+    for (const [name, data] of keyframeRegistry.entries()) {
+      if (name.includes(configHash)) {
+        data.count++;
+        return name;
+      }
+    }
+    
+    // Create new keyframe name
+    const newName = `ember-float-${configHash}-${Math.random().toString(36).substr(2, 9)}`;
+    keyframeRegistry.set(newName, { count: 1, styleId: `style-${newName}` });
+    return newName;
+  }, [configHash]);
+  
+  const styleId = `style-${keyframeName}`;
   
   // Create the keyframe animation dynamically
   const animationStyle = useMemo(() => {
     // Inject keyframe if not already present
-    const styleId = `style-${keyframeName}`;
     if (typeof document !== 'undefined' && !document.getElementById(styleId)) {
+      // Cleanup old keyframes if we're approaching the limit
+      if (keyframeRegistry.size >= MAX_KEYFRAMES) {
+        // Remove the oldest keyframe (first in map)
+        const firstEntry = keyframeRegistry.entries().next().value;
+        if (firstEntry) {
+          const [oldName, oldData] = firstEntry;
+          const oldStyleEl = document.getElementById(oldData.styleId);
+          if (oldStyleEl) {
+            oldStyleEl.remove();
+          }
+          keyframeRegistry.delete(oldName);
+        }
+      }
+      
       const style = document.createElement('style');
       style.id = styleId;
       style.textContent = `
@@ -336,7 +393,25 @@ const Ember: React.FC<EmberProps> = ({ config }) => {
     return {
       animation: `${keyframeName} ${config.duration}s linear ${config.delay}s infinite`,
     };
-  }, [keyframeName, config]);
+  }, [keyframeName, config, styleId]);
+
+  // Cleanup: remove keyframe when component unmounts (if no other embers are using it)
+  useEffect(() => {
+    return () => {
+      const registryEntry = keyframeRegistry.get(keyframeName);
+      if (registryEntry) {
+        registryEntry.count--;
+        // Only remove if no other embers are using this keyframe
+        if (registryEntry.count <= 0) {
+          const styleEl = document.getElementById(styleId);
+          if (styleEl) {
+            styleEl.remove();
+          }
+          keyframeRegistry.delete(keyframeName);
+        }
+      }
+    };
+  }, [keyframeName, styleId]);
 
   return (
     <div

@@ -342,61 +342,83 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     
     const isVideo = isVideoFile(path);
     
-    // Start loading
+    // Start loading with timeout to prevent promise accumulation
     const promise = (async (): Promise<string | null> => {
+      const timeoutMs = 30000; // 30 second timeout
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      
       try {
         const mediaUrl = getMediaUrl(path);
         console.log(`[Photo Slideshow] Fetching ${isVideo ? 'video' : 'image'}:`, path.split('/').pop());
         
-        // Fetch media as blob
-        const response = await fetch(mediaUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
+        // Set up timeout that will reject the promise if it takes too long
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`Preload timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        });
         
-        if (isVideo) {
-          // For videos, preload enough data to start playing
-          const video = document.createElement('video');
-          video.preload = 'auto';
-          video.src = blobUrl;
+        // Fetch media as blob
+        const fetchPromise = (async () => {
+          const response = await fetch(mediaUrl);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const blob = await response.blob();
+          const blobUrl = URL.createObjectURL(blob);
           
-          // Wait for video to be ready to play
-          await new Promise<void>((resolve, reject) => {
-            video.oncanplaythrough = () => resolve();
-            video.onerror = () => reject(new Error('Video load failed'));
-            // Timeout after 10 seconds
-            setTimeout(() => resolve(), 10000);
-          });
+          if (isVideo) {
+            // For videos, preload enough data to start playing
+            const video = document.createElement('video');
+            video.preload = 'auto';
+            video.src = blobUrl;
+            
+            // Wait for video to be ready to play
+            await new Promise<void>((resolve, reject) => {
+              video.oncanplaythrough = () => resolve();
+              video.onerror = () => reject(new Error('Video load failed'));
+              // Timeout after 10 seconds
+              setTimeout(() => resolve(), 10000);
+            });
+            
+            console.log('[Photo Slideshow] Video ready:', path.split('/').pop());
+          } else {
+            // For images, ensure complete load and decode
+            const img = new Image();
+            img.src = blobUrl;
+            
+            // Wait for complete load AND decode
+            await new Promise<void>((resolve, reject) => {
+              img.onload = async () => {
+                try {
+                  // Ensure decode is complete
+                  await img.decode();
+                  
+                  // Detect orientation for mosaic mode
+                  const isPortrait = img.naturalHeight > img.naturalWidth;
+                  setImageOrientations(prev => new Map(prev).set(path, isPortrait));
+                  
+                  console.log(`[Photo Slideshow] Image ready (${img.naturalWidth}x${img.naturalHeight}, ${isPortrait ? 'portrait' : 'landscape'}):`, path.split('/').pop());
+                  resolve();
+                } catch (err) {
+                  reject(err);
+                }
+              };
+              img.onerror = () => reject(new Error('Image load failed'));
+              // Timeout after 10 seconds
+              setTimeout(() => resolve(), 10000);
+            });
+          }
           
-          console.log('[Photo Slideshow] Video ready:', path.split('/').pop());
-        } else {
-          // For images, ensure complete load and decode
-          const img = new Image();
-          img.src = blobUrl;
-          
-          // Wait for complete load AND decode
-          await new Promise<void>((resolve, reject) => {
-            img.onload = async () => {
-              try {
-                // Ensure decode is complete
-                await img.decode();
-                
-                // Detect orientation for mosaic mode
-                const isPortrait = img.naturalHeight > img.naturalWidth;
-                setImageOrientations(prev => new Map(prev).set(path, isPortrait));
-                
-                console.log(`[Photo Slideshow] Image ready (${img.naturalWidth}x${img.naturalHeight}, ${isPortrait ? 'portrait' : 'landscape'}):`, path.split('/').pop());
-                resolve();
-              } catch (err) {
-                reject(err);
-              }
-            };
-            img.onerror = () => reject(new Error('Image load failed'));
-            // Timeout after 10 seconds
-            setTimeout(() => resolve(), 10000);
-          });
+          return blobUrl;
+        })();
+        
+        // Race between fetch and timeout
+        const blobUrl = await Promise.race([fetchPromise, timeoutPromise]);
+        
+        // Clear timeout if we succeeded
+        if (timeoutId) {
+          clearTimeout(timeoutId);
         }
         
         // Only mark as ready after everything is complete
@@ -405,6 +427,10 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
         loadingPromises.current.delete(path);
         return blobUrl;
       } catch (err) {
+        // Clear timeout on error
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         console.error('[Photo Slideshow] Failed to preload:', path, err);
         loadingPromises.current.delete(path);
         return null;
@@ -415,14 +441,17 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     return promise;
   }, []);
   
-  // Cleanup blob URLs on unmount to prevent memory leaks
+  // Cleanup blob URLs and loading promises on unmount to prevent memory leaks
   useEffect(() => {
     return () => {
-      console.log('[Photo Slideshow] Cleaning up blob URLs');
+      console.log('[Photo Slideshow] Cleaning up blob URLs and loading promises');
+      // Clean up all blob URLs
       blobUrls.current.forEach((url) => {
         URL.revokeObjectURL(url);
       });
       blobUrls.current.clear();
+      // Clear loading promises map (promises will continue but won't be tracked)
+      loadingPromises.current.clear();
     };
   }, []);
   
@@ -631,6 +660,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   useEffect(() => {
     if (images.length === 0 || isTransitioning) return;
     
+    // Clear any existing timer first to prevent multiple timers from running
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    
     const currentPath = images[currentIndex];
     // Start timer if we have a blob URL (image can be displayed, even if not fully decoded)
     if (!blobUrls.current.has(currentPath)) {
@@ -666,6 +701,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       }
       
       return () => {
+        // Clear timer if it was set (shouldn't be, but defensive)
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        // Remove event listener
         if (currentVideoRef.current) {
           currentVideoRef.current.removeEventListener('ended', handleVideoEnded);
         }
@@ -673,12 +714,14 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
     } else {
       // For images, use the display duration timer
       timerRef.current = window.setTimeout(() => {
+        timerRef.current = null; // Clear ref when timer fires
         advanceToNext();
       }, displayDuration * 1000);
       
       return () => {
         if (timerRef.current) {
           clearTimeout(timerRef.current);
+          timerRef.current = null;
         }
       };
     }
@@ -686,6 +729,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   
   const advanceToNext = async () => {
     if (images.length === 0) return;
+    
+    // Clear any existing timer to prevent multiple advances
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     
     // Check if we just showed a mosaic (two portraits side by side)
     const currentIsPortrait = currentImage ? imageOrientations.get(currentImage) : false;
