@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { ControlPlane } from "./components/ControlPlane";
-import { VisualizerWindow } from "./components/VisualizerWindow";
-import { RemoteControl } from "./components/RemoteControl";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { commandAction } from "./router";
 import "./App.css";
+
+// Lazy load components to ensure Tauri-specific code is only loaded when needed.
+const ControlPlane = lazy(() => import("./components/ControlPlane").then(module => ({ default: module.ControlPlane })));
+const VisualizerWindow = lazy(() => import("./components/VisualizerWindow").then(module => ({ default: module.VisualizerWindow })));
+const RemoteControl = lazy(() => import("./components/RemoteControl").then(module => ({ default: module.RemoteControl })));
 
 /**
  * Create router with the appropriate component based on context.
@@ -29,83 +30,68 @@ function createAppRouter(component: React.ReactNode) {
 }
 
 function App() {
-  const [windowLabel, setWindowLabel] = useState<string | null>(null);
-  const [isRemote, setIsRemote] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [view, setView] = useState<"loading" | "viz" | "control" | "remote">("loading");
 
   useEffect(() => {
-    // Check if we are running in a mobile browser (Remote Control)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isTauri = !!(window as any).__TAURI_INTERNALS__;
-    
+
     if (!isTauri) {
-      setIsRemote(true);
-      setIsLoading(false);
+      setView("remote");
       return;
     }
 
-    // Otherwise check Tauri window label
-    const checkLabel = async () => {
-      try {
-        const label = await getCurrentWebviewWindow().label;
-        setWindowLabel(label);
-      } catch (e) {
-        console.error('Failed to get window label:', e);
-        // If this fails, we might be in the browser but tauri is injected
-        setIsRemote(true);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    // Add timeout to prevent infinite loading
-    const timeout = setTimeout(() => {
-      console.warn('Window label check timed out, defaulting to Control Plane');
-      setIsLoading(false);
-    }, 2000);
-    
-    checkLabel();
-    
-    return () => clearTimeout(timeout);
+    // If in Tauri, dynamically import the webviewWindow API to get the window label.
+    // This prevents the browser from ever trying to import Tauri APIs.
+    import("@tauri-apps/api/webviewWindow")
+      .then((webview) => {
+        const label = webview.getCurrentWebviewWindow().label;
+        if (label === "viz") {
+          setView("viz");
+        } else {
+          // Default to control plane for any other label (e.g., "main")
+          setView("control");
+        }
+      })
+      .catch((e) => {
+        console.error("Failed to determine Tauri window type, falling back to remote.", e);
+        setView("remote");
+      });
   }, []); // Empty dependency array - only run once on mount
 
-  // Show loading screen while detecting context
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-zinc-500 text-sm">Loading...</span>
-        </div>
+  const LoadingScreen = (
+    <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+        <span className="text-zinc-500 text-sm">Loading...</span>
       </div>
-    );
+    </div>
+  );
+
+  // Render based on the determined view
+  if (view === "loading") {
+    return LoadingScreen;
   }
 
-  // Visualizer window doesn't use the router - it stays on Tauri events for performance
-  if (windowLabel === "viz") {
+  // Visualizer window doesn't use the router for performance.
+  if (view === "viz") {
     return (
       <ErrorBoundary>
-        <VisualizerWindow />
+        <Suspense fallback={LoadingScreen}>
+          <VisualizerWindow />
+        </Suspense>
       </ErrorBoundary>
     );
   }
 
-  // Remote Control in browser - uses router for useFetcher
-  if (isRemote) {
-    const router = createAppRouter(
-      <ErrorBoundary>
-        <RemoteControl />
-      </ErrorBoundary>
-    );
-    return <RouterProvider router={router} />;
-  }
-
-  // Control Plane in Tauri - uses router for useFetcher
+  // Both Control Plane and Remote Control use the router.
   const router = createAppRouter(
     <ErrorBoundary>
-      <ControlPlane />
+      <Suspense fallback={LoadingScreen}>
+        {view === "control" ? <ControlPlane /> : <RemoteControl />}
+      </Suspense>
     </ErrorBoundary>
   );
+
   return <RouterProvider router={router} />;
 }
 

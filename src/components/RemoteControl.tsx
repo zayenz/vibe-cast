@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useFetcher } from 'react-router-dom';
 import { Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
-import { getVisualization } from '../plugins/visualizations';
 import { CommonSettings } from './settings/SettingsRenderer';
 import { MessageConfig, VisualizationPreset, MessageTreeNode } from '../plugins/types';
 import { getIcon } from '../utils/iconSet';
@@ -295,7 +294,6 @@ export const RemoteControl: React.FC = () => {
         <div className="grid gap-4 grid-cols-2">
           {visualizationPresets.length > 0 ? (
             visualizationPresets.map((preset) => {
-              const viz = getVisualization(preset.visualizationId);
               const active = activeVisualizationPreset === preset.id;
               return (
                 <RemoteVizCard 
@@ -303,7 +301,7 @@ export const RemoteControl: React.FC = () => {
                   active={active}
                   onClick={() => handleSetActivePreset(preset.id)}
                   icon={
-                    getIcon(preset?.icon || viz?.icon, 28) || <Settings2 size={28} />
+                    getIcon(preset?.icon, 28) || <Settings2 size={28} />
                   }
                   label={preset.name}
                   disabled={isPending}

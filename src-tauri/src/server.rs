@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     response::{
         sse::{Event, KeepAlive, Sse},
-        Html,
+        Html, IntoResponse,
     },
     routing::{get, post},
     Json, Router,
@@ -147,6 +147,7 @@ fn collect_messages_from_folder(folder_id: &str, tree: &serde_json::Value) -> Ve
 struct AppState {
     app_handle: AppHandle,
     app_state_sync: Arc<AppStateSync>,
+    dist_path: std::path::PathBuf,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -156,13 +157,6 @@ struct RemoteCommand {
 }
 
 pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSync>, port: u16) {
-    let state = AppState { 
-        app_handle: app_handle.clone(),
-        app_state_sync,
-    };
-    let app_state_sync = state.app_state_sync.clone();
-
-    // Get the path to the frontend assets
     let dist_path = if cfg!(debug_assertions) {
         let mut path = std::env::current_dir().unwrap();
         if path.ends_with("src-tauri") {
@@ -170,20 +164,36 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         }
         path.join("dist")
     } else {
-        let resource_path = app_handle.path().resource_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        resource_path.join("dist")
+        app_handle
+            .path()
+            .resolve("dist", tauri::path::BaseDirectory::Resource)
+            .expect("failed to resolve remote UI resources")
     };
+
+    let state = AppState { 
+        app_handle: app_handle.clone(),
+        app_state_sync: app_state_sync.clone(),
+        dist_path: dist_path.clone(),
+    };
+    let app_state_sync = state.app_state_sync.clone();
+
+    // Log the dist path for debugging
+    eprintln!("[Server] Serving static files from: {:?}", dist_path);
+    eprintln!("[Server] Path exists: {}", dist_path.exists());
+    if dist_path.exists() {
+        if let Ok(entries) = std::fs::read_dir(&dist_path) {
+            let count = entries.count();
+            eprintln!("[Server] Directory contains {} entries", count);
+        }
+    }
 
     let app = Router::new()
         .route("/api/command", post(handle_command))
         .route("/api/state", get(get_state))
         .route("/api/status", get(get_status))
         .route("/api/events", get(state_events))
-        .fallback_service(
-            ServeDir::new(dist_path)
-                .append_index_html_on_directories(true)
-                .fallback(get(handle_index))
-        )
+        .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
+        .fallback(get(serve_spa))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -217,8 +227,28 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     }
 }
 
-async fn handle_index() -> Html<&'static str> {
-    Html("<html><body><h1>VibeCast Remote</h1><p>If you see this, the static files are not yet built. Run <code>npm run build</code>.</p></body></html>")
+async fn serve_spa(State(state): State<AppState>) -> impl IntoResponse {
+    let index_path = state.dist_path.join("index.html");
+
+    eprintln!("[serve_spa] Attempting to read index.html from: {:?}", index_path);
+    eprintln!("[serve_spa] Path exists: {}", index_path.exists());
+    eprintln!("[serve_spa] Dist path: {:?}", state.dist_path);
+    
+    match tokio::fs::read_to_string(&index_path).await {
+        Ok(content) => {
+            eprintln!("[serve_spa] Successfully read index.html ({} bytes)", content.len());
+            Html(content)
+        },
+        Err(e) => {
+            eprintln!("[serve_spa] ERROR reading index.html: {}", e);
+            eprintln!("[serve_spa] Path: {:?}", index_path);
+            eprintln!("[serve_spa] Dist path exists: {}", state.dist_path.exists());
+            Html(format!(
+                "<html><body><h1>VibeCast</h1><p>Error: Could not load frontend: {}</p><p>Path: {:?}</p></body></html>",
+                e, index_path
+            ))
+        },
+    }
 }
 
 async fn handle_command(
@@ -765,3 +795,4 @@ async fn state_events(
     Sse::new(combined_stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
+
