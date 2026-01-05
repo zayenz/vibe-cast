@@ -10,7 +10,7 @@ import {
   Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw,
-  Play, Square
+  Play, Square, Type
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
@@ -219,6 +219,7 @@ export const ControlPlane: React.FC = () => {
   const messageItemRefs = useRef<Map<string, HTMLDivElement>>(new Map()); // key: node path
   const [showTextStylePresetsManager, setShowTextStylePresetsManager] = useState(false);
   const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
+  const [settingsPresetTab, setSettingsPresetTab] = useState<'visualization' | 'textStyle'>('visualization');
   const [editingFolderPath, setEditingFolderPath] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState<string>('');
   // Pending folder play confirmation (to avoid window.confirm issues in Tauri WebView)
@@ -940,6 +941,85 @@ export const ControlPlane: React.FC = () => {
                   Settings
                 </button>
               </div>
+
+              {/* Settings Panel - Appears below the Settings button */}
+              <AnimatePresence>
+                {showSettings && (
+                  <motion.section
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden mb-6"
+                  >
+                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 space-y-6">
+                      {/* Common Settings - Always visible */}
+                      <div>
+                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
+                          Common Settings
+                        </h3>
+                        <CommonSettings
+                          intensity={commonSettings.intensity}
+                          dim={commonSettings.dim}
+                          onIntensityChange={(v) => sendCommand('set-common-settings', { ...commonSettings, intensity: v })}
+                          onDimChange={(v) => sendCommand('set-common-settings', { ...commonSettings, dim: v })}
+                        />
+                      </div>
+
+                      {/* Presets Tabs */}
+                      <div className="space-y-4">
+                        <div className="flex gap-2 border-b border-zinc-800">
+                          <button
+                            onClick={() => setSettingsPresetTab('visualization')}
+                            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                              settingsPresetTab === 'visualization'
+                                ? 'text-orange-500 border-orange-500'
+                                : 'text-zinc-500 border-transparent hover:text-zinc-300'
+                            }`}
+                          >
+                            Visualization Presets
+                          </button>
+                          <button
+                            onClick={() => setSettingsPresetTab('textStyle')}
+                            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                              settingsPresetTab === 'textStyle'
+                                ? 'text-orange-500 border-orange-500'
+                                : 'text-zinc-500 border-transparent hover:text-zinc-300'
+                            }`}
+                          >
+                            Text Style Presets
+                          </button>
+                        </div>
+
+                        {/* Tab Content */}
+                        {settingsPresetTab === 'visualization' && (
+                          <div>
+                            <VisualizationPresetsManager
+                              presets={visualizationPresets}
+                              activePresetId={activeVisualizationPreset}
+                              onAddPreset={handleAddPreset}
+                              onUpdatePreset={handleUpdatePreset}
+                              onDeletePreset={handleDeletePreset}
+                              onSetActivePreset={handleSetActivePreset}
+                              onReorderPresets={handleReorderPresets}
+                            />
+                          </div>
+                        )}
+
+                        {settingsPresetTab === 'textStyle' && (
+                          <div>
+                            <TextStylePresetsManager
+                              presets={textStylePresets}
+                              onAddPreset={handleAddTextStylePreset}
+                              onUpdatePreset={handleUpdateTextStylePreset}
+                              onDeletePreset={handleDeleteTextStylePreset}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </motion.section>
+                )}
+              </AnimatePresence>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {(!visualizationPresets || visualizationPresets.filter(p => p.enabled !== false).length === 0) ? (
@@ -982,66 +1062,6 @@ export const ControlPlane: React.FC = () => {
                 )}
               </div>
             </section>
-
-            {/* Settings Panel */}
-            <AnimatePresence>
-              {showSettings && (
-                <motion.section
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 space-y-6">
-                    {/* Common Settings - Always visible */}
-                    <div>
-                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                        Common Settings
-                      </h3>
-                      <CommonSettings
-                        intensity={commonSettings.intensity}
-                        dim={commonSettings.dim}
-                        onIntensityChange={(v) => sendCommand('set-common-settings', { ...commonSettings, intensity: v })}
-                        onDimChange={(v) => sendCommand('set-common-settings', { ...commonSettings, dim: v })}
-                      />
-                    </div>
-
-                    {/* Visualization Presets Manager */}
-                    <div className="space-y-6">
-                    <div>
-                        <VisualizationPresetsManager
-                          presets={visualizationPresets}
-                          activePresetId={activeVisualizationPreset}
-                          onAddPreset={handleAddPreset}
-                          onUpdatePreset={handleUpdatePreset}
-                          onDeletePreset={handleDeletePreset}
-                          onSetActivePreset={handleSetActivePreset}
-                        onReorderPresets={handleReorderPresets}
-                        />
-                    </div>
-
-                      {/* Active Preset Settings */}
-                      {activePreset && activePlugin && activePlugin.settingsSchema.length > 0 && (
-                      <div>
-                        <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase mb-4">
-                            {activePreset.name} Settings
-                        </h3>
-                        <SettingsRenderer
-                          schema={activePlugin.settingsSchema}
-                            values={activePreset.settings}
-                          onChange={(key, value) => {
-                              handleUpdatePreset(activePreset.id, {
-                                settings: { ...activePreset.settings, [key]: value },
-                              });
-                          }}
-                        />
-                      </div>
-                      )}
-                    </div>
-                  </div>
-                </motion.section>
-              )}
-            </AnimatePresence>
 
           </div>
 
@@ -1104,23 +1124,9 @@ export const ControlPlane: React.FC = () => {
 
               {/* New message style preset (current preset) */}
               <div className="mb-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold tracking-[0.2em] text-zinc-500 uppercase">
-                    Text Style Preset (new messages)
-                  </label>
-                  <button
-                    onClick={() => setShowTextStylePresetsManager((v) => !v)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${
-                      showTextStylePresetsManager
-                        ? 'bg-orange-500 text-white'
-                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                    }`}
-                    title="Manage text style presets"
-                  >
-                    <Sliders size={14} />
-                    Presets
-                  </button>
-                </div>
+                <label className="text-[10px] font-bold tracking-[0.2em] text-zinc-500 uppercase block">
+                  Text Style Preset (new messages)
+                </label>
                 <select
                   value={newMessageTextStylePresetId}
                   onChange={(e) => setNewMessageTextStylePresetId(e.target.value)}
@@ -1134,27 +1140,6 @@ export const ControlPlane: React.FC = () => {
                   ))}
                 </select>
               </div>
-
-              {/* Text style presets manager (in Messages sidebar) */}
-              <AnimatePresence>
-                {showTextStylePresetsManager && (
-                    <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="mb-4 border border-zinc-800 rounded-xl overflow-hidden"
-                  >
-                    <div className="p-4 bg-zinc-950">
-                      <TextStylePresetsManager
-                        presets={textStylePresets}
-                        onAddPreset={handleAddTextStylePreset}
-                        onUpdatePreset={handleUpdateTextStylePreset}
-                        onDeletePreset={handleDeleteTextStylePreset}
-                      />
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
               <div
                 ref={messageListRef}

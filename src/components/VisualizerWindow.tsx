@@ -79,7 +79,7 @@ const TextStyleRenderer: React.FC<{
   verticalOffset?: number;
   repeatCount?: number;
   onComplete: () => void;
-}> = ({ message, messageTimestamp, textStyleSettings, textStylePresets, verticalOffset = 0, repeatCount = 1, onComplete }) => {
+}> = ({ message, messageTimestamp, textStyleSettings, textStylePresets = [], verticalOffset = 0, repeatCount = 1, onComplete }) => {
   const effectiveRepeatCount = repeatCount ?? 1;
   const onCompleteRef = useRef(onComplete);
   useEffect(() => {
@@ -337,6 +337,10 @@ export const VisualizerWindow: React.FC = () => {
   // Must use the same API base as ControlPlane to connect to the Axum server
   const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: 'http://localhost:8080' });
 
+  // Track whether initial SSE state has been loaded (especially textStylePresets)
+  // This is critical for production builds where the window is recreated
+  const [isStateLoaded, setIsStateLoaded] = useState(false);
+
   // Load SSE state into local zustand store when it arrives
   useEffect(() => {
     console.log('[VisualizerWindow] SSE effect triggered:', {
@@ -346,6 +350,7 @@ export const VisualizerWindow: React.FC = () => {
     
     if (!sseState) {
       console.log('[VisualizerWindow] SSE state is null, waiting...');
+      setIsStateLoaded(false);
       return;
     }
     
@@ -354,6 +359,7 @@ export const VisualizerWindow: React.FC = () => {
       activeVisualizationPreset: sseState.activeVisualizationPreset,
       presetsCount: sseState.visualizationPresets?.length ?? 0,
       presetIds: sseState.visualizationPresets?.map(p => ({ id: p.id, name: p.name, vizId: p.visualizationId })),
+      textStylePresetsCount: sseState.textStylePresets?.length ?? 0,
     });
     
     loadConfiguration({
@@ -372,7 +378,11 @@ export const VisualizerWindow: React.FC = () => {
       messageStats: sseState.messageStats ?? {},
     }, false); // sync=false to avoid broadcasting back
     
-    console.log('[VisualizerWindow] Config loaded into store');
+    // Mark state as loaded once we have textStylePresets (even if empty array)
+    // This ensures messages can render safely
+    setIsStateLoaded(Array.isArray(sseState.textStylePresets));
+    
+    console.log('[VisualizerWindow] Config loaded into store, isStateLoaded:', Array.isArray(sseState.textStylePresets));
   }, [sseState, loadConfiguration]);
 
   // Sync folderPlaybackQueue from SSE state to zustand store
@@ -786,44 +796,47 @@ export const VisualizerWindow: React.FC = () => {
         />
       </div>
       {/* Render all active messages - they can coexist with higher z-index */}
-      <div className="absolute inset-0 pointer-events-none z-[100]">
-        {activeMessages.map(({ message, timestamp }, index) => {
-          // Calculate cumulative vertical offset based on heights of previous messages
-          let cumulativeOffset = 0;
-          for (let i = 0; i < index; i++) {
-            cumulativeOffset += getMessageHeight(
-              activeMessages[i].message,
-              textStyleSettings,
-              textStylePresets
+      {/* Only render messages once state is loaded (critical for production window restart) */}
+      {isStateLoaded && (
+        <div className="absolute inset-0 pointer-events-none z-[100]">
+          {activeMessages.map(({ message, timestamp }, index) => {
+            // Calculate cumulative vertical offset based on heights of previous messages
+            let cumulativeOffset = 0;
+            for (let i = 0; i < index; i++) {
+              cumulativeOffset += getMessageHeight(
+                activeMessages[i].message,
+                textStyleSettings,
+                textStylePresets
+              );
+            }
+            
+            return (
+              <TextStyleRenderer
+                key={timestamp}
+                message={message}
+                messageTimestamp={timestamp}
+                textStyleSettings={textStyleSettings}
+                textStylePresets={textStylePresets}
+                verticalOffset={cumulativeOffset}
+                repeatCount={message.repeatCount ?? 1}
+                onComplete={() => {
+                  // 1) Clear local UI immediately
+                  clearMessage(timestamp, false, message.id);
+                  // 2) Notify ControlPlane immediately (hybrid model)
+                  emit('state-changed', {
+                    type: 'CLEAR_MESSAGE',
+                    payload: { timestamp, messageId: message.id },
+                  }).catch(() => {
+                    // ignore (best-effort)
+                  });
+                  // 3) Notify Rust backend - it handles queue advancement + SSE canonical state
+                  sendCommand('message-complete', { messageId: message.id });
+                }}
+              />
             );
-          }
-          
-          return (
-            <TextStyleRenderer
-              key={timestamp}
-              message={message}
-              messageTimestamp={timestamp}
-              textStyleSettings={textStyleSettings}
-              textStylePresets={textStylePresets}
-              verticalOffset={cumulativeOffset}
-              repeatCount={message.repeatCount ?? 1}
-              onComplete={() => {
-                // 1) Clear local UI immediately
-                clearMessage(timestamp, false, message.id);
-                // 2) Notify ControlPlane immediately (hybrid model)
-                emit('state-changed', {
-                  type: 'CLEAR_MESSAGE',
-                  payload: { timestamp, messageId: message.id },
-                }).catch(() => {
-                  // ignore (best-effort)
-                });
-                // 3) Notify Rust backend - it handles queue advancement + SSE canonical state
-                sendCommand('message-complete', { messageId: message.id });
-              }}
-            />
-          );
-        })}
-      </div>
+          })}
+        </div>
+      )}
     </div>
   );
 };
