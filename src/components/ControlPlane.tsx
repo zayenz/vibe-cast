@@ -1066,7 +1066,7 @@ export const ControlPlane: React.FC = () => {
           </div>
 
           {/* Sidebar - Messages */}
-          <aside className="col-span-12 lg:col-span-4 order-2">
+          <aside className="col-span-12 lg:col-span-4 lg:col-start-9 order-2">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
               <MessageSquare size={18} className="text-zinc-500" />
@@ -1099,7 +1099,8 @@ export const ControlPlane: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur-md flex flex-col max-h-[700px]">
+            <div className="flex flex-col space-y-6">
+              <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 backdrop-blur-md flex flex-col max-h-[700px]">
               <div className="flex gap-2 mb-4">
                 <input
                   type="text"
@@ -1715,66 +1716,72 @@ export const ControlPlane: React.FC = () => {
               </div>
                 )}
               </div>
-              
-              {/* History Pane */}
+            </div>
+
+              {/* Message History Section */}
               <AnimatePresence>
                 {showHistory && (
-                  <motion.div
+                  <motion.section
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
-                    className="mt-4 border-t border-zinc-800 pt-4 overflow-hidden"
+                    className="overflow-hidden"
                   >
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Message History</h3>
-                      <button
-                        onClick={() => setShowHistory(false)}
-                        className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
-                        title="Close history"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                    <div className="space-y-3 max-h-64 overflow-y-auto custom-scrollbar">
-                      {messages.length === 0 ? (
-                        <div className="text-center py-4 text-zinc-500 text-xs">No messages</div>
-                      ) : (
-                        messages.map((msg) => {
-                          const stats = messageStats[msg.id];
-                          const history = stats?.history ?? [];
-                          
-                          return (
-                            <div key={msg.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-                              <div className="text-sm font-medium text-zinc-300 mb-2">{msg.text}</div>
-                              {history.length === 0 ? (
-                                <div className="text-xs text-zinc-500">Never triggered</div>
-                              ) : (
-                                <div className="space-y-1">
-                                  <div className="text-xs text-zinc-500 mb-1">
-                                    Triggered {stats?.triggerCount ?? 0} time{stats?.triggerCount !== 1 ? 's' : ''}
+                    <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <History size={18} className="text-zinc-500" />
+                          <h2 className="text-xs font-bold tracking-[0.2em] text-zinc-500 uppercase">Message History</h2>
+                        </div>
+                        <button
+                          onClick={() => setShowHistory(false)}
+                          className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                          title="Close history"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <div className="space-y-3 max-h-[600px] overflow-y-auto custom-scrollbar">
+                        {messages.length === 0 ? (
+                          <div className="text-center py-8 text-zinc-500 text-sm">No messages</div>
+                        ) : (
+                          messages.map((msg) => {
+                            const stats = messageStats[msg.id];
+                            const history = stats?.history ?? [];
+                            
+                            return (
+                              <div key={msg.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                                <div className="text-sm font-medium text-zinc-300 mb-2">{msg.text}</div>
+                                {history.length === 0 ? (
+                                  <div className="text-xs text-zinc-500">Never triggered</div>
+                                ) : (
+                                  <div className="space-y-1">
+                                    <div className="text-xs text-zinc-500 mb-1">
+                                      Triggered {stats?.triggerCount ?? 0} time{stats?.triggerCount !== 1 ? 's' : ''}
+                                    </div>
+                                    <div className="space-y-0.5">
+                                      {history.slice().reverse().map((entry, idx) => (
+                                        <div key={idx} className="text-xs text-zinc-600 font-mono">
+                                          {new Date(entry.timestamp).toLocaleString()}
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
-                                  <div className="space-y-0.5">
-                                    {history.slice().reverse().map((entry, idx) => (
-                                      <div key={idx} className="text-xs text-zinc-600 font-mono">
-                                        {new Date(entry.timestamp).toLocaleString()}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
-                  </motion.div>
+                  </motion.section>
                 )}
               </AnimatePresence>
             </div>
           </aside>
 
-          {/* Remote Info Section - After messages in non-wide layout */}
-          <section className="col-span-12 lg:col-span-8 order-3 lg:order-2 relative group">
+          {/* Remote Info Section - Full width below both columns */}
+          <section className="col-span-12 order-4 relative group">
             <div className="absolute -inset-px bg-gradient-to-r from-orange-500/20 via-zinc-800 to-blue-500/20 rounded-2xl opacity-50 group-hover:opacity-100 transition-opacity" />
             <div className="relative bg-zinc-950 rounded-2xl p-6 flex flex-col md:flex-row items-center gap-8">
               <div className="bg-white p-3 rounded-xl shadow-2xl shrink-0">
