@@ -1267,6 +1267,91 @@ pub fn run() {
                 server::start_server(handle, server_state, 8080).await;
             });
 
+            // In production, recreate windows to use HTTP URLs (for YouTube compatibility)
+            // This ensures windows load from HTTP like in development
+            if !cfg!(debug_assertions) {
+                let handle = app.handle().clone();
+                let state_for_windows = app_state_sync.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait for server to start and bind
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    
+                    // Get the server port
+                    let port = state_for_windows.server_port.lock()
+                        .map(|p| *p)
+                        .unwrap_or(8080);
+                    
+                    let http_url = format!("http://localhost:{}", port);
+                    eprintln!("[Setup] Recreating windows to use HTTP URL: {}", http_url);
+                    
+                    // Recreate main window
+                    if let Some(main_window) = handle.get_webview_window("main") {
+                        let prev_pos = main_window.outer_position().ok();
+                        let prev_size = main_window.inner_size().ok();
+                        let _ = main_window.close();
+                        
+                        // Small delay to ensure window closes
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        
+                        let mut builder = tauri::WebviewWindowBuilder::new(
+                            &handle,
+                            "main",
+                            tauri::WebviewUrl::External(http_url.parse().expect("Invalid HTTP URL"))
+                        )
+                        .title("Control Plane")
+                        .resizable(true);
+                        
+                        if let Some(size) = prev_size {
+                            builder = builder.inner_size(size.width as f64, size.height as f64);
+                        } else {
+                            builder = builder.inner_size(800.0, 600.0);
+                        }
+                        
+                        if let Some(pos) = prev_pos {
+                            builder = builder.position(pos.x as f64, pos.y as f64);
+                        }
+                        
+                        if let Err(e) = builder.build() {
+                            eprintln!("[Setup] Failed to recreate main window: {}", e);
+                        }
+                    }
+                    
+                    // Recreate viz window
+                    if let Some(viz_window) = handle.get_webview_window("viz") {
+                        let prev_pos = viz_window.outer_position().ok();
+                        let prev_size = viz_window.inner_size().ok();
+                        let _ = viz_window.close();
+                        
+                        // Small delay to ensure window closes
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        
+                        let mut builder = tauri::WebviewWindowBuilder::new(
+                            &handle,
+                            "viz",
+                            tauri::WebviewUrl::External(http_url.parse().expect("Invalid HTTP URL"))
+                        )
+                        .title("VibeCast")
+                        .resizable(true)
+                        .decorations(true)
+                        .visible(true);
+                        
+                        if let Some(size) = prev_size {
+                            builder = builder.inner_size(size.width as f64, size.height as f64);
+                        } else {
+                            builder = builder.inner_size(1280.0, 720.0);
+                        }
+                        
+                        if let Some(pos) = prev_pos {
+                            builder = builder.position(pos.x as f64, pos.y as f64);
+                        }
+                        
+                        if let Err(e) = builder.build() {
+                            eprintln!("[Setup] Failed to recreate viz window: {}", e);
+                        }
+                    }
+                });
+            }
+
             // Ensure we have the windows
             let _main_window = app.get_webview_window("main").unwrap();
             

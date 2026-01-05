@@ -209,6 +209,12 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
       return;
     }
     
+    // Log origin/protocol for debugging
+    console.log('YouTube: Window origin:', window.location.origin);
+    console.log('YouTube: Window protocol:', window.location.protocol);
+    console.log('YouTube: Window href:', window.location.href);
+    console.log('YouTube: Document referrer:', document.referrer);
+    
     setError(null);
     
     let player: YTPlayer | null = null;
