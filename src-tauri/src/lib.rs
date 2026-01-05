@@ -1270,11 +1270,19 @@ pub fn run() {
             // In production, recreate windows to use HTTP URLs (for YouTube compatibility)
             // This ensures windows load from HTTP like in development
             if !cfg!(debug_assertions) {
+                // Hide windows immediately to prevent visible close/reopen
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.hide();
+                }
+                if let Some(viz_window) = app.get_webview_window("viz") {
+                    let _ = viz_window.hide();
+                }
+                
                 let handle = app.handle().clone();
                 let state_for_windows = app_state_sync.clone();
                 tauri::async_runtime::spawn(async move {
-                    // Wait for server to start and bind
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    // Wait for server to start and bind (reduced from 1000ms)
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     
                     // Get the server port
                     let port = state_for_windows.server_port.lock()
@@ -1283,6 +1291,9 @@ pub fn run() {
                     
                     let http_url = format!("http://localhost:{}", port);
                     eprintln!("[Setup] Recreating windows to use HTTP URL: {}", http_url);
+                    
+                    let mut main_window_handle = None;
+                    let mut viz_window_handle = None;
                     
                     // Recreate main window
                     if let Some(main_window) = handle.get_webview_window("main") {
@@ -1299,7 +1310,8 @@ pub fn run() {
                             tauri::WebviewUrl::External(http_url.parse().expect("Invalid HTTP URL"))
                         )
                         .title("Control Plane")
-                        .resizable(true);
+                        .resizable(true)
+                        .visible(false); // Create hidden
                         
                         if let Some(size) = prev_size {
                             builder = builder.inner_size(size.width as f64, size.height as f64);
@@ -1311,8 +1323,13 @@ pub fn run() {
                             builder = builder.position(pos.x as f64, pos.y as f64);
                         }
                         
-                        if let Err(e) = builder.build() {
-                            eprintln!("[Setup] Failed to recreate main window: {}", e);
+                        match builder.build() {
+                            Ok(window) => {
+                                main_window_handle = Some(window);
+                            }
+                            Err(e) => {
+                                eprintln!("[Setup] Failed to recreate main window: {}", e);
+                            }
                         }
                     }
                     
@@ -1333,7 +1350,7 @@ pub fn run() {
                         .title("VibeCast")
                         .resizable(true)
                         .decorations(true)
-                        .visible(true);
+                        .visible(false); // Create hidden
                         
                         if let Some(size) = prev_size {
                             builder = builder.inner_size(size.width as f64, size.height as f64);
@@ -1345,9 +1362,22 @@ pub fn run() {
                             builder = builder.position(pos.x as f64, pos.y as f64);
                         }
                         
-                        if let Err(e) = builder.build() {
-                            eprintln!("[Setup] Failed to recreate viz window: {}", e);
+                        match builder.build() {
+                            Ok(window) => {
+                                viz_window_handle = Some(window);
+                            }
+                            Err(e) => {
+                                eprintln!("[Setup] Failed to recreate viz window: {}", e);
+                            }
                         }
+                    }
+                    
+                    // Show both windows together once they're ready
+                    if let Some(window) = main_window_handle {
+                        let _ = window.show();
+                    }
+                    if let Some(window) = viz_window_handle {
+                        let _ = window.show();
                     }
                 });
             }
