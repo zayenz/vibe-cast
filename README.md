@@ -1,5 +1,9 @@
 # Vibe Cast
 
+<div align="center">
+  <img src="docs/assets/vibe-cast-icon.png" alt="Vibe Cast Icon" width="200"/>
+</div>
+
 A fully vibe-coded application
 built with **Tauri v2** and **React**. Designed for  visualizations on secondary displays (like Apple TV via AirPlay) with remote control capabilities from an iPhone.
 
