@@ -371,7 +371,7 @@ export const VisualizerWindow: React.FC = () => {
   // Subscribe to SSE stream for initial configuration load
   // This ensures VisualizerWindow gets the same config as ControlPlane on startup
   // Must use the same API base as ControlPlane to connect to the Axum server
-  const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: 'http://localhost:8080' });
+  const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: API_BASE });
 
   // Track whether initial SSE state has been loaded
   // This is critical for production builds where the window is recreated

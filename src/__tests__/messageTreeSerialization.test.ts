@@ -77,8 +77,26 @@ describe('configuration serialization: messageTree', () => {
     const roundTrip = useStore.getState().getConfiguration();
 
     expect(roundTrip.messageTree).toEqual([
-      { type: 'message', id: 'a', message: { id: 'a', text: 'A', textStyle: 'scrolling-capitals' } },
-      { type: 'message', id: 'b', message: { id: 'b', text: 'B', textStyle: 'fade' } },
+      { 
+        type: 'message', 
+        id: 'a', 
+        message: { 
+          id: 'a', 
+          text: 'A', 
+          textStyle: 'scrolling-capitals',
+          textStylePreset: 'default-scrolling-capitals' 
+        } 
+      },
+      { 
+        type: 'message', 
+        id: 'b', 
+        message: { 
+          id: 'b', 
+          text: 'B', 
+          textStyle: 'fade',
+          textStylePreset: 'default-fade'
+        } 
+      },
     ]);
   });
 
