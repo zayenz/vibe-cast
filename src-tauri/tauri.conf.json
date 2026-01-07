@@ -54,7 +54,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/dist/": "dist/"
+      "../dist": "dist"
     }
   }
 }

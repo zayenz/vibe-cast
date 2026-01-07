@@ -219,7 +219,6 @@ describe('Configuration Serialization', () => {
     expect(roundTrippedConfig.commonSettings).toEqual(originalConfig.commonSettings);
     
     // The store may normalize messages by adding default textStylePreset
-    const normalize = (tree: any[]) => JSON.parse(JSON.stringify(tree).replace(/"textStylePreset":"default-[^"]+",/g, ''));
     // Or just checking that the structure matches excluding the auto-added field for now, 
     // but simpler to just update the expectation if we know what it adds.
     // However, originalConfig came from store.getConfiguration() BEFORE loadConfiguration(parsed).
