@@ -10,7 +10,7 @@ import {
   Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw,
-  Play, Square, Type
+  Play, Square
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
@@ -217,7 +217,6 @@ export const ControlPlane: React.FC = () => {
   const [dropIntoFolderPath, setDropIntoFolderPath] = useState<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messageItemRefs = useRef<Map<string, HTMLDivElement>>(new Map()); // key: node path
-  const [showTextStylePresetsManager, setShowTextStylePresetsManager] = useState(false);
   const [newMessageTextStylePresetId, setNewMessageTextStylePresetId] = useState<string>('');
   const [settingsPresetTab, setSettingsPresetTab] = useState<'visualization' | 'textStyle'>('visualization');
   const [editingFolderPath, setEditingFolderPath] = useState<string | null>(null);
@@ -239,10 +238,6 @@ export const ControlPlane: React.FC = () => {
   // Fetcher for form submissions - no navigation, just mutation
   const fetcher = useFetcher();
   
-  // Get active preset
-  const activePreset = activeVisualizationPreset 
-    ? visualizationPresets.find(p => p.id === activeVisualizationPreset)
-    : null;
 
   // Fetch server info from Tauri on mount
   useEffect(() => {
@@ -786,9 +781,6 @@ export const ControlPlane: React.FC = () => {
   const isPending = fetcher.state !== 'idle';
 
 
-  const activePlugin = activePreset 
-    ? getVisualization(activePreset.visualizationId)
-    : getVisualization(activeVisualization);
 
   // Preset management handlers
   const handleAddPreset = (preset: VisualizationPreset) => {

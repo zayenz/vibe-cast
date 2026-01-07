@@ -57,13 +57,18 @@ function getMessageHeight(
  */
 async function sendCommand(command: string, payload: unknown): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/command`, {
+    const response = await fetch(`${API_BASE}/api/command`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command, payload }),
     });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    console.log(`[VisualizerWindow] Successfully sent command ${command}`);
   } catch (err) {
     console.error(`[VisualizerWindow] Failed to send command ${command}:`, err);
+    throw err; // Re-throw so callers can handle it
   }
 }
 
@@ -300,7 +305,30 @@ const VisualizationRenderer: React.FC<{
   );
 };
 
+// In-memory log buffer for production debugging (when console isn't accessible)
+const debugLogBuffer: Array<{ timestamp: number; level: string; message: string; data?: unknown }> = [];
+const MAX_LOG_ENTRIES = 50;
+
+function addDebugLog(level: string, message: string, data?: unknown) {
+  debugLogBuffer.push({
+    timestamp: Date.now(),
+    level,
+    message,
+    data,
+  });
+  // Keep only last MAX_LOG_ENTRIES
+  if (debugLogBuffer.length > MAX_LOG_ENTRIES) {
+    debugLogBuffer.shift();
+  }
+  // Also log to console if available
+  const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  logFn(`[VisualizerWindow] ${message}`, data || '');
+}
+
 export const VisualizerWindow: React.FC = () => {
+  // State for showing log viewer in debug overlay
+  const [showLogs, setShowLogs] = useState(false);
+  
   // Get state from store
   const activeVisualization = useStore((state) => state.activeVisualization);
   const activeVisualizationPreset = useStore((state) => state.activeVisualizationPreset);
@@ -309,6 +337,14 @@ export const VisualizerWindow: React.FC = () => {
   const commonSettings = useStore((state) => state.commonSettings);
   const visualizationSettings = useStore((state) => state.visualizationSettings);
   const activeMessages = useStore((state) => state.activeMessages);
+  
+  // Debug: Log activeMessages changes
+  useEffect(() => {
+    addDebugLog('log', 'activeMessages changed', {
+      count: activeMessages.length,
+      messages: activeMessages.map(am => ({ id: am.message.id, text: am.message.text?.substring(0, 30), timestamp: am.timestamp })),
+    });
+  }, [activeMessages]);
   const textStyleSettings = useStore((state) => state.textStyleSettings);
   const textStylePresets = useStore((state) => state.textStylePresets);
   
@@ -337,29 +373,42 @@ export const VisualizerWindow: React.FC = () => {
   // Must use the same API base as ControlPlane to connect to the Axum server
   const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: 'http://localhost:8080' });
 
-  // Track whether initial SSE state has been loaded (especially textStylePresets)
+  // Track whether initial SSE state has been loaded
   // This is critical for production builds where the window is recreated
+  // We need to ensure textStylePresets is loaded before rendering messages
   const [isStateLoaded, setIsStateLoaded] = useState(false);
+  const [hasReceivedSSEState, setHasReceivedSSEState] = useState(false);
 
   // Load SSE state into local zustand store when it arrives
   useEffect(() => {
-    console.log('[VisualizerWindow] SSE effect triggered:', {
+    addDebugLog('log', 'SSE effect triggered', {
       sseState: sseState ? 'received' : 'null',
       sseConnected,
+      hasReceivedSSEState,
     });
     
     if (!sseState) {
-      console.log('[VisualizerWindow] SSE state is null, waiting...');
+      addDebugLog('log', 'SSE state is null, waiting...');
       setIsStateLoaded(false);
+      setHasReceivedSSEState(false);
       return;
     }
     
-    console.log('[VisualizerWindow] SSE state received:', {
+    // Mark that we've received SSE state
+    if (!hasReceivedSSEState) {
+      setHasReceivedSSEState(true);
+    }
+    
+    addDebugLog('log', 'SSE state received', {
       activeVisualization: sseState.activeVisualization,
       activeVisualizationPreset: sseState.activeVisualizationPreset,
       presetsCount: sseState.visualizationPresets?.length ?? 0,
       presetIds: sseState.visualizationPresets?.map(p => ({ id: p.id, name: p.name, vizId: p.visualizationId })),
       textStylePresetsCount: sseState.textStylePresets?.length ?? 0,
+      triggeredMessage: sseState.triggeredMessage ? {
+        id: sseState.triggeredMessage.id,
+        text: sseState.triggeredMessage.text?.substring(0, 50),
+      } : null,
     });
     
     loadConfiguration({
@@ -379,11 +428,17 @@ export const VisualizerWindow: React.FC = () => {
     }, false); // sync=false to avoid broadcasting back
     
     // Mark state as loaded once we have textStylePresets (even if empty array)
-    // This ensures messages can render safely
-    setIsStateLoaded(Array.isArray(sseState.textStylePresets));
+    // This ensures messages can render safely with proper text style plugins
+    // Also ensure we have at least received SSE state once
+    const stateIsReady = Array.isArray(sseState.textStylePresets) && hasReceivedSSEState;
+    setIsStateLoaded(stateIsReady);
     
-    console.log('[VisualizerWindow] Config loaded into store, isStateLoaded:', Array.isArray(sseState.textStylePresets));
-  }, [sseState, loadConfiguration]);
+    addDebugLog('log', 'Config loaded into store', {
+      isStateLoaded: stateIsReady,
+      hasTextStylePresets: Array.isArray(sseState.textStylePresets),
+      hasReceivedSSEState,
+    });
+  }, [sseState, loadConfiguration, hasReceivedSSEState]);
 
   // Sync folderPlaybackQueue from SSE state to zustand store
   // This is runtime state (not config), so sync it separately
@@ -399,6 +454,53 @@ export const VisualizerWindow: React.FC = () => {
       useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
     }
   }, [sseState?.folderPlaybackQueue]);
+
+  // Sync triggeredMessage from SSE to activeMessages store
+  // This is critical for production builds where Tauri events may not work
+  // Use a ref to track the last processed triggered message to avoid duplicates
+  const lastTriggeredMessageRef = useRef<{ id: string; timestamp: number } | null>(null);
+  
+  useEffect(() => {
+    if (!sseState?.triggeredMessage) {
+      // Clear ref when triggeredMessage is cleared (so we can process new ones)
+      if (lastTriggeredMessageRef.current) {
+        console.log('[VisualizerWindow] triggeredMessage cleared in SSE state');
+        lastTriggeredMessageRef.current = null;
+      }
+      return;
+    }
+    
+    const triggeredMsg = sseState.triggeredMessage;
+    const now = Date.now();
+    
+    // Check if we've already processed this exact message
+    if (lastTriggeredMessageRef.current?.id === triggeredMsg.id) {
+      const timeSinceLastProcess = now - lastTriggeredMessageRef.current.timestamp;
+      if (timeSinceLastProcess < 3000) {
+        // Already processed this message recently, skip
+        return;
+      }
+    }
+    
+    const currentActiveMessages = useStore.getState().activeMessages;
+    
+    // Check if this message is already active (avoid duplicates)
+    const isAlreadyActive = currentActiveMessages.some(
+      am => am.message.id === triggeredMsg.id
+    );
+    
+    if (!isAlreadyActive) {
+      console.log('[VisualizerWindow] Syncing triggeredMessage from SSE to store:', {
+        id: triggeredMsg.id,
+        text: triggeredMsg.text,
+        textStyle: triggeredMsg.textStyle,
+      });
+      triggerMessage(triggeredMsg, false);
+      lastTriggeredMessageRef.current = { id: triggeredMsg.id, timestamp: now };
+    } else {
+      addDebugLog('log', 'triggeredMessage already active, skipping', { id: triggeredMsg.id });
+    }
+  }, [sseState?.triggeredMessage, triggerMessage]);
 
   // Debug: Log current state after store updates
   useEffect(() => {
@@ -434,7 +536,11 @@ export const VisualizerWindow: React.FC = () => {
   const audioRafRef = useRef<number | null>(null);
   const latestAudioRef = useRef<number[] | null>(null);
 
+  // Initialize event listeners on mount - these are critical for message processing
+  // This ensures messages can be received even if SSE state hasn't loaded yet
   useEffect(() => {
+    addDebugLog('log', 'Initializing event listeners for message processing');
+    
     // Listen for audio data from Rust
     const unlistenAudio = listen<number[]>('audio-data', (event) => {
       latestAudioRef.current = event.payload;
@@ -486,10 +592,14 @@ export const VisualizerWindow: React.FC = () => {
             typeof payload === 'string'
               ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
               : (payload as MessageConfig);
+          console.log('[VisualizerWindow] Received trigger-message via Tauri event:', { id: msg.id, text: msg.text?.substring(0, 50) });
           // Avoid duplicate triggers if already active
           const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
           if (!isActive) {
+            console.log('[VisualizerWindow] Triggering message via Tauri event');
             triggerMessage(msg, false);
+          } else {
+            console.log('[VisualizerWindow] Message already active, skipping Tauri trigger');
           }
           break;
         }
@@ -504,6 +614,10 @@ export const VisualizerWindow: React.FC = () => {
           break;
         case 'load-configuration':
           loadConfiguration(payload, false);
+          break;
+        case 'toggle-debug-overlay':
+          // Enable debug overlay via remote command (useful when keyboard shortcuts don't work)
+          setShowDevOverlay((v) => !v);
           break;
         case 'clear-active-message': {
           if (payload && typeof payload === 'object' && 'messageId' in payload) {
@@ -549,9 +663,13 @@ export const VisualizerWindow: React.FC = () => {
             typeof payload === 'string'
               ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
               : (payload as MessageConfig);
+          console.log('[VisualizerWindow] Received TRIGGER_MESSAGE via state-changed event:', { id: msg.id, text: msg.text?.substring(0, 50) });
           const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
           if (!isActive) {
+            console.log('[VisualizerWindow] Triggering message via state-changed event');
             triggerMessage(msg, false);
+          } else {
+            console.log('[VisualizerWindow] Message already active, skipping state-changed trigger');
           }
           break;
         }
@@ -714,7 +832,8 @@ export const VisualizerWindow: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [targetVizId]);
 
-  // Dev overlay (default OFF; opt-in via localStorage or query param)
+  // Debug overlay - works in both dev and production
+  // Enable via query param ?vizDebug=1, localStorage key 'vibecast:vizDebug', or click the debug button
   const devOverlayEnabledByQuery = useMemo(() => {
     try {
       return new URLSearchParams(window.location.search).get('vizDebug') === '1';
@@ -722,16 +841,43 @@ export const VisualizerWindow: React.FC = () => {
       return false;
     }
   }, []);
-  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(() => {
-    // Only show in dev mode, and only if query param is set
-    // (localStorage disabled by default to avoid showing debug overlay unexpectedly)
-    if (!import.meta.env.DEV) return false;
+  
+  // Check for auto-enable conditions (production-friendly)
+  const shouldAutoEnableDebug = useMemo(() => {
+    // Auto-enable if query param is set
     if (devOverlayEnabledByQuery) return true;
+    
+    // Auto-enable if localStorage flag is set
+    try {
+      const stored = window.localStorage.getItem('vibecast:vizDebug');
+      if (stored === '1') return true;
+    } catch {
+      // ignore
+    }
+    
+    // Auto-enable if we detect we're in a problematic state (no SSE connection after 3 seconds)
+    // This helps diagnose issues automatically
     return false;
-  });
-
+  }, [devOverlayEnabledByQuery]);
+  
+  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(shouldAutoEnableDebug);
+  
+  // Auto-enable debug overlay if SSE doesn't connect within 3 seconds (production debugging)
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
+    if (shouldAutoEnableDebug) return; // Already enabled
+    
+    const timer = setTimeout(() => {
+      if (!sseConnected && !hasReceivedSSEState) {
+        console.warn('[VisualizerWindow] SSE not connected after 3s, auto-enabling debug overlay');
+        setShowDevOverlay(true);
+      }
+    }, 3000);
+    
+    return () => clearTimeout(timer);
+  }, [sseConnected, hasReceivedSSEState, shouldAutoEnableDebug]);
+
+  // Persist debug overlay state to localStorage (works in both dev and production)
+  useEffect(() => {
     try {
       window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
     } catch {
@@ -739,8 +885,8 @@ export const VisualizerWindow: React.FC = () => {
     }
   }, [showDevOverlay]);
 
+  // Keyboard shortcut to toggle debug overlay (works in both dev and production)
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
     const onKeyDown = (e: KeyboardEvent) => {
       // Cmd/Ctrl + Shift + D toggles overlay
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
@@ -754,8 +900,45 @@ export const VisualizerWindow: React.FC = () => {
 
   return (
     <div className="w-screen h-screen bg-black relative overflow-hidden" style={{ backgroundColor: '#000' }}>
-      {/* Debug overlay (dev-only): helps diagnose "blank/grey visualizer" reports */}
-      {import.meta.env.DEV && showDevOverlay && (
+      {/* Always-visible debug toggle button (small, unobtrusive) */}
+      {!showDevOverlay && (
+        <button
+          onClick={() => setShowDevOverlay(true)}
+          onDoubleClick={() => {
+            // Double-click to enable and persist
+            setShowDevOverlay(true);
+            try {
+              window.localStorage.setItem('vibecast:vizDebug', '1');
+            } catch {
+              // ignore
+            }
+          }}
+          style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            zIndex: 9998,
+            width: 24,
+            height: 24,
+            background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 4,
+            color: 'rgba(255,255,255,0.5)',
+            fontSize: 10,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: 'ui-monospace, monospace',
+            padding: 0,
+          }}
+          title="Click to show debug overlay (double-click to persist)"
+        >
+          ⚙
+        </button>
+      )}
+      {/* Debug overlay: helps diagnose issues in both dev and production */}
+      {showDevOverlay && (
         <div
           style={{
             position: 'absolute',
@@ -770,7 +953,7 @@ export const VisualizerWindow: React.FC = () => {
             border: '1px solid rgba(255,255,255,0.12)',
             borderRadius: 8,
             color: 'rgba(255,255,255,0.85)',
-            pointerEvents: 'none',
+            pointerEvents: 'auto', // Allow clicking the button
           }}
         >
           <div>targetVizId: {String(targetVizId)}</div>
@@ -778,6 +961,89 @@ export const VisualizerWindow: React.FC = () => {
           <div>audioData: {Array.isArray(audioData) ? audioData.length : 'n/a'}</div>
           <div>common: {commonSettings ? `intensity=${commonSettings.intensity} dim=${commonSettings.dim}` : 'n/a'}</div>
           <div>recoveryCount: {recoveryCount}</div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px' }}>--- Message State ---</div>
+          <div>isStateLoaded: <strong style={{ color: isStateLoaded ? '#4ade80' : '#f87171' }}>{String(isStateLoaded)}</strong></div>
+          <div>sseConnected: <strong style={{ color: sseConnected ? '#4ade80' : '#f87171' }}>{String(sseConnected)}</strong></div>
+          <div>hasReceivedSSEState: <strong style={{ color: hasReceivedSSEState ? '#4ade80' : '#f87171' }}>{String(hasReceivedSSEState)}</strong></div>
+          <div>activeMessages: <strong>{activeMessages.length}</strong></div>
+          {activeMessages.length > 0 && (
+            <div style={{ fontSize: 10, marginLeft: '8px', color: 'rgba(255,255,255,0.7)' }}>
+              {activeMessages.map(am => (
+                <div key={am.timestamp}>• {am.message.id}: {am.message.text?.substring(0, 25)}...</div>
+              ))}
+            </div>
+          )}
+          <div>triggeredMsg (SSE): {sseState?.triggeredMessage ? `${sseState.triggeredMessage.id} (${sseState.triggeredMessage.text?.substring(0, 20)}...)` : 'none'}</div>
+          <div>textStylePresets: {textStylePresets.length}</div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px', fontSize: 9, color: 'rgba(255,255,255,0.6)' }}>
+            <button
+              onClick={() => setShowDevOverlay(false)}
+              style={{
+                background: 'rgba(255,255,255,0.1)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                color: 'rgba(255,255,255,0.85)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                fontSize: 9,
+                cursor: 'pointer',
+                marginRight: '4px',
+              }}
+            >
+              Hide
+            </button>
+            Enable: Click gear icon | Add ?vizDebug=1 to URL | localStorage: vibecast:vizDebug=1
+          </div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px' }}>
+            <button
+              onClick={() => setShowLogs(!showLogs)}
+              style={{
+                background: 'rgba(255,255,255,0.1)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                color: 'rgba(255,255,255,0.85)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                fontSize: 9,
+                cursor: 'pointer',
+              }}
+            >
+              {showLogs ? 'Hide' : 'Show'} Logs ({debugLogBuffer.length})
+            </button>
+          </div>
+          {showLogs && (
+            <div style={{
+              borderTop: '1px solid rgba(255,255,255,0.2)',
+              marginTop: '4px',
+              paddingTop: '4px',
+              maxHeight: '200px',
+              overflowY: 'auto',
+              fontSize: 9,
+              fontFamily: 'ui-monospace, monospace',
+            }}>
+              {debugLogBuffer.length === 0 ? (
+                <div style={{ color: 'rgba(255,255,255,0.5)', fontStyle: 'italic' }}>No logs yet</div>
+              ) : (
+                debugLogBuffer.slice().reverse().map((log, idx) => (
+                  <div key={idx} style={{
+                    marginBottom: '2px',
+                    padding: '2px 4px',
+                    background: log.level === 'error' ? 'rgba(239,68,68,0.2)' : log.level === 'warn' ? 'rgba(251,191,36,0.2)' : 'rgba(255,255,255,0.05)',
+                    borderRadius: 2,
+                    color: log.level === 'error' ? '#fca5a5' : log.level === 'warn' ? '#fde047' : 'rgba(255,255,255,0.7)',
+                  }}>
+                    <span style={{ color: 'rgba(255,255,255,0.5)' }}>
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>{' '}
+                    <strong>[{log.level}]</strong> {log.message}
+                    {log.data !== undefined && (
+                      <div style={{ marginLeft: '8px', fontSize: 8, color: 'rgba(255,255,255,0.5)' }}>
+                        {JSON.stringify(log.data, null, 2).substring(0, 100)}...
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className="absolute inset-0">
@@ -795,11 +1061,14 @@ export const VisualizerWindow: React.FC = () => {
           }
         />
       </div>
-      {/* Render all active messages - they can coexist with higher z-index */}
-      {/* Only render messages once state is loaded (critical for production window restart) */}
-      {isStateLoaded && (
-        <div className="absolute inset-0 pointer-events-none z-[100]">
-          {activeMessages.map(({ message, timestamp }, index) => {
+      {/* Message overlay container - always created to ensure proper initialization */}
+      {/* This container must exist even when window is recreated in production */}
+      {/* Only render message content once state is loaded (critical for production window restart) */}
+      <div className="absolute inset-0 pointer-events-none z-[100]" data-message-overlay="true">
+        {isStateLoaded ? (
+          <>
+            {activeMessages.length > 0 && console.log('[VisualizerWindow] Rendering activeMessages:', activeMessages.map(am => ({ id: am.message.id, text: am.message.text?.substring(0, 30) })))}
+            {activeMessages.map(({ message, timestamp }, index) => {
             // Calculate cumulative vertical offset based on heights of previous messages
             let cumulativeOffset = 0;
             for (let i = 0; i < index; i++) {
@@ -820,23 +1089,31 @@ export const VisualizerWindow: React.FC = () => {
                 verticalOffset={cumulativeOffset}
                 repeatCount={message.repeatCount ?? 1}
                 onComplete={() => {
+                  console.log('[VisualizerWindow] Message completed:', message.id, 'timestamp:', timestamp);
                   // 1) Clear local UI immediately
                   clearMessage(timestamp, false, message.id);
                   // 2) Notify ControlPlane immediately (hybrid model)
                   emit('state-changed', {
                     type: 'CLEAR_MESSAGE',
                     payload: { timestamp, messageId: message.id },
-                  }).catch(() => {
-                    // ignore (best-effort)
+                  }).catch((err) => {
+                    console.warn('[VisualizerWindow] Failed to emit state-changed event:', err);
                   });
                   // 3) Notify Rust backend - it handles queue advancement + SSE canonical state
-                  sendCommand('message-complete', { messageId: message.id });
+                  sendCommand('message-complete', { messageId: message.id }).catch((err) => {
+                    console.error('[VisualizerWindow] Failed to send message-complete command:', err);
+                  });
                 }}
               />
             );
           })}
-        </div>
-      )}
+          </>
+        ) : (
+          // Show loading state for messages while state is being loaded
+          // This ensures the overlay container exists even during initialization
+          null
+        )}
+      </div>
     </div>
   );
 };

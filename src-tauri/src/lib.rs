@@ -178,6 +178,8 @@ pub struct AppStateSync {
     pub folder_playback_queue: Mutex<Option<FolderPlaybackQueue>>,
     pub config_base_path: Mutex<Option<String>>,
     pub server_port: Mutex<u16>,
+    /// Last triggered message - persists until cleared
+    pub triggered_message: Mutex<Option<MessageConfig>>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
 }
@@ -260,6 +262,7 @@ impl AppStateSync {
             folder_playback_queue: Mutex::new(None),
             config_base_path: Mutex::new(None),
             server_port: Mutex::new(8080),
+            triggered_message: Mutex::new(None),
             state_tx,
         }
     }
@@ -305,6 +308,9 @@ impl AppStateSync {
         let folder_playback_queue = self.folder_playback_queue.lock()
             .map(|m| m.clone())
             .unwrap_or(None);
+        let triggered_message = self.triggered_message.lock()
+            .map(|m| m.clone())
+            .unwrap_or(None);
         
         // Legacy mode field
         let mode = active_visualization.clone();
@@ -322,7 +328,7 @@ impl AppStateSync {
             text_style_settings,
             text_style_presets,
             message_stats,
-            triggered_message: None,
+            triggered_message,
             folder_playback_queue,
             mode,
         }
@@ -330,9 +336,22 @@ impl AppStateSync {
 
     /// Broadcast current state to all SSE subscribers
     pub fn broadcast(&self, triggered_message: Option<MessageConfig>) {
-        let mut state = self.get_state();
-        state.triggered_message = triggered_message;
+        // Store triggered_message in state so it persists across broadcasts
+        if let Ok(mut tm) = self.triggered_message.lock() {
+            *tm = triggered_message.clone();
+        }
+        let state = self.get_state();
         // Ignore send errors (no subscribers)
+        let _ = self.state_tx.send(state);
+    }
+    
+    /// Clear the triggered message (called when message completes)
+    pub fn clear_triggered_message(&self) {
+        if let Ok(mut tm) = self.triggered_message.lock() {
+            *tm = None;
+        }
+        // Broadcast the cleared state
+        let state = self.get_state();
         let _ = self.state_tx.send(state);
     }
 
