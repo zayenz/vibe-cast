@@ -26,7 +26,7 @@ import { adjustPathForRemoval } from './messageTreeDnd';
 import { applyStyleOverrideChange } from './messageStyleOverrides';
 
 // API base for Tauri windows - they need to hit the Axum server directly
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.DEV ? 'http://localhost:8080' : '';
 
 // Icon map for visualizations
 const iconMap: Record<string, React.ReactNode> = {

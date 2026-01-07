@@ -10,7 +10,7 @@ import { useAppState } from '../hooks/useAppState';
 import { resolveMessageText } from '../utils/messageLoader';
 
 // API base for sending commands to Rust backend
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.DEV ? 'http://localhost:8080' : '';
 
 /**
  * Helper to calculate the effective height for a message based on its text style settings.
@@ -536,13 +536,79 @@ export const VisualizerWindow: React.FC = () => {
   const audioRafRef = useRef<number | null>(null);
   const latestAudioRef = useRef<number[] | null>(null);
 
+  // Debug overlay - works in both dev and production
+  // Enable via query param ?vizDebug=1, localStorage key 'vibecast:vizDebug', or click the debug button
+  const devOverlayEnabledByQuery = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('vizDebug') === '1';
+    } catch {
+      return false;
+    }
+  }, []);
+  
+  // Check for auto-enable conditions (production-friendly)
+  const shouldAutoEnableDebug = useMemo(() => {
+    // Auto-enable if query param is set
+    if (devOverlayEnabledByQuery) return true;
+    
+    // Auto-enable if localStorage flag is set
+    try {
+      const stored = window.localStorage.getItem('vibecast:vizDebug');
+      if (stored === '1') return true;
+    } catch {
+      // ignore
+    }
+    
+    // Auto-enable if we detect we're in a problematic state (no SSE connection after 3 seconds)
+    // This helps diagnose issues automatically
+    return false;
+  }, [devOverlayEnabledByQuery]);
+  
+  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(shouldAutoEnableDebug);
+  
+  // Auto-enable debug overlay if SSE doesn't connect within 3 seconds (production debugging)
+  useEffect(() => {
+    if (shouldAutoEnableDebug) return; // Already enabled
+    
+    const timer = setTimeout(() => {
+      if (!sseConnected && !hasReceivedSSEState) {
+        console.warn('[VisualizerWindow] SSE not connected after 3s, auto-enabling debug overlay');
+        setShowDevOverlay(true);
+      }
+    }, 3000);
+    
+    return () => clearTimeout(timer);
+  }, [sseConnected, hasReceivedSSEState, shouldAutoEnableDebug]);
+
+  // Persist debug overlay state to localStorage (works in both dev and production)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [showDevOverlay]);
+
+  // Keyboard shortcut to toggle debug overlay (works in both dev and production)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + Shift + D toggles overlay
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault();
+        setShowDevOverlay((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   // Initialize event listeners on mount - these are critical for message processing
   // This ensures messages can be received even if SSE state hasn't loaded yet
   useEffect(() => {
     addDebugLog('log', 'Initializing event listeners for message processing');
     
     // Listen for audio data from Rust
-    const unlistenAudio = listen<number[]>('audio-data', (event) => {
+    const unlistenAudioPromise = listen<number[]>('audio-data', (event) => {
       latestAudioRef.current = event.payload;
       // Coalesce multiple audio events into a single store update per frame.
       if (audioRafRef.current == null) {
@@ -555,10 +621,15 @@ export const VisualizerWindow: React.FC = () => {
       }
       lastAudioRef.current = Date.now();
     });
+    
+    // Catch errors for audio listener
+    unlistenAudioPromise.catch(err => {
+      addDebugLog('warn', 'Failed to listen to audio-data (expected in production if Tauri API is missing)', { err });
+    });
 
     // Listen for remote commands
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const unlistenRemote = listen<{ command: string, payload?: any }>('remote-command', (event) => {
+    const unlistenRemotePromise = listen<{ command: string, payload?: any }>('remote-command', (event) => {
       console.log('Received remote-command:', event.payload);
       const { command, payload } = event.payload;
       
@@ -640,10 +711,15 @@ export const VisualizerWindow: React.FC = () => {
           break;
       }
     });
+    
+    // Catch errors for remote command listener
+    unlistenRemotePromise.catch(err => {
+      addDebugLog('warn', 'Failed to listen to remote-command (expected in production)', { err });
+    });
 
     // Listen for state changes from other windows
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const unlistenState = listen<{ type: string, payload: any }>('state-changed', (event) => {
+    const unlistenStatePromise = listen<{ type: string, payload: any }>('state-changed', (event) => {
       console.log('Received state-changed:', event.payload);
       const { type, payload } = event.payload;
       
@@ -734,11 +810,17 @@ export const VisualizerWindow: React.FC = () => {
         }
       }
     });
+    
+    // Catch errors for state listener
+    unlistenStatePromise.catch(err => {
+        addDebugLog('warn', 'Failed to listen to state-changed (expected in production)', { err });
+    });
 
     return () => {
-      unlistenAudio.then((u) => u());
-      unlistenRemote.then((u) => u());
-      unlistenState.then((u) => u());
+      // Clean up using the promise results if they resolved
+      unlistenAudioPromise.then((u) => u && u()).catch(() => {});
+      unlistenRemotePromise.then((u) => u && u()).catch(() => {});
+      unlistenStatePromise.then((u) => u && u()).catch(() => {});
       if (audioRafRef.current != null) {
         cancelAnimationFrame(audioRafRef.current);
         audioRafRef.current = null;
@@ -831,72 +913,6 @@ export const VisualizerWindow: React.FC = () => {
     }, 5_000);
     return () => window.clearInterval(interval);
   }, [targetVizId]);
-
-  // Debug overlay - works in both dev and production
-  // Enable via query param ?vizDebug=1, localStorage key 'vibecast:vizDebug', or click the debug button
-  const devOverlayEnabledByQuery = useMemo(() => {
-    try {
-      return new URLSearchParams(window.location.search).get('vizDebug') === '1';
-    } catch {
-      return false;
-    }
-  }, []);
-  
-  // Check for auto-enable conditions (production-friendly)
-  const shouldAutoEnableDebug = useMemo(() => {
-    // Auto-enable if query param is set
-    if (devOverlayEnabledByQuery) return true;
-    
-    // Auto-enable if localStorage flag is set
-    try {
-      const stored = window.localStorage.getItem('vibecast:vizDebug');
-      if (stored === '1') return true;
-    } catch {
-      // ignore
-    }
-    
-    // Auto-enable if we detect we're in a problematic state (no SSE connection after 3 seconds)
-    // This helps diagnose issues automatically
-    return false;
-  }, [devOverlayEnabledByQuery]);
-  
-  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(shouldAutoEnableDebug);
-  
-  // Auto-enable debug overlay if SSE doesn't connect within 3 seconds (production debugging)
-  useEffect(() => {
-    if (shouldAutoEnableDebug) return; // Already enabled
-    
-    const timer = setTimeout(() => {
-      if (!sseConnected && !hasReceivedSSEState) {
-        console.warn('[VisualizerWindow] SSE not connected after 3s, auto-enabling debug overlay');
-        setShowDevOverlay(true);
-      }
-    }, 3000);
-    
-    return () => clearTimeout(timer);
-  }, [sseConnected, hasReceivedSSEState, shouldAutoEnableDebug]);
-
-  // Persist debug overlay state to localStorage (works in both dev and production)
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
-    } catch {
-      // ignore
-    }
-  }, [showDevOverlay]);
-
-  // Keyboard shortcut to toggle debug overlay (works in both dev and production)
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + Shift + D toggles overlay
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
-        e.preventDefault();
-        setShowDevOverlay((v) => !v);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
 
   return (
     <div className="w-screen h-screen bg-black relative overflow-hidden" style={{ backgroundColor: '#000' }}>
