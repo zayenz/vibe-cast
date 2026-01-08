@@ -2,8 +2,21 @@
   "version": 1,
   "visualizationPresets": [
     {
-      "id": "blue-glow-preset",
-      "name": "Blue glow",
+      "id": "fireplace-default",
+      "name": "Fireplace",
+      "visualizationId": "fireplace",
+      "settings": {
+        "emberCount": 15,
+        "flameCount": 12,
+        "flameHeight": 1.0,
+        "glowColor": "#ea580c",
+        "showLogs": true
+      },
+      "enabled": true
+    },
+    {
+      "id": "fireplace-blue-glow",
+      "name": "Blue Glow Fireplace",
       "visualizationId": "fireplace",
       "settings": {
         "emberCount": 0,
@@ -15,90 +28,7 @@
       "enabled": true
     },
     {
-      "id": "trippy-mushrooms-preset",
-      "name": "Trippy mushrooms",
-      "visualizationId": "youtube",
-      "settings": {
-        "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
-        "showControls": false,
-        "muted": true,
-        "volume": 50
-      },
-      "enabled": true
-    },
-    {
-      "id": "fireplace-preset",
-      "name": "Fireplace",
-      "visualizationId": "fireplace",
-      "settings": {
-      "emberCount": 15,
-      "flameCount": 12,
-      "flameHeight": 1.0,
-      "glowColor": "#ea580c",
-      "showLogs": true
-    },
-      "enabled": true
-    },
-    {
-      "id": "techno-preset",
-      "name": "Techno",
-      "visualizationId": "techno",
-      "settings": {
-      "barCount": 48,
-      "sphereScale": 1.0,
-      "sphereDistort": 0.5,
-      "colorScheme": "rainbow",
-        "showSphere": false,
-      "showBars": true
-      },
-      "enabled": true
-    },
-    {
-      "id": "waves-preset",
-      "name": "Waves Default",
-      "visualizationId": "waves",
-      "settings": {
-        "waveCount": 4,
-        "waveSpeed": 1.0,
-        "waveHeight": 1.0,
-        "waveColor": "#3b82f6",
-        "opacity": 0.8
-      },
-      "enabled": false
-    },
-    {
-      "id": "particles-preset",
-      "name": "Particles Default",
-      "visualizationId": "particles",
-      "settings": {
-        "particleCount": 80,
-        "particleSize": 3,
-        "speed": 1.5,
-        "particleColor": "#f59e0b",
-        "colorful": true,
-        "spread": 1.5
-      },
-      "enabled": false
-    },
-    {
-      "id": "mushrooms-preset",
-      "name": "Mushrooms Default",
-      "visualizationId": "mushrooms",
-      "settings": {
-        "mushroomCount": 28,
-        "evolutionSpeed": 1.0,
-        "mushroomScale": 1.1,
-        "colorStyle": "deep-dream",
-        "colorIntensity": 1.25,
-        "seed": 13,
-        "showGround": true,
-        "showFog": true,
-        "fogDensity": 0.6
-      },
-      "enabled": false
-    },
-    {
-      "id": "photo-slideshow-preset",
+      "id": "photo-slideshow-default",
       "name": "Photo Slideshow",
       "visualizationId": "photo-slideshow",
       "settings": {
@@ -114,19 +44,134 @@
         "enable3DRotate": true,
         "enableCube": false,
         "enableFlip": true,
-        "fitMode": "cover"
+        "fitMode": "cover",
+        "smartCrop": true,
+        "videoSound": true,
+        "videoVolume": 50
       },
-      "enabled": false
+      "enabled": true
+    },
+    {
+      "id": "particles-default",
+      "name": "Particles Default",
+      "visualizationId": "particles",
+      "settings": {
+        "particleCount": 80,
+        "particleSize": 5,
+        "speed": 0.5,
+        "particleColor": "#f59e0b",
+        "colorful": true,
+        "spread": 1.5
+      },
+      "enabled": true
+    },
+    {
+      "id": "youtube-default",
+      "name": "YouTube Default",
+      "visualizationId": "youtube",
+      "settings": {
+        "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
+        "showControls": false,
+        "muted": true,
+        "volume": 50
+      },
+      "enabled": true
+    },
+    {
+      "id": "techno-default",
+      "name": "Techno Default",
+      "visualizationId": "techno",
+      "settings": {
+        "barCount": 48,
+        "sphereScale": 1.0,
+        "sphereDistort": 0.5,
+        "colorScheme": "rainbow",
+        "showSphere": false,
+        "showBars": true
+      },
+      "enabled": true
     }
   ],
-  "activeVisualizationPreset": "blue-glow-preset",
+  "activeVisualizationPreset": "fireplace-default",
   "commonSettings": {
     "intensity": 1.0,
     "dim": 1.0
   },
-  "messages": [],
-  "messageTree": [],
+  "textStylePresets": [
+    {
+      "id": "scrolling-capitals-centered",
+      "name": "Scrolling Capitals Centered",
+      "textStyleId": "scrolling-capitals",
+      "settings": {
+        "position": "center",
+        "fontSize": 12,
+        "glowIntensity": 0.5,
+        "color": "#ffffff"
+      }
+    }
+  ],
+  "messages": [
+    {
+        "id": "msg-1",
+        "text": "Countdown initiated...",
+        "textStyle": "typewriter"
+    },
+    {
+        "id": "msg-2",
+        "text": "3, 2, 1",
+        "textStyle": "bounce",
+        "splitEnabled": true,
+        "splitSeparator": ",",
+        "speed": 1.0
+    },
+    {
+        "id": "msg-3",
+        "text": "It's time to party 🥳",
+        "textStyle": "scrolling-capitals",
+        "textStylePreset": "scrolling-capitals-centered"
+    }
+  ],
+  "messageTree": [
+    {
+        "type": "folder",
+        "id": "party-countdown",
+        "name": "Party Countdown",
+        "children": [
+            {
+                "type": "message",
+                "id": "msg-1",
+                "message": {
+                    "id": "msg-1",
+                    "text": "Countdown initiated...",
+                    "textStyle": "typewriter"
+                }
+            },
+            {
+                "type": "message",
+                "id": "msg-2",
+                "message": {
+                    "id": "msg-2",
+                    "text": "3, 2, 1",
+                    "textStyle": "bounce",
+                    "splitEnabled": true,
+                    "splitSeparator": ",",
+                    "speed": 1.0
+                }
+            },
+            {
+                "type": "message",
+                "id": "msg-3",
+                "message": {
+                    "id": "msg-3",
+                    "text": "It's time to party 🥳",
+                    "textStyle": "scrolling-capitals",
+                    "textStylePreset": "scrolling-capitals-centered"
+                }
+            }
+        ]
+    }
+  ],
   "defaultTextStyle": "scrolling-capitals",
   "textStyleSettings": {},
-  "textStylePresets": []
+  "messageStats": {}
 }

@@ -197,10 +197,10 @@ impl AppStateSync {
         // Default messages
         let default_messages = vec![
             MessageConfig {
-                id: "1".to_string(),
-                text: "Hello World!".to_string(),
+                id: "msg-1".to_string(),
+                text: "Countdown initiated...".to_string(),
                 text_file: None,
-                text_style: "scrolling-capitals".to_string(),
+                text_style: "typewriter".to_string(),
                 text_style_preset: None,
                 style_overrides: None,
                 repeat_count: None,
@@ -209,23 +209,23 @@ impl AppStateSync {
                 split_separator: None,
             },
             MessageConfig {
-                id: "2".to_string(),
-                text: "Keep it calm...".to_string(),
+                id: "msg-2".to_string(),
+                text: "3, 2, 1".to_string(),
                 text_file: None,
-                text_style: "fade".to_string(),
+                text_style: "bounce".to_string(),
                 text_style_preset: None,
                 style_overrides: None,
                 repeat_count: None,
-                speed: None,
-                split_enabled: None,
-                split_separator: None,
+                speed: Some(1.0),
+                split_enabled: Some(true),
+                split_separator: Some(",".to_string()),
             },
             MessageConfig {
-                id: "3".to_string(),
-                text: "TECHNO TIME".to_string(),
+                id: "msg-3".to_string(),
+                text: "It's time to party 🥳".to_string(),
                 text_file: None,
                 text_style: "scrolling-capitals".to_string(),
-                text_style_preset: None,
+                text_style_preset: Some("scrolling-capitals-centered".to_string()),
                 style_overrides: None,
                 repeat_count: None,
                 speed: None,
@@ -234,30 +234,179 @@ impl AppStateSync {
             },
         ];
 
-        // Default message tree: flat list of messages
-        let default_message_tree = serde_json::json!(
-            default_messages
-                .iter()
-                .map(|m| serde_json::json!({
-                    "type": "message",
-                    "id": m.id,
-                    "message": m
-                }))
-                .collect::<Vec<serde_json::Value>>()
-        );
+        // Default message tree
+        let default_message_tree = serde_json::json!([
+            {
+                "type": "folder",
+                "id": "party-countdown",
+                "name": "Party Countdown",
+                "children": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "message": {
+                            "id": "msg-1",
+                            "text": "Countdown initiated...",
+                            "textStyle": "typewriter"
+                        }
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg-2",
+                        "message": {
+                            "id": "msg-2",
+                            "text": "3, 2, 1",
+                            "textStyle": "bounce",
+                            "splitEnabled": true,
+                            "splitSeparator": ",",
+                            "speed": 1.0
+                        }
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg-3",
+                        "message": {
+                            "id": "msg-3",
+                            "text": "It's time to party 🥳",
+                            "textStyle": "scrolling-capitals",
+                            "textStylePreset": "scrolling-capitals-centered"
+                        }
+                    }
+                ]
+            }
+        ]);
+        
+        let default_viz_presets = vec![
+            VisualizationPreset {
+                id: "fireplace-default".to_string(),
+                name: "Fireplace".to_string(),
+                visualization_id: "fireplace".to_string(),
+                settings: serde_json::json!({
+                    "emberCount": 15,
+                    "flameCount": 12,
+                    "flameHeight": 1.0,
+                    "glowColor": "#ea580c",
+                    "showLogs": true
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            },
+            VisualizationPreset {
+                id: "fireplace-blue-glow".to_string(),
+                name: "Blue Glow Fireplace".to_string(),
+                visualization_id: "fireplace".to_string(),
+                settings: serde_json::json!({
+                    "emberCount": 0,
+                    "flameCount": 0,
+                    "flameHeight": 0,
+                    "glowColor": "#1e3a8a",
+                    "showLogs": false
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            },
+            VisualizationPreset {
+                id: "photo-slideshow-default".to_string(),
+                name: "Photo Slideshow".to_string(),
+                visualization_id: "photo-slideshow".to_string(),
+                settings: serde_json::json!({
+                    "sourceType": "local",
+                    "folderPath": "",
+                    "photosAlbumName": "",
+                    "displayDuration": 5,
+                    "transitionDuration": 0.8,
+                    "randomOrder": false,
+                    "enableFade": true,
+                    "enableSlide": true,
+                    "enableZoom": true,
+                    "enable3DRotate": true,
+                    "enableCube": false,
+                    "enableFlip": true,
+                    "fitMode": "cover",
+                    "smartCrop": true,
+                    "videoSound": true,
+                    "videoVolume": 50
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            },
+            VisualizationPreset {
+                id: "particles-default".to_string(),
+                name: "Particles Default".to_string(),
+                visualization_id: "particles".to_string(),
+                settings: serde_json::json!({
+                    "particleCount": 80,
+                    "particleSize": 5,
+                    "speed": 0.5,
+                    "particleColor": "#f59e0b",
+                    "colorful": true,
+                    "spread": 1.5
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            },
+            VisualizationPreset {
+                id: "youtube-default".to_string(),
+                name: "YouTube Default".to_string(),
+                visualization_id: "youtube".to_string(),
+                settings: serde_json::json!({
+                    "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
+                    "showControls": false,
+                    "muted": true,
+                    "volume": 50
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            },
+            VisualizationPreset {
+                id: "techno-default".to_string(),
+                name: "Techno Default".to_string(),
+                visualization_id: "techno".to_string(),
+                settings: serde_json::json!({
+                    "barCount": 48,
+                    "sphereScale": 1.0,
+                    "sphereDistort": 0.5,
+                    "colorScheme": "rainbow",
+                    "showSphere": false,
+                    "showBars": true
+                }),
+                enabled: Some(true),
+                order: None,
+                icon: None,
+            }
+        ];
+
+        let default_text_style_presets = vec![
+            TextStylePreset {
+                id: "scrolling-capitals-centered".to_string(),
+                name: "Scrolling Capitals Centered".to_string(),
+                text_style_id: "scrolling-capitals".to_string(),
+                settings: serde_json::json!({
+                    "position": "center",
+                    "fontSize": 12,
+                    "glowIntensity": 0.5,
+                    "color": "#ffffff"
+                }),
+            }
+        ];
         
         Self {
             active_visualization: Mutex::new("fireplace".to_string()),
             enabled_visualizations: Mutex::new(vec!["fireplace".to_string(), "techno".to_string()]),
             common_settings: Mutex::new(CommonSettings::default()),
             visualization_settings: Mutex::new(serde_json::json!({})),
-            visualization_presets: Mutex::new(vec![]),
-            active_visualization_preset: Mutex::new(None),
+            visualization_presets: Mutex::new(default_viz_presets),
+            active_visualization_preset: Mutex::new(Some("fireplace-default".to_string())),
             messages: Mutex::new(default_messages),
             message_tree: Mutex::new(default_message_tree),
             default_text_style: Mutex::new("scrolling-capitals".to_string()),
             text_style_settings: Mutex::new(serde_json::json!({})),
-            text_style_presets: Mutex::new(vec![]),
+            text_style_presets: Mutex::new(default_text_style_presets),
             message_stats: Mutex::new(serde_json::json!({})),
             folder_playback_queue: Mutex::new(None),
             config_base_path: Mutex::new(None),
