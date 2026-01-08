@@ -129,6 +129,18 @@ npm run tauri dev
 npm run tauri build
 ```
 
+This will create:
+- **App Bundle**: `src-tauri/target/release/bundle/macos/VibeCast.app`
+- **DMG Installer**: `src-tauri/target/release/bundle/dmg/VibeCast_x.x.x_aarch64.dmg`
+
+### Verifying the Build
+You can run the end-to-end test script to verify the built application launches and serves the remote interface correctly:
+
+```bash
+# Run E2E test on the built application
+./scripts/e2e_test.sh
+```
+
 ## 📱 Usage
 1.  Launch the app on your Mac.
 2.  If using AirPlay, move the **Visualizer** window to your secondary display.
