@@ -40,6 +40,18 @@
     - New scrolling text style for movie-like credits.
     - Handles multi-line text files effectively.
 
+### Presets & Defaults
+- **New Visualization Presets**:
+    - **Blue Glow Fireplace**: A calm, specialized fireplace settings without logs/flames.
+    - **Techno (No Blob)**: Variation of Techno without the central sphere.
+    - **Photo Slideshow**: Added default preset.
+- **Updated Presets**:
+    - **Particles**: Tweaked for larger, slower particles.
+- **New Text Style Presets**:
+    - **Centered Scrolling Capitals**: Large, centered marquee text.
+- **Default Content**:
+    - Added "Party Countdown" folder with example messages showcasing various styles (Typewriter, Bounce with split, Scrolling Capitals).
+
 ## Code Quality & Infrastructure
 
 ### Linting & Review
