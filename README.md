@@ -42,6 +42,7 @@ built with **Tauri v2** and **React**. Designed for  visualizations on secondary
 
 - [Architecture](docs/ARCHITECTURE.md) - System design and data flow.
 - [Changelog](docs/CHANGELOG.md) - History of changes and fixes.
+- [Release Process](docs/RELEASE.md) - How to build and release the app.
 - **Feature Guides**:
   - [Photo Slideshow Plugin](docs/PHOTO_SLIDESHOW_PLUGIN.md)
   - [YouTube Plugin](docs/YOUTUBE_PLUGIN.md)
