@@ -4,7 +4,7 @@
  * Manages visualization presets - named configurations of visualizations with specific settings.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Edit2, Trash2, X, Save, Settings2, GripVertical } from 'lucide-react';
 import { VisualizationPreset } from '../../plugins/types';
@@ -36,12 +36,15 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [formData, setFormData] = useState<Partial<VisualizationPreset>>({
     name: '',
     visualizationId: visualizationRegistry[0]?.id || '',
     settings: {},
   });
+
+  const presetItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleCreatePreset = () => {
     if (!formData.name || !formData.visualizationId) return;
@@ -113,51 +116,61 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
     return a.name.localeCompare(b.name);
   });
 
-  const handleDragStart = (e: React.DragEvent, presetId: string) => {
-    setDraggingId(presetId);
-    e.dataTransfer.effectAllowed = 'move';
-    try {
-      e.dataTransfer.setData('text/plain', presetId);
-    } catch {
-      // ignore
+  const computeDrop = (clientY: number) => {
+    // Find closest index based on midpoints
+    for (let i = 0; i < sortedPresets.length; i++) {
+      const preset = sortedPresets[i];
+      const el = presetItemRefs.current.get(preset.id);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        return i;
+      }
     }
+    return sortedPresets.length;
   };
 
-  const handleDragOver = (e: React.DragEvent, presetId: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (draggingId && draggingId !== presetId) {
-      setDragOverId(presetId);
-    }
-  };
-
-  const commitReorder = (draggedId: string, targetId: string) => {
+  const commitMove = (draggedId: string, targetIndex: number) => {
     const draggedIndex = sortedPresets.findIndex(p => p.id === draggedId);
-    const targetIndex = sortedPresets.findIndex(p => p.id === targetId);
-    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return;
+    if (draggedIndex === -1) return;
+
+    // Adjust target index if we are moving downwards and index is after source
+    let finalTargetIndex = targetIndex;
+    if (draggedIndex < finalTargetIndex) finalTargetIndex -= 1;
+    
+    if (draggedIndex === finalTargetIndex) return;
 
     const newPresets = [...sortedPresets];
     const [dragged] = newPresets.splice(draggedIndex, 1);
-    newPresets.splice(targetIndex, 0, dragged);
+    newPresets.splice(finalTargetIndex, 0, dragged);
 
     // Normalize order 0..n-1 in one batch
     const withOrder = newPresets.map((p, idx) => ({ ...p, order: idx }));
     onReorderPresets(withOrder);
   };
 
-  const handleDrop = (e: React.DragEvent, targetId: string) => {
+  const startPointerDrag = (e: React.PointerEvent, presetId: string) => {
+    if (e.button !== 0) return;
     e.preventDefault();
-    const draggedId = e.dataTransfer.getData('text/plain') || draggingId;
-    if (draggedId && draggedId !== targetId) {
-      commitReorder(draggedId, targetId);
-    }
-    setDraggingId(null);
-    setDragOverId(null);
+    e.stopPropagation();
+
+    setDraggingId(presetId);
+    setDropIndex(null);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  const handleDragEnd = () => {
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!draggingId) return;
+    const idx = computeDrop(e.clientY);
+    setDropIndex(idx);
+  };
+
+  const endPointerDrag = (e: React.PointerEvent) => {
+    if (!draggingId) return;
+    const idx = computeDrop(e.clientY);
+    commitMove(draggingId, idx);
     setDraggingId(null);
-    setDragOverId(null);
+    setDropIndex(null);
   };
 
   return (
@@ -182,186 +195,200 @@ export const VisualizationPresetsManager: React.FC<VisualizationPresetsManagerPr
         </button>
       </div>
 
-      <div className="space-y-2">
+      <div 
+        ref={containerRef}
+        className="space-y-2 relative"
+      >
         {sortedPresets.length === 0 ? (
           <div className="text-center py-8 text-zinc-500 text-sm">
             No presets yet. Create one to get started.
           </div>
         ) : (
-          sortedPresets.map((preset) => {
+          sortedPresets.map((preset, idx) => {
             const visualization = getVisualization(preset.visualizationId);
             const isActive = preset.id === activePresetId;
             const isEditing = editingId === preset.id;
+            const isDragging = draggingId === preset.id;
+            const showDropMarker = draggingId && dropIndex === idx;
 
             return (
-              <div
-                key={preset.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, preset.id)}
-                onDragOver={(e) => handleDragOver(e, preset.id)}
-                onDrop={(e) => handleDrop(e, preset.id)}
-                onDragEnd={handleDragEnd}
-                className={`bg-zinc-950 border rounded-lg overflow-hidden transition-all ${
-                  isActive ? 'border-orange-500' : 'border-zinc-800'
-                } ${draggingId === preset.id ? 'opacity-50' : ''} ${
-                  dragOverId === preset.id ? 'border-orange-400 border-2' : ''
-                }`}
-              >
-                {isEditing ? (
-                  <div className="p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-medium text-zinc-300">Edit Preset</h4>
-                      <button
-                        onClick={handleCancelEdit}
-                        className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                    
-                    <div>
-                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                        Name
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.name || ''}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
-                        placeholder="Preset name"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                        Icon
-                      </label>
-                      <IconPicker
-                        selectedIcon={formData.icon}
-                        onSelect={(icon) => setFormData({ ...formData, icon })}
-                        size={20}
-                      />
-                    </div>
-
-                    {editingVisualization && (
-                      <div>
-                        <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                          Visualization
-                        </label>
-                        <select
-                          value={formData.visualizationId || ''}
-                          onChange={(e) => handleVisualizationChange(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+              <div key={preset.id}>
+                {showDropMarker && (
+                  <div className="h-1 bg-orange-500 rounded-full mb-2 mx-2" />
+                )}
+                <div
+                  ref={(el) => {
+                    if (el) presetItemRefs.current.set(preset.id, el);
+                    else presetItemRefs.current.delete(preset.id);
+                  }}
+                  className={`bg-zinc-950 border rounded-lg overflow-hidden transition-all ${
+                    isActive ? 'border-orange-500' : 'border-zinc-800'
+                  } ${isDragging ? 'opacity-50' : ''}`}
+                >
+                  {isEditing ? (
+                    <div className="p-4 space-y-4">
+                      {/* Edit form content - unchanged */}
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-zinc-300">Edit Preset</h4>
+                        <button
+                          onClick={handleCancelEdit}
+                          className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
                         >
-                          {visualizationRegistry.map((viz) => (
-                            <option key={viz.id} value={viz.id}>
-                              {viz.name}
-                            </option>
-                          ))}
-                        </select>
+                          <X size={16} />
+                        </button>
                       </div>
-                    )}
-
-                    {editingVisualization && editingVisualization.settingsSchema.length > 0 && (
+                      
                       <div>
                         <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
-                          Settings
+                          Name
                         </label>
-                        <SettingsRenderer
-                          schema={editingVisualization.settingsSchema}
-                          values={formData.settings || {}}
-                          onChange={(key, value) => {
-                            setFormData({
-                              ...formData,
-                              settings: { ...(formData.settings || {}), [key]: value },
-                            });
-                          }}
+                        <input
+                          type="text"
+                          value={formData.name || ''}
+                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                          placeholder="Preset name"
                         />
                       </div>
-                    )}
 
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleUpdatePreset(preset.id)}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
-                      >
-                        <Save size={14} />
-                        Save
-                      </button>
-                      <button
-                        onClick={handleCancelEdit}
-                        className="flex-1 px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-3 p-3">
-                      <div
-                        className="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors"
-                        title="Drag to reorder"
-                      >
-                        <GripVertical size={16} />
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                          Icon
+                        </label>
+                        <IconPicker
+                          selectedIcon={formData.icon}
+                          onSelect={(icon) => setFormData({ ...formData, icon })}
+                          size={20}
+                        />
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={preset.enabled !== false}
-                        onChange={(e) => {
-                          onUpdatePreset(preset.id, { enabled: e.target.checked });
-                        }}
-                        className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-zinc-900 cursor-pointer"
-                        title="Show in visualization list"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <button
-                        onClick={() => onSetActivePreset(isActive ? null : preset.id)}
-                        className={`flex-1 text-left ${
-                          isActive ? 'text-orange-500' : 'text-zinc-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          {preset.icon ? (
-                            <div className={isActive ? 'text-orange-500' : 'text-zinc-500'}>
-                              {getIcon(preset.icon, 16)}
-                            </div>
-                          ) : (
-                            visualization && (
-                              <Settings2 size={16} className={isActive ? 'text-orange-500' : 'text-zinc-500'} />
-                            )
-                          )}
-                          <span className="font-medium text-sm">{preset.name}</span>
-                          {isActive && (
-                            <span className="text-xs text-orange-500 font-bold">ACTIVE</span>
-                          )}
+
+                      {editingVisualization && (
+                        <div>
+                          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                            Visualization
+                          </label>
+                          <select
+                            value={formData.visualizationId || ''}
+                            onChange={(e) => handleVisualizationChange(e.target.value)}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
+                          >
+                            {visualizationRegistry.map((viz) => (
+                              <option key={viz.id} value={viz.id}>
+                                {viz.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                        <div className="text-xs text-zinc-500">
-                          {visualization?.name || 'Unknown'} • {Object.keys(preset.settings).length} settings
+                      )}
+
+                      {editingVisualization && editingVisualization.settingsSchema.length > 0 && (
+                        <div>
+                          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2 block">
+                            Settings
+                          </label>
+                          <SettingsRenderer
+                            schema={editingVisualization.settingsSchema}
+                            values={formData.settings || {}}
+                            onChange={(key, value) => {
+                              setFormData({
+                                ...formData,
+                                settings: { ...(formData.settings || {}), [key]: value },
+                              });
+                            }}
+                          />
                         </div>
-                      </button>
-                      <div className="flex items-center gap-1">
+                      )}
+
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => handleEditPreset(preset)}
-                          className="p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors"
-                          title="Edit preset"
+                          onClick={() => handleUpdatePreset(preset.id)}
+                          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
                         >
-                          <Edit2 size={14} />
+                          <Save size={14} />
+                          Save
                         </button>
                         <button
-                          onClick={() => onDeletePreset(preset.id)}
-                          className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors"
-                          title="Delete preset"
+                          onClick={handleCancelEdit}
+                          className="flex-1 px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-colors"
                         >
-                          <Trash2 size={14} />
+                          Cancel
                         </button>
                       </div>
                     </div>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-3 p-3">
+                        <div
+                          onPointerDown={(e) => startPointerDrag(e, preset.id)}
+                          onPointerMove={onPointerMove}
+                          onPointerUp={endPointerDrag}
+                          onPointerCancel={endPointerDrag}
+                          className="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors touch-none"
+                          title="Drag to reorder"
+                        >
+                          <GripVertical size={16} />
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={preset.enabled !== false}
+                          onChange={(e) => {
+                            onUpdatePreset(preset.id, { enabled: e.target.checked });
+                          }}
+                          className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500 focus:ring-offset-zinc-900 cursor-pointer"
+                          title="Show in visualization list"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <button
+                          onClick={() => onSetActivePreset(isActive ? null : preset.id)}
+                          className={`flex-1 text-left ${
+                            isActive ? 'text-orange-500' : 'text-zinc-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            {preset.icon ? (
+                              <div className={isActive ? 'text-orange-500' : 'text-zinc-500'}>
+                                {getIcon(preset.icon, 16)}
+                              </div>
+                            ) : (
+                              visualization && (
+                                <Settings2 size={16} className={isActive ? 'text-orange-500' : 'text-zinc-500'} />
+                              )
+                            )}
+                            <span className="font-medium text-sm">{preset.name}</span>
+                            {isActive && (
+                              <span className="text-xs text-orange-500 font-bold">ACTIVE</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-zinc-500">
+                            {visualization?.name || 'Unknown'} • {Object.keys(preset.settings).length} settings
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleEditPreset(preset)}
+                            className="p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors"
+                            title="Edit preset"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => onDeletePreset(preset.id)}
+                            className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors"
+                            title="Delete preset"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })
+        )}
+        {draggingId && dropIndex === sortedPresets.length && (
+          <div className="h-1 bg-orange-500 rounded-full mx-2" />
         )}
       </div>
 
