@@ -1,0 +1,46 @@
+{
+  "messages": [
+    {
+      "id": "e2e-1",
+      "text": "E2E TEST START",
+      "textStyle": "scrolling-capitals",
+      "speed": 5.0
+    },
+    {
+      "id": "e2e-2",
+      "text": "E2E TEST END",
+      "textStyle": "scrolling-capitals",
+      "speed": 5.0
+    }
+  ],
+  "activeVisualization": "fireplace",
+  "messageTree": [
+    {
+      "type": "folder",
+      "id": "test-folder",
+      "name": "Test Folder",
+      "children": [
+        {
+          "type": "message",
+          "id": "e2e-1",
+          "message": {
+             "id": "e2e-1",
+             "text": "E2E TEST START",
+             "textStyle": "scrolling-capitals",
+             "speed": 5.0
+          }
+        },
+        {
+          "type": "message",
+          "id": "e2e-2",
+          "message": {
+             "id": "e2e-2",
+             "text": "E2E TEST END",
+             "textStyle": "scrolling-capitals",
+             "speed": 5.0
+          }
+        }
+      ]
+    }
+  ]
+}
