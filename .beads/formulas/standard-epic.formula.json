@@ -1,0 +1,61 @@
+{
+  "formula": "standard-epic",
+  "version": 1,
+  "type": "workflow",
+  "vars": {
+    "title": {
+      "description": "Value for title",
+      "required": true
+    },
+    "description": {
+      "description": "Initial description for the epic",
+      "required": false,
+      "default": "No description provided."
+    }
+  },
+  "description": "{{description}}",
+  "steps": [
+    {
+      "id": "investigate-and-summarize-task",
+      "title": "Investigate and summarize task",
+      "description": "Investigate the requirements and context for this epic. Analyze the request, explore relevant codebase areas using search tools, and summarize the findings. Update the parent epic's description with a clear 'Context \u0026 Analysis' section detailing the technical approach and architectural considerations.",
+      "type": "task",
+      "priority": 2
+    },
+    {
+      "id": "find-relevant-code-parts-and-tests",
+      "title": "Find relevant code-parts and tests",
+      "description": "Identify and list relevant file paths, code symbols (functions, classes), and existing tests. Use 'glob' and 'search_file_content' to map the affected areas. Append this list to the parent epic's description under a 'Relevant Code \u0026 Tests' section to guide implementation.",
+      "type": "task",
+      "priority": 2
+    },
+    {
+      "id": "implement-failing-tests",
+      "title": "Implement failing tests",
+      "description": "Create a reproduction test case or a new unit/integration test that targets the desired functionality. Ensure the test fails (Red phase of TDD), confirming it accurately captures the missing feature or bug. Use the project's testing framework conventions.",
+      "type": "task",
+      "priority": 2
+    },
+    {
+      "id": "implement-the-feature",
+      "title": "Implement the feature",
+      "description": "Implement the core logic and changes required for the epic. Modify the code to satisfy the requirements and pass the newly created tests. Follow project coding standards and architectural patterns.",
+      "type": "task",
+      "priority": 2
+    },
+    {
+      "id": "verify-tests-pass",
+      "title": "Verify tests pass",
+      "description": "Run the full test suite, focusing on the new tests and any related existing tests. Verify that the changes satisfy the requirements and do not introduce regressions. Fix any issues until all relevant tests pass (Green phase of TDD).",
+      "type": "task",
+      "priority": 2
+    },
+    {
+      "id": "document-changes",
+      "title": "Document changes",
+      "description": "Review the project documentation. Update README.md, API docs, or internal documentation (in docs/ folder) to reflect the changes, new features, or architectural updates. Ensure the 'AGENTS.md' or similar context files are updated if the system behavior has changed significantly.",
+      "type": "task",
+      "priority": 2
+    }
+  ]
+}

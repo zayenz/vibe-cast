@@ -125,21 +125,6 @@ When state changes (via `/api/command` or Tauri invoke):
 - **3D/Animation**: React Three Fiber, Three.js, Framer Motion
 - **Backend**: Rust, Axum, Tokio, Cpal, RealFFT, tokio-stream
 
-## Recent Improvements
-
-### Multiple Active Messages
-The system now supports multiple messages displaying simultaneously. Each message manages its own lifecycle and calls `onComplete` when finished, allowing fade-style messages to coexist with scrolling messages.
-
-### Plugin Architecture Enhancements
-- **Visualization Plugins**: All visualizations are now plugins with configurable settings schemas.
-- **Text Style Plugins**: Text display styles are plugins with their own settings.
-- **Settings UI**: Automatic settings UI generation from plugin schemas.
-
-### Code Quality
-- **TypeScript Linting**: Modern ESLint configuration with strict TypeScript rules.
-- **Rust Clippy**: All Rust code passes Clippy with `-D warnings`.
-- **Type Safety**: Improved type safety throughout the codebase.
-
 ## Key Patterns
 
 ### useAppState Hook

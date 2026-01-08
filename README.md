@@ -23,8 +23,8 @@ built with **Tauri v2** and **React**. Designed for  visualizations on secondary
   - **Techno**: A dynamic, audio-reactive 3D environment built with React Three Fiber with customizable sphere and frequency bars.
   - **Waves**: Flowing audio-reactive wave patterns for a calming, ocean-like visualization.
   - **Particles**: Dynamic particle system with customizable colors and spread.
-  - **YouTube**: Loop YouTube videos with Premium account support for ad-free playback.
-  - **Photo Slideshow**: Display images from local folders or Apple Photos with smooth transitions.
+  - **YouTube**: Loop YouTube videos with Premium account support for ad-free playback. [Documentation](docs/YOUTUBE_PLUGIN.md)
+  - **Photo Slideshow**: Display images from local folders or Apple Photos with smooth transitions. [Documentation](docs/PHOTO_SLIDESHOW_PLUGIN.md)
 - **Audio Reactivity**: Real-time FFT analysis of system audio (e.g., Spotify) using Rust.
 - **iPhone Remote**: A web-based remote control served over the LAN, accessible via QR code.
 - **Text Message Styles**: Multiple text display styles with full customization:
@@ -32,9 +32,20 @@ built with **Tauri v2** and **React**. Designed for  visualizations on secondary
   - **Fade**: Centered text that fades in and out with customizable timing and styling.
   - **Typewriter**: Character-by-character typing effect with blinking cursor.
   - **Bounce**: Playful bounce-in animation with glow effects.
+  - **Credits**: Movie-style vertical scrolling credits, perfect for loading from files.
 - **Message Management**: Create, reorder, and remove preset messages. Multiple messages can display simultaneously.
+  - **File Loading**: Load message text from external files for long content. [Documentation](docs/FILE_LOADING.md)
 - **Visualization Selection**: Choose which visualizations appear as quick-access buttons.
 - **Comprehensive Settings**: Per-visualization and per-text-style settings with real-time preview.
+
+## 📚 Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - System design and data flow.
+- [Changelog](docs/CHANGELOG.md) - History of changes and fixes.
+- **Feature Guides**:
+  - [Photo Slideshow Plugin](docs/PHOTO_SLIDESHOW_PLUGIN.md)
+  - [YouTube Plugin](docs/YOUTUBE_PLUGIN.md)
+  - [File Loading & Relative Paths](docs/FILE_LOADING.md)
 
 ## 🏗️ Architecture
 
