@@ -320,10 +320,8 @@ async fn handle_command(
                         split_enabled: None,
                         split_separator: None,
                     })
-                } else if let Ok(msg) = serde_json::from_value::<MessageConfig>(p.clone()) {
-                    Some(msg)
                 } else {
-                    None
+                    serde_json::from_value::<MessageConfig>(p.clone()).ok()
                 };
                 
                 if let Some(msg) = msg {
@@ -352,7 +350,7 @@ async fn handle_command(
                         let mut history = current_stats.get("history")
                             .and_then(|v| v.as_array())
                             .cloned()
-                            .unwrap_or_else(|| vec![]);
+                            .unwrap_or_default();
                         
                         history.push(serde_json::json!({ "timestamp": timestamp }));
                         // Keep last 50 entries

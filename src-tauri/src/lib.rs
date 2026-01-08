@@ -564,7 +564,7 @@ impl AppStateSync {
                     *t = tree.clone();
                 }
                 // Ensure flattened messages match tree
-                let flat = flatten_message_tree_value(&tree);
+                let flat = flatten_message_tree_value(tree);
                 if let Ok(mut m) = self.messages.lock() {
                     *m = flat;
                 }
@@ -1020,16 +1020,14 @@ fn list_images_in_folder(
     
     match fs::read_dir(path) {
         Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        if let Some(ext) = entry_path.extension() {
-                            let ext_str = ext.to_string_lossy().to_lowercase();
-                            if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
-                                if let Some(path_str) = entry_path.to_str() {
-                                    media_files.push(path_str.to_string());
-                                }
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_file() {
+                    if let Some(ext) = entry_path.extension() {
+                        let ext_str = ext.to_string_lossy().to_lowercase();
+                        if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
+                            if let Some(path_str) = entry_path.to_str() {
+                                media_files.push(path_str.to_string());
                             }
                         }
                     }
@@ -1149,8 +1147,7 @@ end tell
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for album in stdout.trim().split('|').filter(|s| !s.is_empty()) {
                     let album = album.trim();
-                    if album.starts_with("SHARED:") {
-                        let name = &album[7..];
+                    if let Some(name) = album.strip_prefix("SHARED:") {
                         if !all_albums.contains(&name.to_string()) {
                             all_albums.push(format!("[Shared] {}", name));
                         }
@@ -1215,8 +1212,8 @@ async fn get_photos_from_album(app: tauri::AppHandle, album_name: String) -> Res
         }
         
         // Parse album name to determine type and generate correct AppleScript
-        let (is_shared, is_folder_album, folder_name, actual_album_name) = if album_name.starts_with("[Shared] ") {
-            (true, false, String::new(), album_name[9..].to_string())
+        let (is_shared, is_folder_album, folder_name, actual_album_name) = if let Some(stripped) = album_name.strip_prefix("[Shared] ") {
+            (true, false, String::new(), stripped.to_string())
         } else if album_name.contains(" / ") {
             // Format: "FolderName / AlbumName"
             let parts: Vec<&str> = album_name.splitn(2, " / ").collect();
@@ -1269,8 +1266,8 @@ end tell
         let count_str = String::from_utf8_lossy(&count_output.stdout).trim().to_string();
         eprintln!("Album photo count result: {}", count_str);
         
-        if count_str.starts_with("ERROR:") {
-            return Err(format!("Album not found or inaccessible: {}", &count_str[6..]));
+        if let Some(err_msg) = count_str.strip_prefix("ERROR:") {
+            return Err(format!("Album not found or inaccessible: {}", err_msg));
         }
         
         let photo_count: usize = count_str.parse().unwrap_or(0);
@@ -1383,11 +1380,9 @@ pub fn run() {
             
             for i in 0..args.len() {
                 // Use --app-config to avoid conflict with Tauri's --config
-                if args[i] == "--app-config" || args[i] == "--appconfig" {
-                    if i + 1 < args.len() {
-                        config_path = Some(args[i + 1].clone());
-                        eprintln!("Found app config path argument: {}", args[i + 1]);
-                    }
+                if (args[i] == "--app-config" || args[i] == "--appconfig") && i + 1 < args.len() {
+                    config_path = Some(args[i + 1].clone());
+                    eprintln!("Found app config path argument: {}", args[i + 1]);
                 }
             }
             
