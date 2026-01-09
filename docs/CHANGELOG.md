@@ -52,6 +52,14 @@
 - **Default Content**:
     - Added "Party Countdown" folder with example messages showcasing various styles (Typewriter, Bounce with split, Scrolling Capitals).
 
+### Backend Refactoring
+- **Cargo Workspace**: Split the monolithic `src-tauri` crate into a modular workspace for improved compilation speed and separation of concerns.
+    - **`vibe-cast-app`**: Main application logic.
+    - **`vibe-cast-server`**: Axum server logic.
+    - **`vibe-cast-audio`**: Audio processing logic.
+    - **`vibe-cast-state`**: Shared state management.
+    - **`vibe-cast-models`**: Shared data types.
+
 ## Code Quality & Infrastructure
 
 ### Linting & Review

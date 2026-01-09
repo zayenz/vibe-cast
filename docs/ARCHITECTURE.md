@@ -8,11 +8,12 @@ Visualizer is designed to provide immersive visualizations on secondary displays
 
 ### Components
 
-1.  **Tauri Core (Rust Backend)**:
-    -   **Window Management**: Manages two primary windows: `main` (Control Plane) and `viz` (Visualizer Stage).
-    -   **Audio Engine**: Captures system audio via `cpal`, performs FFT using `realfft`, and broadcasts frequency data to the frontend.
-    -   **LAN Server (Axum)**: Serves a mobile-optimized remote control interface over the local network with SSE for real-time updates.
-    -   **State Broadcast**: Maintains canonical application state and broadcasts changes via both SSE (for HTTP clients) and Tauri events (for the Visualizer window).
+1.  **Tauri Core (Rust Backend - Cargo Workspace)**:
+    -   **`vibe-cast-app` (`src-tauri/crates/app`)**: Main Tauri application glue code, window management, and command handlers.
+    -   **`vibe-cast-audio` (`src-tauri/crates/audio`)**: Captures system audio via `cpal`, performs FFT processing, and manages audio state.
+    -   **`vibe-cast-server` (`src-tauri/crates/server`)**: Implements the Axum LAN server for remote control and SSE state broadcasting.
+    -   **`vibe-cast-state` (`src-tauri/crates/state`)**: Contains shared application state logic (`AppStateSync`) and synchronization primitives.
+    -   **`vibe-cast-models` (`src-tauri/crates/models`)**: Defines shared data structures and configuration types (`MessageConfig`, `BroadcastState`, etc.).
 
 2.  **Control Plane (React Window)**:
     -   The primary management interface.
