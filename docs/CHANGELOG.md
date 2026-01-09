@@ -60,6 +60,10 @@
     - **`vibe-cast-state`**: Shared state management.
     - **`vibe-cast-models`**: Shared data types.
 
+### Performance Improvements
+- **Particles Visualization**: Optimized rendering by using pre-rendered sprite sheets and `drawImage` instead of creating gradients per frame. Significantly reduced CPU usage.
+- **Fireplace Visualization**: Optimized flame animation by replacing `height` interpolation (Layout thrashing) with `transform: scaleY` (Composite only).
+
 ## Code Quality & Infrastructure
 
 ### Linting & Review
