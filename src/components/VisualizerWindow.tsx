@@ -3,7 +3,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
-import { MessageConfig, CommonVisualizationSettings, getDefaultsFromSchema } from '../plugins/types';
+import { MessageConfig, CommonVisualizationSettings, RemoteCommand, getDefaultsFromSchema } from '../plugins/types';
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
 import { useAppState } from '../hooks/useAppState';
@@ -368,10 +368,126 @@ export const VisualizerWindow: React.FC = () => {
   // Legacy compatibility
   const setMode = useStore((state) => state.setMode);
 
+  // Helper to handle remote commands (from both Tauri events and SSE)
+  const handleRemoteCommand = useCallback((command: string, payload: any) => {
+    console.log('Received remote-command:', command, payload);
+      
+    switch (command) {
+      case 'set-mode':
+        setMode(payload, false);
+        break;
+      case 'set-active-visualization':
+        setActiveVisualization(payload, false);
+        break;
+      case 'set-active-visualization-preset':
+        // Handle preset activation from remote
+        useStore.setState({ activeVisualizationPreset: payload });
+        // Also update active visualization based on preset
+        if (payload) {
+          const preset = useStore.getState().visualizationPresets.find(p => p.id === payload);
+          if (preset) {
+            setActiveVisualization(preset.visualizationId, false);
+          }
+        }
+        break;
+      case 'set-visualization-presets':
+        // Update visualization presets from remote
+        if (payload && Array.isArray(payload)) {
+          useStore.setState({ visualizationPresets: payload });
+        }
+        break;
+      case 'trigger-message': {
+        // Handle both legacy string and new MessageConfig formats
+        const msg =
+          typeof payload === 'string'
+            ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
+            : (payload as MessageConfig);
+        console.log('[VisualizerWindow] Received trigger-message:', { id: msg.id, text: msg.text?.substring(0, 50) });
+        // Avoid duplicate triggers if already active
+        const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
+        if (!isActive) {
+          console.log('[VisualizerWindow] Triggering message');
+          triggerMessage(msg, false);
+        } else {
+          console.log('[VisualizerWindow] Message already active, skipping trigger');
+        }
+        break;
+      }
+      case 'set-common-settings':
+        setCommonSettings(payload, false);
+        break;
+      case 'set-visualization-settings':
+        console.log('VisualizerWindow: Received set-visualization-settings', payload);
+        if (payload && typeof payload === 'object') {
+          setVisualizationSettings(payload as Record<string, Record<string, unknown>>, false);
+        }
+        break;
+      case 'load-configuration':
+        loadConfiguration(payload, false);
+        break;
+      case 'toggle-debug-overlay':
+        // Enable debug overlay via remote command (useful when keyboard shortcuts don't work)
+        setShowDevOverlay((v) => !v);
+        break;
+      case 'clear-active-message': {
+        if (payload && typeof payload === 'object' && 'messageId' in payload) {
+          const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
+          const ts = typeof timestamp === 'number' ? timestamp : 0;
+          useStore.getState().clearActiveMessage(messageId, ts, false);
+        }
+        break;
+      }
+      case 'play-folder':
+        // Folder playback handled by ControlPlane, visualizer just needs to display triggered messages
+        break;
+      case 'cancel-folder-playback':
+        // Cancel folder queue and clear current message
+        useStore.getState().cancelFolderPlayback(false);
+        break;
+      case 'clear-message':
+        // Clear all active messages (used by folder cancellation)
+        useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
+        break;
+      case 'report-status': {
+        console.log('[VisualizerWindow] Generating E2E report...');
+        const currentStore = useStore.getState();
+        const report = {
+          timestamp: Date.now(),
+          activeVisualization: currentStore.activeVisualization,
+          activeMessages: currentStore.activeMessages.map(am => am.message.id),
+          fps: undefined,
+          messageCount: currentStore.activeMessages.length
+        };
+        fetch(`${API_BASE}/api/e2e/report`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report)
+        })
+        .then(() => console.log('[VisualizerWindow] Sent E2E report'))
+        .catch(err => console.error('[VisualizerWindow] Failed to send E2E report', err));
+        break;
+      }
+    }
+  }, [
+    setMode, 
+    setActiveVisualization, 
+    setCommonSettings, 
+    setVisualizationSettings, 
+    loadConfiguration, 
+    triggerMessage
+  ]);
+
+  const handleRemoteCommandCallback = useCallback((cmd: RemoteCommand) => {
+    handleRemoteCommand(cmd.command, cmd.payload);
+  }, [handleRemoteCommand]);
+
   // Subscribe to SSE stream for initial configuration load
   // This ensures VisualizerWindow gets the same config as ControlPlane on startup
   // Must use the same API base as ControlPlane to connect to the Axum server
-  const { state: sseState, isConnected: sseConnected } = useAppState({ apiBase: API_BASE });
+  const { state: sseState, isConnected: sseConnected } = useAppState({ 
+    apiBase: API_BASE,
+    onCommand: handleRemoteCommandCallback
+  });
 
   // Track whether initial SSE state has been loaded
   // This is critical for production builds where the window is recreated
@@ -630,86 +746,7 @@ export const VisualizerWindow: React.FC = () => {
     // Listen for remote commands
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const unlistenRemotePromise = listen<{ command: string, payload?: any }>('remote-command', (event) => {
-      console.log('Received remote-command:', event.payload);
-      const { command, payload } = event.payload;
-      
-      switch (command) {
-        case 'set-mode':
-          setMode(payload, false);
-          break;
-        case 'set-active-visualization':
-          setActiveVisualization(payload, false);
-          break;
-        case 'set-active-visualization-preset':
-          // Handle preset activation from remote
-          useStore.setState({ activeVisualizationPreset: payload });
-          // Also update active visualization based on preset
-          if (payload) {
-            const preset = useStore.getState().visualizationPresets.find(p => p.id === payload);
-            if (preset) {
-              setActiveVisualization(preset.visualizationId, false);
-            }
-          }
-          break;
-        case 'set-visualization-presets':
-          // Update visualization presets from remote
-          if (payload && Array.isArray(payload)) {
-            useStore.setState({ visualizationPresets: payload });
-          }
-          break;
-        case 'trigger-message': {
-          // Handle both legacy string and new MessageConfig formats
-          const msg =
-            typeof payload === 'string'
-              ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
-              : (payload as MessageConfig);
-          console.log('[VisualizerWindow] Received trigger-message via Tauri event:', { id: msg.id, text: msg.text?.substring(0, 50) });
-          // Avoid duplicate triggers if already active
-          const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
-          if (!isActive) {
-            console.log('[VisualizerWindow] Triggering message via Tauri event');
-            triggerMessage(msg, false);
-          } else {
-            console.log('[VisualizerWindow] Message already active, skipping Tauri trigger');
-          }
-          break;
-        }
-        case 'set-common-settings':
-          setCommonSettings(payload, false);
-          break;
-        case 'set-visualization-settings':
-          console.log('VisualizerWindow: Received set-visualization-settings', payload);
-          if (payload && typeof payload === 'object') {
-            setVisualizationSettings(payload as Record<string, Record<string, unknown>>, false);
-          }
-          break;
-        case 'load-configuration':
-          loadConfiguration(payload, false);
-          break;
-        case 'toggle-debug-overlay':
-          // Enable debug overlay via remote command (useful when keyboard shortcuts don't work)
-          setShowDevOverlay((v) => !v);
-          break;
-        case 'clear-active-message': {
-          if (payload && typeof payload === 'object' && 'messageId' in payload) {
-            const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
-            const ts = typeof timestamp === 'number' ? timestamp : 0;
-            useStore.getState().clearActiveMessage(messageId, ts, false);
-          }
-          break;
-        }
-        case 'play-folder':
-          // Folder playback handled by ControlPlane, visualizer just needs to display triggered messages
-          break;
-        case 'cancel-folder-playback':
-          // Cancel folder queue and clear current message
-          useStore.getState().cancelFolderPlayback(false);
-          break;
-        case 'clear-message':
-          // Clear all active messages (used by folder cancellation)
-          useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
-          break;
-      }
+      handleRemoteCommand(event.payload.command, event.payload.payload);
     });
     
     // Catch errors for remote command listener
@@ -916,43 +953,6 @@ export const VisualizerWindow: React.FC = () => {
 
   return (
     <div className="w-screen h-screen bg-black relative overflow-hidden" style={{ backgroundColor: '#000' }}>
-      {/* Always-visible debug toggle button (small, unobtrusive) */}
-      {!showDevOverlay && (
-        <button
-          onClick={() => setShowDevOverlay(true)}
-          onDoubleClick={() => {
-            // Double-click to enable and persist
-            setShowDevOverlay(true);
-            try {
-              window.localStorage.setItem('vibecast:vizDebug', '1');
-            } catch {
-              // ignore
-            }
-          }}
-          style={{
-            position: 'absolute',
-            top: 4,
-            right: 4,
-            zIndex: 9998,
-            width: 24,
-            height: 24,
-            background: 'rgba(0,0,0,0.3)',
-            border: '1px solid rgba(255,255,255,0.2)',
-            borderRadius: 4,
-            color: 'rgba(255,255,255,0.5)',
-            fontSize: 10,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'ui-monospace, monospace',
-            padding: 0,
-          }}
-          title="Click to show debug overlay (double-click to persist)"
-        >
-          ⚙
-        </button>
-      )}
       {/* Debug overlay: helps diagnose issues in both dev and production */}
       {showDevOverlay && (
         <div
@@ -1007,7 +1007,7 @@ export const VisualizerWindow: React.FC = () => {
             >
               Hide
             </button>
-            Enable: Click gear icon | Add ?vizDebug=1 to URL | localStorage: vibecast:vizDebug=1
+            Enable: Cmd+Shift+D | Add ?vizDebug=1 to URL | localStorage: vibecast:vizDebug=1
           </div>
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px' }}>
             <button

@@ -209,3 +209,23 @@ The project uses modern linting tools to ensure code quality:
 2. Define a settings schema using `SettingDefinition[]`
 3. Export a `TextStylePlugin` object
 4. Register in `src/plugins/textStyles/registry.ts`
+
+## E2E Testing Architecture
+
+The application supports a "Loopback Telemetry" pattern for end-to-end testing without requiring browser automation tools (like Selenium).
+
+### Loopback Telemetry Flow
+
+1.  **Test Runner**: A Node.js script (`scripts/e2e_flow_test.mjs`) launches the app binary and connects to the backend API (`http://localhost:8080`).
+2.  **Command Dispatch**: The runner sends a `report-status` command via `POST /api/command`.
+3.  **Broadcasting**: The backend broadcasts this command to all connected clients (including the Visualizer window) via SSE (`command` event).
+    *   *Note*: This bypasses Tauri IPC restrictions for windows loaded from external URLs (localhost).
+4.  **Telemetry Collection**: The Visualizer window receives the command, gathers its internal state (active visualization, message count, etc.), and POSTs it to `POST /api/e2e/report`.
+5.  **Verification**: The backend stores the last report. The test runner polls `GET /api/e2e/last-report` to verify the visualizer state matches expectations.
+
+### API Endpoints for Testing
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/e2e/report` | POST | Used by frontend to submit status reports |
+| `/api/e2e/last-report` | GET | Used by test runner to fetch the latest report |

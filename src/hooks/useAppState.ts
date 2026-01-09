@@ -5,6 +5,7 @@ import {
   VisualizationPreset,
   TextStylePreset,
   MessageStats,
+  RemoteCommand,
   DEFAULT_COMMON_SETTINGS,
 } from '../plugins/types';
 import { visualizationRegistry, getDefaultVisualizationSettings } from '../plugins/visualizations';
@@ -54,6 +55,8 @@ export interface AppState {
 interface UseAppStateOptions {
   /** Base URL for API calls. Defaults to '' for same-origin */
   apiBase?: string;
+  /** Callback for commands received via SSE */
+  onCommand?: (command: RemoteCommand) => void;
 }
 
 /**
@@ -136,7 +139,7 @@ function parseSSEState(data: any): AppState {
  * @returns Current app state and connection status
  */
 export function useAppState(options: UseAppStateOptions = {}) {
-  const { apiBase = '' } = options;
+  const { apiBase = '', onCommand } = options;
   
   const [state, setState] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +168,18 @@ export function useAppState(options: UseAppStateOptions = {}) {
         }
       });
 
+      if (onCommand) {
+        eventSource.addEventListener('command', (event) => {
+          if (!isMounted) return;
+          try {
+            const command = JSON.parse(event.data);
+            onCommand(command);
+          } catch (e) {
+            console.error('Failed to parse SSE command:', e);
+          }
+        });
+      }
+
       eventSource.onerror = () => {
         if (!isMounted) return;
         setIsConnected(false);
@@ -190,7 +205,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
         clearTimeout(reconnectTimer);
       }
     };
-  }, [apiBase]);
+  }, [apiBase, onCommand]);
 
   return { state, error, isConnected };
 }

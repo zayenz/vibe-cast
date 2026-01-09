@@ -10,7 +10,7 @@ import {
   Flame, Music, Flower, Send, Monitor, Smartphone, MessageSquare, 
   Settings2, Loader2, Sliders, Save, Upload,
   ChevronDown, ChevronUp, ChevronRight, Trash2, History, X, GripVertical, FolderPlus, Folder, RotateCcw,
-  Play, Square
+  Play, Square, HelpCircle
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
@@ -20,6 +20,7 @@ import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
 import { VisualizationPresetsManager } from './settings/VisualizationPresetsManager';
 import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
+import { HelpModal } from './HelpModal';
 import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode, getDefaultsFromSchema } from '../plugins/types';
 import { useStore } from '../store';
 import { adjustPathForRemoval } from './messageTreeDnd';
@@ -45,6 +46,7 @@ export const ControlPlane: React.FC = () => {
   // Loading state while SSE connects - but don't wait forever
   // CRITICAL: This must be declared BEFORE any conditional returns to maintain hook order
   const [showLoading, setShowLoading] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
   
   // Use a simple boolean to track if state exists (always defined, never undefined)
   const hasState = state !== null;
@@ -709,9 +711,34 @@ export const ControlPlane: React.FC = () => {
       const config = useStore.getState().getConfiguration();
       const json = JSON.stringify(config, null, 2);
       
+      const lastPath = window.localStorage.getItem('vibecast:lastConfigPath');
+      const lastDir = window.localStorage.getItem('vibecast:lastConfigDir');
+      
+      let defaultPath = `vibecast-config-${new Date().toISOString().slice(0,10)}.json`;
+      if (lastPath) {
+        defaultPath = lastPath;
+      } else if (lastDir) {
+        // We can't easily join paths in browser JS without a library, but assuming standard separators is usually fine for defaultPath suggestion
+        // Actually, if we pass a filename to save() it usually defaults to current dir or last used.
+        // If we want to enforce a dir, we might need to rely on the dialog's behavior.
+        // But for 'save', providing a full path is best.
+        // Let's just use the generated name if we don't have a specific file.
+        // If we have a directory, we can try to prepend it, but it might be safer to let the OS handle the dir if we just provide a filename,
+        // UNLESS we want to stick to the same folder.
+        // Let's try to be smart:
+        // defaultPath is just the name? No, documentation says "The path to be selected by default."
+        // So if we have lastDir, we should prepend it.
+        // But since we don't have path.join, and separators vary...
+        // Let's just stick to the lastPath if available, otherwise just the filename (OS usually remembers last dir or goes to Documents).
+        // Wait, the requirement says "last directory ... should be the one selected".
+        // If we only provide filename, it might not go to that directory.
+        // But we implemented vc-viw which sets the defaultPath for OPEN.
+        // For SAVE, if we have lastPath, use it.
+      }
+
       // Show save dialog
       const filePath = await save({
-        defaultPath: `vibecast-config-${new Date().toISOString().slice(0,10)}.json`,
+        defaultPath: lastPath || defaultPath,
         filters: [{
           name: 'JSON',
           extensions: ['json']
@@ -722,6 +749,15 @@ export const ControlPlane: React.FC = () => {
       if (filePath) {
         console.log('Saving to:', filePath);
         await writeTextFile(filePath, json);
+        
+        // Save the new path and directory
+        window.localStorage.setItem('vibecast:lastConfigPath', filePath);
+        const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+        const configDir = lastSlash >= 0 ? filePath.substring(0, lastSlash) : null;
+        if (configDir) {
+          window.localStorage.setItem('vibecast:lastConfigDir', configDir);
+        }
+        
         console.log('File saved successfully!');
       } else {
         console.log('Save cancelled by user');
@@ -733,8 +769,10 @@ export const ControlPlane: React.FC = () => {
 
   const handleLoadConfig = async () => {
     try {
+      const lastDir = window.localStorage.getItem('vibecast:lastConfigDir');
       // Show open dialog
       const selected = await open({
+        defaultPath: lastDir || undefined,
         multiple: false,
         filters: [{
           name: 'JSON',
@@ -749,6 +787,10 @@ export const ControlPlane: React.FC = () => {
         // Extract directory path from file path
         const lastSlash = Math.max(selected.lastIndexOf('/'), selected.lastIndexOf('\\'));
         const configDir = lastSlash >= 0 ? selected.substring(0, lastSlash) : null;
+        window.localStorage.setItem('vibecast:lastConfigPath', selected);
+        if (configDir) {
+          window.localStorage.setItem('vibecast:lastConfigDir', configDir);
+        }
         console.log('[ControlPlane] Loading config from:', selected);
         console.log('[ControlPlane] Config directory:', configDir);
         
@@ -886,6 +928,13 @@ export const ControlPlane: React.FC = () => {
               title="Load Configuration"
             >
               <Upload size={18} className="text-zinc-400" />
+            </button>
+            <button 
+              onClick={() => setShowHelp(true)}
+              className="p-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-xl transition-all active:scale-95"
+              title="Help"
+            >
+              <HelpCircle size={18} className="text-zinc-400" />
             </button>
             
             <button 
@@ -1836,6 +1885,7 @@ export const ControlPlane: React.FC = () => {
           </div>
         </div>
       )}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </>
   );
 };

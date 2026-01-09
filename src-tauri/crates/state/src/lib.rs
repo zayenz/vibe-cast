@@ -4,7 +4,7 @@ use std::path::Path;
 use tokio::sync::broadcast;
 use vibe_cast_models::{
     MessageConfig, VisualizationPreset, TextStylePreset, MessageStats, 
-    CommonSettings, FolderPlaybackQueue, BroadcastState
+    CommonSettings, FolderPlaybackQueue, BroadcastState, E2EReport, RemoteCommand
 };
 
 fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
@@ -62,8 +62,12 @@ pub struct AppStateSync {
     pub server_port: Mutex<u16>,
     /// Last triggered message - persists until cleared
     pub triggered_message: Mutex<Option<MessageConfig>>,
+    /// Last E2E report received from frontend
+    pub last_e2e_report: Mutex<Option<E2EReport>>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
+    /// Broadcast channel for commands - sends transient commands (like report-status)
+    pub command_tx: broadcast::Sender<RemoteCommand>,
 }
 
 impl Default for AppStateSync {
@@ -75,6 +79,7 @@ impl Default for AppStateSync {
 impl AppStateSync {
     pub fn new() -> Self {
         let (state_tx, _) = broadcast::channel(64);
+        let (command_tx, _) = broadcast::channel(64);
         
         // Default messages
         let default_messages = vec![
@@ -294,7 +299,9 @@ impl AppStateSync {
             config_base_path: Mutex::new(None),
             server_port: Mutex::new(8080),
             triggered_message: Mutex::new(None),
+            last_e2e_report: Mutex::new(None),
             state_tx,
+            command_tx,
         }
     }
 
@@ -374,6 +381,11 @@ impl AppStateSync {
         let state = self.get_state();
         // Ignore send errors (no subscribers)
         let _ = self.state_tx.send(state);
+    }
+    
+    /// Broadcast a transient command to all SSE subscribers
+    pub fn broadcast_command(&self, command: RemoteCommand) {
+        let _ = self.command_tx.send(command);
     }
     
     /// Clear the triggered message (called when message completes)

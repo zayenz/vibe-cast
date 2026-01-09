@@ -249,6 +249,12 @@ export interface MessageStats {
   history: Array<{ timestamp: number }>;
 }
 
+export interface RemoteCommand {
+  command: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: any;
+}
+
 // ============================================================================
 // Message Configuration
 // ============================================================================

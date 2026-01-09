@@ -307,7 +307,6 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
 
       const sprites = spritesCanvasRef.current;
       const spriteSize = 64;
-      const halfSprite = spriteSize / 2;
       const steps = 36; // Must match pre-render
 
       // Batch alpha changes if possible? No, alpha depends on audio (global) + s.dim (global) but per-particle alpha?

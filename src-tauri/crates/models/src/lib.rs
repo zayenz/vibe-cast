@@ -90,6 +90,23 @@ pub struct FolderPlaybackQueue {
     pub current_index: usize,
 }
 
+/// E2E Test Report from Frontend
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2EReport {
+    pub timestamp: u64,
+    pub active_visualization: String,
+    pub active_messages: Vec<String>,
+    pub fps: Option<f64>,
+    pub message_count: usize,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct RemoteCommand {
+    pub command: String,
+    pub payload: Option<serde_json::Value>,
+}
+
 /// Application state that gets broadcast via SSE
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]

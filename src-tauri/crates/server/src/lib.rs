@@ -20,7 +20,7 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
     BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, 
-    TextStylePreset, FolderPlaybackQueue
+    TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand
 };
 
 fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
@@ -154,12 +154,6 @@ struct AppState {
     dist_path: std::path::PathBuf,
 }
 
-#[derive(Deserialize, Serialize, Clone)]
-struct RemoteCommand {
-    command: String,
-    payload: Option<serde_json::Value>,
-}
-
 pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSync>, port: u16) {
     let dist_path = if cfg!(debug_assertions) {
         let mut path = std::env::current_dir().unwrap();
@@ -196,6 +190,8 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .route("/api/state", get(get_state))
         .route("/api/status", get(get_status))
         .route("/api/events", get(state_events))
+        .route("/api/e2e/report", post(handle_e2e_report))
+        .route("/api/e2e/last-report", get(get_last_e2e_report))
         .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
         .fallback(get(serve_spa))
         .layer(CorsLayer::permissive())
@@ -748,6 +744,9 @@ async fn handle_command(
     
     // Broadcast state update to all SSE subscribers
     state.app_state_sync.broadcast(triggered_message.clone());
+
+    // Also broadcast the command itself (for clients that don't rely on state or need specific signals)
+    state.app_state_sync.broadcast_command(payload.clone());
     
     // Also emit to Tauri windows (for VibeCast which uses Tauri events for audio sync)
     let _ = state.app_handle.emit("remote-command", &payload);
@@ -765,24 +764,51 @@ async fn get_status() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "online" }))
 }
 
+async fn handle_e2e_report(
+    State(state): State<AppState>,
+    Json(report): Json<E2EReport>,
+) -> Json<serde_json::Value> {
+    println!("[E2E] Received report: {:?}", report);
+    if let Ok(mut m) = state.app_state_sync.last_e2e_report.lock() {
+        *m = Some(report);
+    }
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn get_last_e2e_report(State(state): State<AppState>) -> Json<Option<E2EReport>> {
+    let report = state.app_state_sync.last_e2e_report.lock()
+        .ok()
+        .and_then(|r| r.clone());
+    Json(report)
+}
+
 /// SSE endpoint that streams state updates to clients
 async fn state_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Subscribe to the broadcast channel
-    let rx = state.app_state_sync.state_tx.subscribe();
+    // Subscribe to the broadcast channels
+    let rx_state = state.app_state_sync.state_tx.subscribe();
+    let rx_command = state.app_state_sync.command_tx.subscribe();
     
     // Send initial state immediately so clients don't have to wait
     let initial_state = state.app_state_sync.get_state();
     
     // Convert broadcast receiver to a stream, mapping directly to SSE events
     // filter_map skips lagged errors (when client is slower than broadcast rate)
-    let broadcast_stream = BroadcastStream::new(rx)
+    let state_stream = BroadcastStream::new(rx_state)
         .filter_map(|result| async move { result.ok() })
         .map(|broadcast_state: BroadcastState| -> Result<Event, Infallible> {
             Ok(Event::default()
                 .event("state")
                 .data(serde_json::to_string(&broadcast_state).unwrap_or_default()))
+        });
+        
+    let command_stream = BroadcastStream::new(rx_command)
+        .filter_map(|result| async move { result.ok() })
+        .map(|command: RemoteCommand| -> Result<Event, Infallible> {
+            Ok(Event::default()
+                .event("command")
+                .data(serde_json::to_string(&command).unwrap_or_default()))
         });
     
     // Prepend with initial state
@@ -792,7 +818,9 @@ async fn state_events(
             .data(serde_json::to_string(&initial_state).unwrap_or_default()))
     });
     
-    let combined_stream = initial_event.chain(broadcast_stream);
+    // Merge streams
+    let combined_stream = initial_event
+        .chain(futures::stream::select(state_stream, command_stream));
     
     Sse::new(combined_stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
