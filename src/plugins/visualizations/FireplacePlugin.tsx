@@ -214,7 +214,9 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
               const opacity = 0.6 + rv.opacityOffset;
 
               if (Math.abs(apply.flameHeights[i] - height) > 0.15) {
-                flameEl.style.setProperty('--vibecast-flame-height', `${height.toFixed(2)}%`);
+                // Combine stable X offset with dynamic Y scale
+                // height is in %, so we divide by 100 for scale factor
+                flameEl.style.transform = `translateX(${rv.xOffset}px) scaleY(${Math.max(0, height / 100)})`;
                 apply.flameHeights[i] = height;
               }
               if (Math.abs(apply.flameOpacities[i] - opacity) > eps) {
@@ -276,9 +278,10 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
                 ref={(el) => { flameRefs.current[i] = el; }}
                 className="w-8 bg-gradient-to-t from-red-600 via-orange-500 to-yellow-200 rounded-t-full blur-sm mix-blend-screen"
                 style={{ 
-                  transform: `translateX(${flameRandomValues[i].xOffset}px)`,
-                  willChange: 'height, opacity',
-                  height: 'var(--vibecast-flame-height, 60%)',
+                  transformOrigin: 'bottom',
+                  transform: `translateX(${flameRandomValues[i].xOffset}px) scaleY(0.6)`, // Initial state
+                  willChange: 'transform, opacity',
+                  height: '100%', // Fixed height, scaled via transform
                 }}
               />
             ))}

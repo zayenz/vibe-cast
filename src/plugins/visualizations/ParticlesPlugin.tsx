@@ -127,6 +127,7 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
   }, [audioData, intensity]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const spritesCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const audioIntensityRef = useRef<number>(audioIntensity);
   const settingsRef = useRef({
@@ -155,10 +156,67 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
     };
   }, [particleCount, particleSize, speed, particleColor, colorful, spread, dim]);
 
+  // Pre-render sprites
+  useEffect(() => {
+    // Create or get offscreen canvas
+    if (!spritesCanvasRef.current) {
+      spritesCanvasRef.current = document.createElement('canvas');
+    }
+    const canvas = spritesCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const spriteSize = 64; // Enough for max glow
+    const half = spriteSize / 2;
+    const radius = 16; // Base radius for the gradient
+
+    if (colorful) {
+      // 36 sprites for 360 degrees (10 deg steps)
+      const steps = 36;
+      canvas.width = spriteSize * steps;
+      canvas.height = spriteSize;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < steps; i++) {
+        const hue = i * 10;
+        const x = i * spriteSize + half;
+        const y = half;
+        
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        // Using high alpha in sprite, controlled by globalAlpha during draw
+        grad.addColorStop(0, `hsla(${hue}, 85%, 65%, 1)`);
+        grad.addColorStop(1, `hsla(${hue}, 85%, 65%, 0)`);
+        
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Single sprite
+      canvas.width = spriteSize;
+      canvas.height = spriteSize;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      const rgb = hexToRgb(particleColor) ?? { r: 245, g: 158, b: 11 };
+      const x = half;
+      const y = half;
+      
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      grad.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+      grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }, [colorful, particleColor]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency in backbuffer if we fillRect
     if (!ctx) return;
 
     const resize = () => {
@@ -216,7 +274,7 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
       const h = canvas.height || 1;
       const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
-      // Trails: fade to black with dim and speed. Higher speed => slightly shorter trails.
+      // Trails: fade to black with dim and speed.
       const trail = clamp(0.10 + (1 - s.dim) * 0.25 + (s.speed - 1) * 0.02, 0.08, 0.35);
       ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = `rgba(0, 0, 0, ${trail})`;
@@ -227,18 +285,46 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
 
       const audio = clamp(audioIntensityRef.current, 0, 1);
       const baseSize = Math.max(1.5, s.particleSize) * dpr;
-      const size = baseSize * (1 + audio * 2.25);
+      
+      // Calculate visual scale factor. 
+      // Sprite is 64x64, drawn radius ~16px (half size).
+      // We want drawn radius to be `size * (2.2 + audio * 1.8)`.
+      // Target radius = baseSize * (1 + audio*2.25) * (2.2...)
+      // Let's match previous visuals: 
+      // previous glow radius = size * (2.2 + audio * 1.8) approx.
+      // size = baseSize * (1 + audio * 2.25).
+      // So target Radius ~= baseSize * 3 * 3 ~= 9 * baseSize.
+      // Sprite source radius is 16.
+      // Scale factor = Target Radius / 16.
+      
+      const particleScale = baseSize * (1 + audio * 2.25) / 16 * (s.colorful ? 2.2 : 2.0); // Tuning to match previous look
+      
       const speedMul = s.speed * (0.75 + audio * 0.9);
 
-      // Flow-field params: "spread" controls turbulence/field strength.
-      const fieldScale = (0.0012 / dpr) * (1.15 / Math.max(0.5, s.spread)); // smaller scale => broader flows
+      const fieldScale = (0.0012 / dpr) * (1.15 / Math.max(0.5, s.spread)); 
       const fieldStrength = (75 + s.spread * 90) * (0.65 + audio * 1.35);
       const drag = 0.985 - clamp((s.spread - 1.5) * 0.01, -0.02, 0.02);
 
-      const fixedRgb = hexToRgb(s.particleColor) ?? { r: 245, g: 158, b: 11 };
+      const sprites = spritesCanvasRef.current;
+      const spriteSize = 64;
+      const halfSprite = spriteSize / 2;
+      const steps = 36; // Must match pre-render
+
+      // Batch alpha changes if possible? No, alpha depends on audio (global) + s.dim (global) but per-particle alpha?
+      // Previous: alpha = clamp(0.15 + audio * 0.55, ...) * s.dim.
+      // This is global! Wait.
+      // No, `audio` is global. `s.dim` is global.
+      // So alpha IS global for all particles in this frame!
+      // This is great. We can set globalAlpha ONCE.
+      
+      const baseAlpha = s.colorful 
+        ? clamp(0.15 + audio * 0.55, 0.15, 0.75) * s.dim
+        : clamp(0.12 + audio * 0.55, 0.12, 0.70) * s.dim;
+        
+      ctx.globalAlpha = baseAlpha;
 
       for (const p of particlesRef.current) {
-        // Curl-ish flow: rotate based on sin/cos field for swirling motion
+        // Curl-ish flow
         const nx = p.x * fieldScale;
         const ny = p.y * fieldScale;
         const t = now * 0.00025;
@@ -246,46 +332,34 @@ const ParticlesVisualization: React.FC<VisualizationProps> = ({
           Math.sin(nx * 6.0 + t * 2.1 + p.seed * 10) +
           Math.cos(ny * 5.0 - t * 1.7 + p.seed * 7) +
           Math.sin((nx + ny) * 3.0 + t * 1.3);
-        const angle = a * Math.PI; // ~[-pi, pi]
+        const angle = a * Math.PI;
         const ax = Math.cos(angle) * fieldStrength;
         const ay = Math.sin(angle) * fieldStrength;
 
-        // Integrate
         p.vx = (p.vx + ax * dt) * drag;
         p.vy = (p.vy + ay * dt) * drag;
         p.x = wrap(p.x + p.vx * dt * speedMul, w);
         p.y = wrap(p.y + p.vy * dt * speedMul, h);
 
-        // Color
-        let r = fixedRgb.r;
-        let g = fixedRgb.g;
-        let b = fixedRgb.b;
-        if (s.colorful) {
-          // hue cycling based on time + per-particle hue
-          const hue = (p.hue + now * 0.02) % 360;
-          // Cheap HSL->RGB approximation via canvas: set fillStyle to hsl and read back is expensive,
-          // so we keep it as an hsl string for fillStyle directly.
-          const alpha = clamp(0.15 + audio * 0.55, 0.15, 0.75) * s.dim;
-          const glow = size * (2.2 + audio * 1.8);
-          const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, glow);
-          grad.addColorStop(0, `hsla(${hue}, 85%, 65%, ${alpha})`);
-          grad.addColorStop(1, `hsla(${hue}, 85%, 65%, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, glow, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          const alpha = clamp(0.12 + audio * 0.55, 0.12, 0.70) * s.dim;
-          const glow = size * (2.0 + audio * 1.7);
-          const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, glow);
-          grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
-          grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, glow, 0, Math.PI * 2);
-          ctx.fill();
+        // Draw
+        if (sprites) {
+          const drawSize = spriteSize * particleScale;
+          const offset = drawSize / 2;
+          
+          let sx = 0;
+          if (s.colorful) {
+            // Determine sprite index based on hue + time
+            const hue = (p.hue + now * 0.02) % 360;
+            // Map 0-360 to 0-35
+            const idx = Math.floor(hue / 10) % steps;
+            sx = idx * spriteSize;
+          }
+          
+          ctx.drawImage(sprites, sx, 0, spriteSize, spriteSize, p.x - offset, p.y - offset, drawSize, drawSize);
         }
       }
+      
+      ctx.globalAlpha = 1.0; // Reset
     };
 
     // Clear once
@@ -317,4 +391,3 @@ export const ParticlesPlugin: VisualizationPlugin = {
   settingsSchema,
   component: ParticlesVisualization,
 };
-
