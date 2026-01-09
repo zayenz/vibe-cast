@@ -1,0 +1,9 @@
+[package]
+name = "vibe-cast-audio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+cpal = "0.15"
+realfft = "3.3"

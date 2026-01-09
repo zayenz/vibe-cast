@@ -72,36 +72,44 @@ describe('Default Presets', () => {
     // Find folder
     const folder = tree.find(n => n.type === 'folder' && n.name === 'Party Countdown');
     expect(folder).toBeDefined();
-    expect(folder?.children).toHaveLength(3);
+    if (folder?.type !== 'folder') return; // Narrow type
+    
+    expect(folder.children).toHaveLength(3);
     
     // Message 1: Countdown initiated... (Typewriter)
-    const msg1 = folder?.children?.[0];
+    const msg1 = folder.children[0];
     expect(msg1?.type).toBe('message');
-    expect(msg1?.message?.text).toBe('Countdown initiated...');
-    expect(msg1?.message?.textStyle).toBe('typewriter');
+    if (msg1?.type !== 'message') return;
+    
+    expect(msg1.message.text).toBe('Countdown initiated...');
+    expect(msg1.message.textStyle).toBe('typewriter');
     
     // Message 2: 3, 2, 1 (Bounce, Split)
-    const msg2 = folder?.children?.[1];
+    const msg2 = folder.children[1];
     expect(msg2?.type).toBe('message');
-    expect(msg2?.message?.text).toBe('3, 2, 1');
-    expect(msg2?.message?.textStyle).toBe('bounce');
-    expect(msg2?.message?.splitEnabled).toBe(true);
-    expect(msg2?.message?.splitSeparator).toBe(',');
+    if (msg2?.type !== 'message') return;
+
+    expect(msg2.message.text).toBe('3, 2, 1');
+    expect(msg2.message.textStyle).toBe('bounce');
+    expect(msg2.message.splitEnabled).toBe(true);
+    expect(msg2.message.splitSeparator).toBe(',');
     
     // Message 3: It's time to party (Scrolling Capitals Centered)
-    const msg3 = folder?.children?.[2];
+    const msg3 = folder.children[2];
     expect(msg3?.type).toBe('message');
-    expect(msg3?.message?.text).toContain("It's time to party");
-    expect(msg3?.message?.textStyle).toBe('scrolling-capitals');
+    if (msg3?.type !== 'message') return;
+
+    expect(msg3.message.text).toContain("It's time to party");
+    expect(msg3.message.textStyle).toBe('scrolling-capitals');
     // Should use the centered preset OR have settings override
-    const preset = store.textStylePresets.find(p => p.id === msg3?.message?.textStylePreset);
+    const preset = store.textStylePresets.find(p => p.id === msg3.message.textStylePreset);
     if (preset) {
         expect(preset.settings.position).toBe('center');
     } else {
         // Or specific overrides if implemented that way (but requirement said "uses it")
         // But store normalization might apply defaults. 
         // Let's assume it should use the preset we defined.
-        expect(msg3?.message?.textStylePreset).toBeDefined();
+        expect(msg3.message.textStylePreset).toBeDefined();
     }
   });
 });

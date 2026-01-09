@@ -1,631 +1,12 @@
-mod audio;
-mod server;
-
-use std::sync::{Arc, Mutex};
-use std::fs;
-use std::path::Path;
+use std::sync::Arc;
 use tauri::{Manager, Emitter};
 use local_ip_address::local_ip;
-use tokio::sync::broadcast;
-use crate::audio::AudioState;
-
-fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
-    fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
-        match node {
-            serde_json::Value::Array(arr) => {
-                for n in arr {
-                    walk(n, out);
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                    match t {
-                        "message" => {
-                            if let Some(msg_val) = obj.get("message") {
-                                if let Ok(msg) = serde_json::from_value::<MessageConfig>(msg_val.clone()) {
-                                    out.push(msg);
-                                }
-                            }
-                        }
-                        "folder" => {
-                            if let Some(children) = obj.get("children") {
-                                walk(children, out);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut out = vec![];
-    walk(tree, &mut out);
-    out
-}
-
-/// Message configuration matching the frontend MessageConfig type
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageConfig {
-    pub id: String,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_file: Option<String>,
-    pub text_style: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_style_preset: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub style_overrides: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repeat_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub split_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub split_separator: Option<String>,
-}
-
-/// Visualization preset matching the frontend VisualizationPreset type
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct VisualizationPreset {
-    pub id: String,
-    pub name: String,
-    pub visualization_id: String,
-    pub settings: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
-}
-
-/// Text style preset matching the frontend TextStylePreset type
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct TextStylePreset {
-    pub id: String,
-    pub name: String,
-    pub text_style_id: String,
-    pub settings: serde_json::Value,
-}
-
-/// Message statistics matching the frontend MessageStats type
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageStats {
-    pub message_id: String,
-    pub trigger_count: u32,
-    pub last_triggered: u64,
-    pub history: Vec<TriggerHistory>,
-}
-
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct TriggerHistory {
-    pub timestamp: u64,
-}
-
-/// Common visualization settings
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub struct CommonSettings {
-    pub intensity: f64,
-    pub dim: f64,
-}
-
-impl Default for CommonSettings {
-    fn default() -> Self {
-        Self {
-            intensity: 1.0,
-            dim: 1.0,
-        }
-    }
-}
-
-/// Folder playback queue state
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct FolderPlaybackQueue {
-    pub folder_id: String,
-    pub message_ids: Vec<String>,
-    pub current_index: usize,
-}
-
-/// Application state that gets broadcast via SSE
-#[derive(Clone, serde::Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct BroadcastState {
-    pub active_visualization: String,
-    pub enabled_visualizations: Vec<String>,
-    pub common_settings: CommonSettings,
-    pub visualization_settings: serde_json::Value,
-    pub visualization_presets: Vec<VisualizationPreset>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_visualization_preset: Option<String>,
-    pub messages: Vec<MessageConfig>,
-    /// Optional message tree (folders). When present, UI should use this as canonical ordering.
-    pub message_tree: serde_json::Value,
-    pub default_text_style: String,
-    pub text_style_settings: serde_json::Value,
-    pub text_style_presets: Vec<TextStylePreset>,
-    pub message_stats: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub triggered_message: Option<MessageConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub folder_playback_queue: Option<FolderPlaybackQueue>,
-    // Legacy compatibility
-    pub mode: String,
-}
-
-/// Shared application state for syncing between windows and the remote
-pub struct AppStateSync {
-    pub active_visualization: Mutex<String>,
-    pub enabled_visualizations: Mutex<Vec<String>>,
-    pub common_settings: Mutex<CommonSettings>,
-    pub visualization_settings: Mutex<serde_json::Value>,
-    pub visualization_presets: Mutex<Vec<VisualizationPreset>>,
-    pub active_visualization_preset: Mutex<Option<String>>,
-    pub messages: Mutex<Vec<MessageConfig>>,
-    pub message_tree: Mutex<serde_json::Value>,
-    pub default_text_style: Mutex<String>,
-    pub text_style_settings: Mutex<serde_json::Value>,
-    pub text_style_presets: Mutex<Vec<TextStylePreset>>,
-    pub message_stats: Mutex<serde_json::Value>,
-    pub folder_playback_queue: Mutex<Option<FolderPlaybackQueue>>,
-    pub config_base_path: Mutex<Option<String>>,
-    pub server_port: Mutex<u16>,
-    /// Last triggered message - persists until cleared
-    pub triggered_message: Mutex<Option<MessageConfig>>,
-    /// Broadcast channel for SSE - sends full state on every change
-    pub state_tx: broadcast::Sender<BroadcastState>,
-}
-
-impl Default for AppStateSync {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AppStateSync {
-    pub fn new() -> Self {
-        let (state_tx, _) = broadcast::channel(64);
-        
-        // Default messages
-        let default_messages = vec![
-            MessageConfig {
-                id: "msg-1".to_string(),
-                text: "Countdown initiated...".to_string(),
-                text_file: None,
-                text_style: "typewriter".to_string(),
-                text_style_preset: None,
-                style_overrides: None,
-                repeat_count: None,
-                speed: None,
-                split_enabled: None,
-                split_separator: None,
-            },
-            MessageConfig {
-                id: "msg-2".to_string(),
-                text: "3, 2, 1".to_string(),
-                text_file: None,
-                text_style: "bounce".to_string(),
-                text_style_preset: None,
-                style_overrides: None,
-                repeat_count: None,
-                speed: Some(1.0),
-                split_enabled: Some(true),
-                split_separator: Some(",".to_string()),
-            },
-            MessageConfig {
-                id: "msg-3".to_string(),
-                text: "It's time to party 🥳".to_string(),
-                text_file: None,
-                text_style: "scrolling-capitals".to_string(),
-                text_style_preset: Some("scrolling-capitals-centered".to_string()),
-                style_overrides: None,
-                repeat_count: None,
-                speed: None,
-                split_enabled: None,
-                split_separator: None,
-            },
-        ];
-
-        // Default message tree
-        let default_message_tree = serde_json::json!([
-            {
-                "type": "folder",
-                "id": "party-countdown",
-                "name": "Party Countdown",
-                "children": [
-                    {
-                        "type": "message",
-                        "id": "msg-1",
-                        "message": {
-                            "id": "msg-1",
-                            "text": "Countdown initiated...",
-                            "textStyle": "typewriter"
-                        }
-                    },
-                    {
-                        "type": "message",
-                        "id": "msg-2",
-                        "message": {
-                            "id": "msg-2",
-                            "text": "3, 2, 1",
-                            "textStyle": "bounce",
-                            "splitEnabled": true,
-                            "splitSeparator": ",",
-                            "speed": 1.0
-                        }
-                    },
-                    {
-                        "type": "message",
-                        "id": "msg-3",
-                        "message": {
-                            "id": "msg-3",
-                            "text": "It's time to party 🥳",
-                            "textStyle": "scrolling-capitals",
-                            "textStylePreset": "scrolling-capitals-centered"
-                        }
-                    }
-                ]
-            }
-        ]);
-        
-        let default_viz_presets = vec![
-            VisualizationPreset {
-                id: "fireplace-default".to_string(),
-                name: "Fireplace".to_string(),
-                visualization_id: "fireplace".to_string(),
-                settings: serde_json::json!({
-                    "emberCount": 15,
-                    "flameCount": 12,
-                    "flameHeight": 1.0,
-                    "glowColor": "#ea580c",
-                    "showLogs": true
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            },
-            VisualizationPreset {
-                id: "fireplace-blue-glow".to_string(),
-                name: "Blue Glow Fireplace".to_string(),
-                visualization_id: "fireplace".to_string(),
-                settings: serde_json::json!({
-                    "emberCount": 0,
-                    "flameCount": 0,
-                    "flameHeight": 0,
-                    "glowColor": "#1e3a8a",
-                    "showLogs": false
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            },
-            VisualizationPreset {
-                id: "photo-slideshow-default".to_string(),
-                name: "Photo Slideshow".to_string(),
-                visualization_id: "photo-slideshow".to_string(),
-                settings: serde_json::json!({
-                    "sourceType": "local",
-                    "folderPath": "",
-                    "photosAlbumName": "",
-                    "displayDuration": 5,
-                    "transitionDuration": 0.8,
-                    "randomOrder": false,
-                    "enableFade": true,
-                    "enableSlide": true,
-                    "enableZoom": true,
-                    "enable3DRotate": true,
-                    "enableCube": false,
-                    "enableFlip": true,
-                    "fitMode": "cover",
-                    "smartCrop": true,
-                    "videoSound": true,
-                    "videoVolume": 50
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            },
-            VisualizationPreset {
-                id: "particles-default".to_string(),
-                name: "Particles Default".to_string(),
-                visualization_id: "particles".to_string(),
-                settings: serde_json::json!({
-                    "particleCount": 80,
-                    "particleSize": 5,
-                    "speed": 0.5,
-                    "particleColor": "#f59e0b",
-                    "colorful": true,
-                    "spread": 1.5
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            },
-            VisualizationPreset {
-                id: "youtube-default".to_string(),
-                name: "YouTube Default".to_string(),
-                visualization_id: "youtube".to_string(),
-                settings: serde_json::json!({
-                    "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
-                    "showControls": false,
-                    "muted": true,
-                    "volume": 50
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            },
-            VisualizationPreset {
-                id: "techno-default".to_string(),
-                name: "Techno Default".to_string(),
-                visualization_id: "techno".to_string(),
-                settings: serde_json::json!({
-                    "barCount": 48,
-                    "sphereScale": 1.0,
-                    "sphereDistort": 0.5,
-                    "colorScheme": "rainbow",
-                    "showSphere": false,
-                    "showBars": true
-                }),
-                enabled: Some(true),
-                order: None,
-                icon: None,
-            }
-        ];
-
-        let default_text_style_presets = vec![
-            TextStylePreset {
-                id: "scrolling-capitals-centered".to_string(),
-                name: "Scrolling Capitals Centered".to_string(),
-                text_style_id: "scrolling-capitals".to_string(),
-                settings: serde_json::json!({
-                    "position": "center",
-                    "fontSize": 12,
-                    "glowIntensity": 0.5,
-                    "color": "#ffffff"
-                }),
-            }
-        ];
-        
-        Self {
-            active_visualization: Mutex::new("fireplace".to_string()),
-            enabled_visualizations: Mutex::new(vec!["fireplace".to_string(), "techno".to_string()]),
-            common_settings: Mutex::new(CommonSettings::default()),
-            visualization_settings: Mutex::new(serde_json::json!({})),
-            visualization_presets: Mutex::new(default_viz_presets),
-            active_visualization_preset: Mutex::new(Some("fireplace-default".to_string())),
-            messages: Mutex::new(default_messages),
-            message_tree: Mutex::new(default_message_tree),
-            default_text_style: Mutex::new("scrolling-capitals".to_string()),
-            text_style_settings: Mutex::new(serde_json::json!({})),
-            text_style_presets: Mutex::new(default_text_style_presets),
-            message_stats: Mutex::new(serde_json::json!({})),
-            folder_playback_queue: Mutex::new(None),
-            config_base_path: Mutex::new(None),
-            server_port: Mutex::new(8080),
-            triggered_message: Mutex::new(None),
-            state_tx,
-        }
-    }
-
-    /// Get current state snapshot
-    pub fn get_state(&self) -> BroadcastState {
-        let active_visualization = self.active_visualization.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| "fireplace".to_string());
-        let enabled_visualizations = self.enabled_visualizations.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let common_settings = self.common_settings.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let visualization_settings = self.visualization_settings.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| serde_json::json!({}));
-        let visualization_presets = self.visualization_presets.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let active_visualization_preset = self.active_visualization_preset.lock()
-            .map(|m| m.clone())
-            .unwrap_or(None);
-        let messages = self.messages.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let message_tree = self.message_tree.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| serde_json::json!([]));
-        let default_text_style = self.default_text_style.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| "scrolling-capitals".to_string());
-        let text_style_settings = self.text_style_settings.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| serde_json::json!({}));
-        let text_style_presets = self.text_style_presets.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let message_stats = self.message_stats.lock()
-            .map(|m| m.clone())
-            .unwrap_or_else(|_| serde_json::json!({}));
-        let folder_playback_queue = self.folder_playback_queue.lock()
-            .map(|m| m.clone())
-            .unwrap_or(None);
-        let triggered_message = self.triggered_message.lock()
-            .map(|m| m.clone())
-            .unwrap_or(None);
-        
-        // Legacy mode field
-        let mode = active_visualization.clone();
-        
-        BroadcastState {
-            active_visualization,
-            enabled_visualizations,
-            common_settings,
-            visualization_settings,
-            visualization_presets,
-            active_visualization_preset,
-            messages,
-            message_tree,
-            default_text_style,
-            text_style_settings,
-            text_style_presets,
-            message_stats,
-            triggered_message,
-            folder_playback_queue,
-            mode,
-        }
-    }
-
-    /// Broadcast current state to all SSE subscribers
-    pub fn broadcast(&self, triggered_message: Option<MessageConfig>) {
-        // Store triggered_message in state so it persists across broadcasts
-        if let Ok(mut tm) = self.triggered_message.lock() {
-            *tm = triggered_message.clone();
-        }
-        let state = self.get_state();
-        // Ignore send errors (no subscribers)
-        let _ = self.state_tx.send(state);
-    }
-    
-    /// Clear the triggered message (called when message completes)
-    pub fn clear_triggered_message(&self) {
-        if let Ok(mut tm) = self.triggered_message.lock() {
-            *tm = None;
-        }
-        // Broadcast the cleared state
-        let state = self.get_state();
-        let _ = self.state_tx.send(state);
-    }
-
-    /// Load configuration from a JSON file
-    pub fn load_config_from_file(&self, config_path: &str) -> Result<(), String> {
-        let path = Path::new(config_path);
-        if !path.exists() {
-            return Err(format!("Config file does not exist: {}", config_path));
-        }
-        
-        // Extract and set the config base path (directory containing the config file)
-        if let Some(parent) = path.parent() {
-            let base_path = parent.to_string_lossy().to_string();
-            eprintln!("[Rust] Setting config base path from file: {}", base_path);
-            if let Ok(mut m) = self.config_base_path.lock() {
-                *m = Some(base_path);
-            }
-        }
-        
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-        
-        let config: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
-        
-        // Apply configuration similar to the "load-configuration" command handler
-        if let Some(obj) = config.as_object() {
-            if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
-                if let Ok(mut m) = self.active_visualization.lock() {
-                    *m = viz.to_string();
-                }
-            }
-            if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
-                if let Ok(mut m) = self.enabled_visualizations.lock() {
-                    *m = vizs.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect();
-                }
-            }
-            if let Some(settings) = obj.get("commonSettings") {
-                if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
-                    if let Ok(mut m) = self.common_settings.lock() {
-                        *m = s;
-                    }
-                }
-            }
-            if let Some(settings) = obj.get("visualizationSettings") {
-                if let Ok(mut m) = self.visualization_settings.lock() {
-                    *m = settings.clone();
-                }
-            }
-            if let Some(msgs) = obj.get("messages") {
-                if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
-                    if let Ok(mut m) = self.messages.lock() {
-                        *m = messages;
-                    }
-                }
-            }
-            if let Some(tree) = obj.get("messageTree") {
-                if let Ok(mut t) = self.message_tree.lock() {
-                    *t = tree.clone();
-                }
-                // Ensure flattened messages match tree
-                let flat = flatten_message_tree_value(tree);
-                if let Ok(mut m) = self.messages.lock() {
-                    *m = flat;
-                }
-            } else {
-                // If no tree was provided, build a flat tree from messages
-                if let Ok(m) = self.messages.lock() {
-                    if let Ok(mut t) = self.message_tree.lock() {
-                        *t = serde_json::json!(
-                            m.iter()
-                                .map(|msg| serde_json::json!({
-                                    "type": "message",
-                                    "id": msg.id,
-                                    "message": msg
-                                }))
-                                .collect::<Vec<serde_json::Value>>()
-                        );
-                    }
-                }
-            }
-            if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
-                if let Ok(mut m) = self.default_text_style.lock() {
-                    *m = style.to_string();
-                }
-            }
-            if let Some(settings) = obj.get("textStyleSettings") {
-                if let Ok(mut m) = self.text_style_settings.lock() {
-                    *m = settings.clone();
-                }
-            }
-            if let Some(presets) = obj.get("visualizationPresets") {
-                if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
-                    if let Ok(mut m) = self.visualization_presets.lock() {
-                        *m = p;
-                    }
-                }
-            }
-            if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
-                if let Ok(mut m) = self.active_visualization_preset.lock() {
-                    *m = Some(preset_id.to_string());
-                }
-            }
-            if let Some(presets) = obj.get("textStylePresets") {
-                if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
-                    if let Ok(mut m) = self.text_style_presets.lock() {
-                        *m = p;
-                    }
-                }
-            }
-            if let Some(stats) = obj.get("messageStats") {
-                if let Ok(mut m) = self.message_stats.lock() {
-                    *m = stats.clone();
-                }
-            }
-        }
-        
-        // Broadcast the updated state
-        self.broadcast(None);
-        
-        Ok(())
-    }
-}
+use vibe_cast_audio::AudioState;
+use vibe_cast_state::AppStateSync;
+use vibe_cast_models::{
+    MessageConfig, VisualizationPreset, TextStylePreset, MessageStats, 
+    CommonSettings, flatten_message_tree_value
+};
 
 #[tauri::command]
 fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> serde_json::Value {
@@ -647,6 +28,7 @@ fn get_audio_data(state: tauri::State<'_, AudioState>) -> Vec<f32> {
 
 /// Helper function to resolve paths relative to config base path
 fn resolve_path(path: &str, base_path: Option<&str>) -> String {
+    use std::path::Path;
     let p = Path::new(path);
     
     // If absolute, return as-is
@@ -703,7 +85,8 @@ fn load_message_text_file(
     state: tauri::State<'_, Arc<AppStateSync>>,
     file_path: String
 ) -> Result<String, String> {
-    let base_path_opt = state.config_base_path.lock()
+    use std::fs;
+    let base_path_opt = state.config_base_path.lock() 
         .ok()
         .and_then(|p| p.clone());
     
@@ -783,7 +166,7 @@ fn emit_state_change(
         "SET_ENABLED_VISUALIZATIONS" => {
             if let Some(vizs) = payload_value.as_array() {
                 if let Ok(mut m) = state.enabled_visualizations.lock() {
-                    *m = vizs.iter()
+                    *m = vizs.iter() 
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                 }
@@ -899,7 +282,7 @@ fn emit_state_change(
                 }
                 if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
                     if let Ok(mut m) = state.enabled_visualizations.lock() {
-                        *m = vizs.iter()
+                        *m = vizs.iter() 
                             .filter_map(|v| v.as_str().map(|s| s.to_string()))
                             .collect();
                     }
@@ -923,9 +306,30 @@ fn emit_state_change(
                         }
                     }
                 }
+                // Message tree (folders) - canonical ordering/structure if present
                 if let Some(tree) = obj.get("messageTree") {
                     if let Ok(mut t) = state.message_tree.lock() {
                         *t = tree.clone();
+                    }
+                    // Ensure flattened messages match tree
+                    let flat = flatten_message_tree_value(tree);
+                    if let Ok(mut m) = state.messages.lock() {
+                        *m = flat;
+                    }
+                } else {
+                    // If no tree was provided, keep a flat tree representation of messages
+                    if let Ok(m) = state.messages.lock() {
+                        if let Ok(mut t) = state.message_tree.lock() {
+                            *t = serde_json::json!(
+                                m.iter()
+                                    .map(|msg| serde_json::json!({ 
+                                        "type": "message", 
+                                        "id": msg.id, 
+                                        "message": msg 
+                                    }))
+                                    .collect::<Vec<serde_json::Value>>()
+                            );
+                        }
                     }
                 }
                 if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
@@ -979,7 +383,7 @@ fn emit_state_change(
     state.broadcast(triggered_message.clone());
     
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
-    let _ = handle.emit("state-changed", serde_json::json!({
+    let _ = handle.emit("state-changed", serde_json::json!({ 
         "type": event_type,
         "payload": payload_value
     }));
@@ -996,7 +400,7 @@ fn list_images_in_folder(
     eprintln!("Listing media files in folder: {}", folder_path);
     
     // Resolve path relative to config base path
-    let base_path_opt = state.config_base_path.lock()
+    let base_path_opt = state.config_base_path.lock() 
         .ok()
         .and_then(|p| p.clone());
     let resolved = resolve_path(&folder_path, base_path_opt.as_deref());
@@ -1058,30 +462,30 @@ async fn get_photos_albums(app: tauri::AppHandle) -> Result<Vec<String>, String>
         eprintln!("=== get_photos_albums CALLED ===");
         
         // First, get regular albums and folder albums
-        let script = r#"
-tell application "Photos"
-    set albumNames to {}
-    
-    -- Get regular albums (top-level)
-    repeat with anAlbum in albums
-        set end of albumNames to name of anAlbum
-    end repeat
-    
-    -- Get folders and albums inside folders
-    -- We use "FOLDER:albumname" format to identify folder albums
-    repeat with aFolder in folders
-        try
-            repeat with anAlbum in albums of aFolder
-                set end of albumNames to ("FOLDER:" & (name of aFolder) & ":" & (name of anAlbum))
-            end repeat
-        end try
-    end repeat
-    
-    set AppleScript's text item delimiters to "|"
-    set albumString to albumNames as text
-    set AppleScript's text item delimiters to ""
-    return albumString
-end tell
+        let script = r#" 
+            tell application "Photos" 
+                set albumNames to {} 
+                
+                -- Get regular albums (top-level)
+                repeat with anAlbum in albums
+                    set end of albumNames to name of anAlbum
+                end repeat
+                
+                -- Get folders and albums inside folders
+                -- We use "FOLDER:albumname" format to identify folder albums
+                repeat with aFolder in folders
+                    try
+                        repeat with anAlbum in albums of aFolder
+                            set end of albumNames to ("FOLDER:" & (name of aFolder) & ":" & (name of anAlbum))
+                        end repeat
+                    end try
+                end repeat
+                
+                set AppleScript's text item delimiters to "|"
+                set albumString to albumNames as text
+                set AppleScript's text item delimiters to ""
+                return albumString
+            end tell
         "#;
         
         let shell = app.shell();
@@ -1098,15 +502,21 @@ end tell
             
             for album in stdout.trim().split('|').filter(|s| !s.is_empty()) {
                 let album = album.trim();
-                if album.starts_with("FOLDER:") {
-                    // Parse "FOLDER:foldername:albumname" format
-                    let parts: Vec<&str> = album.splitn(3, ':').collect();
-                    if parts.len() == 3 {
-                        // Display as "foldername / albumname" but keep the FOLDER: prefix internally
-                        all_albums.push(format!("{} / {}", parts[1], parts[2]));
+                if let Some(name) = album.strip_prefix("SHARED:") {
+                    if !all_albums.contains(&name.to_string()) {
+                        all_albums.push(format!("[Shared] {}", name));
                     }
                 } else {
-                    all_albums.push(album.to_string());
+                    if album.starts_with("FOLDER:") {
+                        // Parse "FOLDER:foldername:albumname" format
+                        let parts: Vec<&str> = album.splitn(3, ':').collect();
+                        if parts.len() == 3 {
+                            // Display as "foldername / albumname" but keep the FOLDER: prefix internally
+                            all_albums.push(format!("{} / {}", parts[1], parts[2]));
+                        }
+                    } else {
+                        all_albums.push(album.to_string());
+                    }
                 }
             }
         } else {
@@ -1115,26 +525,26 @@ end tell
         }
         
         // Try to get shared albums (may not work on all macOS versions)
-        let shared_script = r#"
-tell application "Photos"
-    set sharedNames to {}
-    try
-        -- Try to access containers which might include shared albums
-        repeat with c in containers
-            try
-                set cName to name of c
-                if cName is not in {"Photos", "People", "Places", "Imports", "Recently Deleted"} then
-                    set end of sharedNames to ("SHARED:" & cName)
-                end if
-            end try
-        end repeat
-    end try
-    
-    set AppleScript's text item delimiters to "|"
-    set sharedString to sharedNames as text
-    set AppleScript's text item delimiters to ""
-    return sharedString
-end tell
+        let shared_script = r#" 
+            tell application "Photos" 
+                set sharedNames to {} 
+                try
+                    -- Try to access containers which might include shared albums
+                    repeat with c in containers
+                        try
+                            set cName to name of c
+                            if cName is not in {"Photos", "People", "Places", "Imports", "Recently Deleted"} then
+                                set end of sharedNames to ("SHARED:" & cName)
+                            end if
+                        end try
+                    end repeat
+                end try
+                
+                set AppleScript's text item delimiters to "|"
+                set sharedString to sharedNames as text
+                set AppleScript's text item delimiters to ""
+                return sharedString
+            end tell
         "#;
         
         let shared_output = shell.command("osascript")
@@ -1181,7 +591,7 @@ async fn get_photos_from_album(app: tauri::AppHandle, album_name: String) -> Res
         let temp_path = temp_dir.to_string_lossy().to_string();
         
         // Generate cache key
-        let cache_key: String = album_name.chars()
+        let cache_key: String = album_name.chars() 
             .filter(|c| c.is_alphanumeric() || *c == ' ')
             .collect::<String>()
             .replace(' ', "_");
@@ -1231,29 +641,29 @@ async fn get_photos_from_album(app: tauri::AppHandle, album_name: String) -> Res
         
         // Build the AppleScript to get and export photos
         let album_accessor = if is_folder_album {
-            format!(r#"album "{}" of folder "{}""#, 
+            format!(r#"album \"{}\" of folder \"{}\""#, 
                     actual_album_name.replace("\"", "\\\""),
                     folder_name.replace("\"", "\\\""))
         } else if is_shared {
             // Shared albums might need different access
-            format!(r#"container "{}""#, actual_album_name.replace("\"", "\\\""))
+            format!(r#"container \"{}\""#, actual_album_name.replace("\"", "\\\""))
         } else {
-            format!(r#"album "{}""#, actual_album_name.replace("\"", "\\\""))
+            format!(r#"album \"{}\""#, actual_album_name.replace("\"", "\\\""))
         };
         
         eprintln!("Album accessor: {}", album_accessor);
         
         // First, try to get photo count to verify album exists
-        let count_script = format!(r#"
-tell application "Photos"
-    try
-        set theAlbum to {}
-        set photoCount to count of media items of theAlbum
-        return photoCount
-    on error errMsg
-        return "ERROR:" & errMsg
-    end try
-end tell
+        let count_script = format!(r#" 
+            tell application "Photos" 
+                try
+                    set theAlbum to {} 
+                    set photoCount to count of media items of theAlbum
+                    return photoCount
+                on error errMsg
+                    return "ERROR:" & errMsg
+                end try
+            end tell
         "#, album_accessor);
         
         let shell = app.shell();
@@ -1278,28 +688,28 @@ end tell
         eprintln!("Album has {} photos, starting export...", photo_count);
         
         // Now export the photos
-        let export_script = format!(r#"
-tell application "Photos"
-    set theAlbum to {}
-    set photoList to {{}}
-    set exportFolder to POSIX file "{}" as alias
-    
-    repeat with aPhoto in media items of theAlbum
-        try
-            set exportedFiles to export {{aPhoto}} to exportFolder with using originals
-            repeat with exportedFile in exportedFiles
-                set end of photoList to POSIX path of exportedFile
-            end repeat
-        on error errMsg
-            -- Log but continue
-        end try
-    end repeat
-    
-    set AppleScript's text item delimiters to "|"
-    set photoString to photoList as text
-    set AppleScript's text item delimiters to ""
-    return photoString
-end tell
+        let export_script = format!(r#" 
+            tell application "Photos" 
+                set theAlbum to {} 
+                set photoList to {{}} 
+                set exportFolder to POSIX file "{}" as alias
+                
+                repeat with aPhoto in media items of theAlbum
+                    try
+                        set exportedFiles to export {{aPhoto}} to exportFolder with using originals
+                        repeat with exportedFile in exportedFiles
+                            set end of photoList to POSIX path of exportedFile
+                        end repeat
+                    on error errMsg
+                        -- Log but continue
+                    end try
+                end repeat
+                
+                set AppleScript's text item delimiters to "|"
+                set photoString to photoList as text
+                set AppleScript's text item delimiters to ""
+                return photoString
+            end tell
         "#, album_accessor, temp_path.replace("\"", "\\\""));
         
         eprintln!("Executing export script ({} photos)...", photo_count);
@@ -1317,7 +727,7 @@ end tell
         }
         
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let photos: Vec<String> = stdout.trim()
+        let photos: Vec<String> = stdout.trim() 
             .split('|')
             .filter(|s| !s.is_empty())
             .map(|s| s.trim().to_string())
@@ -1420,14 +830,14 @@ pub fn run() {
             app.manage(app_state_sync.clone());
             
             // Start audio capture and manage the state to keep the stream alive
-            let audio_state = audio::start_audio_capture(handle);
+            let audio_state = vibe_cast_audio::start_audio_capture(handle);
             app.manage(audio_state);
 
             // Start LAN server with shared state
             let handle = app.handle().clone();
             let server_state = app_state_sync.clone();
             tauri::async_runtime::spawn(async move {
-                server::start_server(handle, server_state, 8080).await;
+                vibe_cast_server::start_server(handle, server_state, 8080).await;
             });
 
             // In production, recreate windows to use HTTP URLs (for YouTube compatibility)
@@ -1448,7 +858,7 @@ pub fn run() {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     
                     // Get the server port
-                    let port = state_for_windows.server_port.lock()
+                    let port = state_for_windows.server_port.lock() 
                         .map(|p| *p)
                         .unwrap_or(8080);
                     

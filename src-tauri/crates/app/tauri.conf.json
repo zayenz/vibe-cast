@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.zayenz.vibe-cast",
   "build": {
-    "beforeDevCommand": "npm run dev:tauri",
+    "beforeDevCommand": "cd ../.. && npm run dev:tauri",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "beforeBuildCommand": "cd ../.. && npm run build",
+    "frontendDist": "../../../dist"
   },
   "app": {
     "windows": [
@@ -54,7 +54,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist": "dist"
+      "../../../dist": "dist"
     }
   }
 }

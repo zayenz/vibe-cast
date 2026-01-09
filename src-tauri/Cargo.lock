@@ -5040,16 +5040,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vibe-cast-audio"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "realfft",
+ "tauri",
+]
+
+[[package]]
+name = "vibe-cast-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "vibe-cast-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tokio",
+ "tokio-stream",
+ "tower-http 0.5.2",
+ "vibe-cast-models",
+ "vibe-cast-state",
+]
+
+[[package]]
+name = "vibe-cast-state"
+version = "0.1.0"
+dependencies = [
+ "local-ip-address",
+ "serde",
+ "serde_json",
+ "tokio",
+ "vibe-cast-models",
+]
+
+[[package]]
 name = "vibe_cast"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "cpal",
- "futures",
  "local-ip-address",
- "realfft",
  "serde",
  "serde_json",
  "tauri",
@@ -5059,8 +5097,10 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tokio",
- "tokio-stream",
- "tower-http 0.5.2",
+ "vibe-cast-audio",
+ "vibe-cast-models",
+ "vibe-cast-server",
+ "vibe-cast-state",
 ]
 
 [[package]]

@@ -17,7 +17,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
-use crate::{AppStateSync, BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, TextStylePreset, FolderPlaybackQueue};
+use vibe_cast_state::AppStateSync;
+use vibe_cast_models::{
+    BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, 
+    TextStylePreset, FolderPlaybackQueue
+};
 
 fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
     fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
@@ -793,4 +797,3 @@ async fn state_events(
     Sse::new(combined_stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
-
