@@ -60,7 +60,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
     readyImages
   } = usePhotoSlideshow(demoSettings, onBeforeAdvance);
   
-  // Trigger enter animation
+  // Trigger enter animation: transition from 'enter' to 'active' after initial render
   useEffect(() => {
     if (isTransitioning && enterPhase === 'enter') {
       requestAnimationFrame(() => {
@@ -68,6 +68,14 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
           setEnterPhase('active');
         });
       });
+    }
+  }, [isTransitioning, enterPhase]);
+  
+  // Reset enterPhase when transition completes
+  useEffect(() => {
+    if (!isTransitioning && enterPhase === 'active') {
+      // Reset to 'enter' so next transition starts correctly
+      setEnterPhase('enter');
     }
   }, [isTransitioning, enterPhase]);
 
@@ -185,6 +193,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
               {/* Current media */}
               {isVideoFile(currentImage) ? (
                 <video
+                  key={`current-video-${transition}-${currentIndex}`}
                   ref={index === 0 ? (el) => {
                     onVideoRef(el);
                     if (el) el.volume = videoVolume / 100;
@@ -202,6 +211,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
               ) : (
                 <>
                   <img
+                    key={`current-${transition}-${currentIndex}`}
                     src={currentBlobUrl}
                     alt={`Photo ${currentIndex + 1}`}
                     loading="eager"
@@ -227,6 +237,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
               {isTransitioning && nextImage && nextBlobUrl && (
                 isVideoFile(nextImage) ? (
                   <video
+                    key={`next-video-${transition}-${nextIndex}`}
                     src={nextBlobUrl}
                     autoPlay
                     playsInline
@@ -239,6 +250,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
                   />
                 ) : (
                   <img
+                    key={`next-${transition}-${nextIndex}`}
                     src={nextBlobUrl}
                     alt={`Photo ${nextIndex! + 1}`}
                     loading="eager"
