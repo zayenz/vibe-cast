@@ -25,6 +25,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
   const smartCrop = getBooleanSetting(customSettings.smartCrop, true);
   const videoSound = getBooleanSetting(customSettings.videoSound, true);
   const videoVolume = getNumberSetting(customSettings.videoVolume, 50, 0, 100);
+  const markerText = getStringSetting(customSettings.markerText, '');
   
   const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
 
@@ -35,11 +36,13 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
 
   // Force fitMode to avoid mosaic logic in the grid cells (too complex/small)
   // If user selects Mosaic, treat as Contain for the demo
+  // Override displayDuration default to 2 seconds for transition demo
   const demoSettings = useMemo(() => ({
     ...customSettings,
     fitMode: getStringSetting(customSettings.fitMode, 'cover') === 'mosaic' 
       ? 'contain' 
-      : customSettings.fitMode
+      : customSettings.fitMode,
+    displayDuration: getNumberSetting(customSettings.displayDuration, 2, 1, 60)
   }), [customSettings]);
 
   const {
@@ -169,9 +172,9 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
         </div>
       )}
       
-      {!error && !loading && usingExamplePhotos && (
+      {!error && !loading && markerText && (
         <div className="absolute top-4 left-4 bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-2 z-20 pointer-events-none">
-          <span className="text-xs text-white/60 font-medium">Using example photos</span>
+          <span className="text-xs text-white/60 font-medium">{markerText}</span>
         </div>
       )}
       

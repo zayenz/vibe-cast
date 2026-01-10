@@ -212,7 +212,7 @@ function parseDefaultConfig(): Partial<AppState> {
           {};
         visualizationPresets.push({
           id: generateId(),
-          name: `${viz.name} Default`,
+          name: viz.name,
           visualizationId: viz.id,
           settings: defaultSettings,
           enabled: true,
@@ -226,7 +226,7 @@ function parseDefaultConfig(): Partial<AppState> {
     Object.entries(config.visualizationSettings).forEach(([vizId, settings]) => {
       visualizationPresets.push({
         id: generateId(),
-        name: `${vizId.charAt(0).toUpperCase() + vizId.slice(1)} Default`,
+        name: vizId.charAt(0).toUpperCase() + vizId.slice(1).replace(/-/g, ' '),
         visualizationId: vizId,
         settings,
         enabled: true,

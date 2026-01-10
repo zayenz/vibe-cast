@@ -16,7 +16,7 @@
     },
     {
       "id": "fireplace-blue-glow",
-      "name": "Blue Glow Fireplace",
+      "name": "Blue Glow",
       "visualizationId": "fireplace",
       "settings": {
         "emberCount": 0,
@@ -42,10 +42,10 @@
         "enableSlide": true,
         "enableZoom": true,
         "enable3DRotate": true,
-        "enableCube": false,
+        "enableCube": true,
         "enableFlip": true,
-        "fitMode": "cover",
-        "smartCrop": true,
+        "fitMode": "contain",
+        "smartCrop": false,
         "videoSound": true,
         "videoVolume": 50
       },
@@ -53,7 +53,7 @@
     },
     {
       "id": "particles-default",
-      "name": "Particles Default",
+      "name": "Particles",
       "visualizationId": "particles",
       "settings": {
         "particleCount": 80,
@@ -67,7 +67,7 @@
     },
     {
       "id": "youtube-default",
-      "name": "YouTube Default",
+      "name": "YouTube",
       "visualizationId": "youtube",
       "settings": {
         "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
@@ -79,7 +79,7 @@
     },
     {
       "id": "techno-default",
-      "name": "Techno Default",
+      "name": "Techno",
       "visualizationId": "techno",
       "settings": {
         "barCount": 48,

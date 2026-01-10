@@ -92,7 +92,7 @@ export const settingsSchema: SettingDefinition[] = [
     type: 'boolean',
     id: 'enableCube',
     label: 'Cube Transition',
-    default: false
+    default: true
   },
   {
     type: 'boolean',
@@ -110,13 +110,13 @@ export const settingsSchema: SettingDefinition[] = [
       { value: 'mosaic', label: 'Mosaic (2 portraits side-by-side)' },
       { value: 'fill', label: 'Fill (stretch)' }
     ],
-    default: 'cover'
+    default: 'contain'
   },
   {
     type: 'boolean',
     id: 'smartCrop',
     label: 'Smart Crop (Face Detection)',
-    default: true
+    default: false
   },
   {
     type: 'boolean',
@@ -132,6 +132,13 @@ export const settingsSchema: SettingDefinition[] = [
     max: 100,
     step: 5,
     default: 50
+  },
+  {
+    type: 'text',
+    id: 'markerText',
+    label: 'Marker Text',
+    default: '',
+    placeholder: 'Optional overlay text (e.g., "Using default photos")'
   }
 ];
 
@@ -150,6 +157,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const smartCrop = getBooleanSetting(customSettings.smartCrop, true);
   const videoSound = getBooleanSetting(customSettings.videoSound, true);
   const videoVolume = getNumberSetting(customSettings.videoVolume, 50, 0, 100);
+  const markerText = getStringSetting(customSettings.markerText, '');
   
   const [currentTransition, setCurrentTransition] = useState<TransitionType>('fade');
   const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
@@ -292,9 +300,9 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
         </div>
       )}
       
-      {!error && !loading && usingExamplePhotos && (
+      {!error && !loading && markerText && (
         <div className="absolute top-4 left-4 bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-2 z-20 pointer-events-none">
-          <span className="text-xs text-white/60 font-medium">Using example photos</span>
+          <span className="text-xs text-white/60 font-medium">{markerText}</span>
         </div>
       )}
       

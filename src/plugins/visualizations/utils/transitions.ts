@@ -31,7 +31,7 @@ export function getAvailableTransitions(settings: Record<string, unknown>): Tran
   if (getBooleanSetting(settings.enable3DRotate, true)) {
     transitions.push('rotate3DX', 'rotate3DY');
   }
-  if (getBooleanSetting(settings.enableCube, false)) {
+  if (getBooleanSetting(settings.enableCube, true)) {
     transitions.push('cube');
   }
   if (getBooleanSetting(settings.enableFlip, true)) {
@@ -96,9 +96,10 @@ export function getTransitionStyles(
       exit: { transform: 'perspective(1000px) rotateY(-90deg)', opacity: 0 }
     },
     cube: {
-      enter: { transform: 'perspective(1000px) rotateY(90deg)', opacity: 1 },
-      active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(-90deg)', opacity: 1 }
+      // Cube transition: uses X-axis rotation with full opacity (no fade) to differentiate from rotate3DY
+      enter: { transform: 'perspective(1000px) rotateX(90deg)', opacity: 1 },
+      active: { transform: 'perspective(1000px) rotateX(0deg)', opacity: 1 },
+      exit: { transform: 'perspective(1000px) rotateX(-90deg)', opacity: 1 }
     },
     flip: {
       enter: { transform: 'perspective(1000px) rotateY(180deg)', opacity: 0 },

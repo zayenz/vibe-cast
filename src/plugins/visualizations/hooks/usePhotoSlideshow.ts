@@ -218,10 +218,10 @@ export function usePhotoSlideshow(
         
         if (!targetPath) {
           try {
-            targetPath = await resolveResource('example-photos');
+            targetPath = await resolveResource('kittens');
             isExample = true;
           } catch (e) {
-            console.warn('[Photo Slideshow] Failed to resolve example photos:', e);
+            console.warn('[Photo Slideshow] Failed to resolve kittens resource:', e);
           }
         }
         
@@ -230,7 +230,7 @@ export function usePhotoSlideshow(
         }
       } else {
         try {
-           const targetPath = await resolveResource('example-photos');
+           const targetPath = await resolveResource('kittens');
            imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
            isExample = true;
         } catch (e) {
@@ -243,7 +243,7 @@ export function usePhotoSlideshow(
       
       if (imagePaths.length === 0) {
         setError(isExample 
-          ? 'No example images found.' 
+          ? 'No default images found.' 
           : 'No images found. Please select a folder or album with images.');
         setImages([]);
         setLoading(false);

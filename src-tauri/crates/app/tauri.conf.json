@@ -55,7 +55,7 @@
     ],
     "resources": {
       "../../../dist": "dist",
-      "../../resources/example-photos": "example-photos"
+      "../../resources/kittens": "kittens"
     }
   }
 }
