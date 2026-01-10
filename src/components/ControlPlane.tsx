@@ -896,7 +896,7 @@ export const ControlPlane: React.FC = () => {
 
       <div className="relative z-10 max-w-7xl mx-auto px-8 py-12">
         {/* Header */}
-        <header className="flex justify-between items-end mb-12">
+        <header className="flex flex-wrap justify-between items-end gap-y-6 mb-12">
           <div>
             <motion.div 
               initial={{ opacity: 0, y: -20 }}
