@@ -5,6 +5,48 @@ import { existsSync } from 'node:fs';
 const API_BASE = 'http://localhost:8080';
 const APP_PATH = './src-tauri/target/release/bundle/macos/VibeCast.app/Contents/MacOS/vibe_cast';
 
+async function sendCommand(command, payload) {
+    console.log(`sending command: ${command}`, JSON.stringify(payload));
+    const res = await fetch(`${API_BASE}/api/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command, payload })
+    });
+    if (!res.ok) throw new Error(`Command ${command} failed: ${res.statusText}`);
+}
+
+async function getReport() {
+    // Trigger report generation
+    await sendCommand('report-status', null);
+    
+    // Give it a moment to process and update state
+    await setTimeout(500);
+    
+    const res = await fetch(`${API_BASE}/api/e2e/last-report`);
+    if (!res.ok) throw new Error(`Failed to get report: ${res.statusText}`);
+    const text = await res.text();
+    // Check if it's JSON and not the HTML fallback
+    if (!text.startsWith('{')) return null;
+    return JSON.parse(text);
+}
+
+async function waitForCondition(description, checkFn, timeoutMs = 15000) {
+    console.log(`Waiting for: ${description}...`);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            if (await checkFn()) {
+                console.log(`✅ ${description} - PASS`);
+                return;
+            }
+        } catch (e) {
+            console.log(`Check failed: ${e.message}`);
+        }
+        await setTimeout(1000);
+    }
+    throw new Error(`Timeout waiting for: ${description}`);
+}
+
 async function main() {
   console.log('🚀 Starting E2E Flow Test...');
 
@@ -20,20 +62,17 @@ async function main() {
   // Launch App
   console.log('Launching app...');
   const appProcess = spawn(APP_PATH, [], { 
-    stdio: 'inherit', // Let it log to stdout
+    stdio: 'inherit',
     detached: false 
   });
   
   const cleanup = () => {
     console.log('Cleaning up...');
-    try {
-        process.kill(appProcess.pid);
-    } catch {}
+    try { process.kill(appProcess.pid); } catch {}
     try { execSync('node scripts/kill-port.mjs 8080'); } catch {}
   };
   
   process.on('SIGINT', () => { cleanup(); process.exit(); });
-  // process.on('exit', cleanup); // 'exit' cannot have async work, but kill is sync.
 
   try {
     // Wait for server
@@ -55,45 +94,42 @@ async function main() {
 
     await setTimeout(5000); // Give frontend time to hydrate
 
-    // 2. Poll for report with retries on sending command
-    console.log('Polling for E2E report...');
-    let report = null;
+    // 1. Verify Initial State (Fireplace)
+    await waitForCondition('Initial state is fireplace', async () => {
+        const report = await getReport();
+        console.log('Current report:', report);
+        return report && report.activeVisualization === 'fireplace';
+    });
+
+    // 2. Switch to Techno
+    console.log('Switching to techno...');
+    await sendCommand('set-active-visualization', 'techno');
     
-    for (let attempt = 0; attempt < 5; attempt++) {
-        // Send command every loop to ensure frontend gets it eventually
-        console.log(`Sending report-status command (Attempt ${attempt + 1})...`);
-        await fetch(`${API_BASE}/api/command`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: 'report-status', payload: null })
-        });
-        
-        // Wait for response
-        await setTimeout(2000);
-        
-        try {
-            const res = await fetch(`${API_BASE}/api/e2e/last-report`);
-            if (res.ok) {
-                const text = await res.text();
-                // Check if it's JSON and not the HTML fallback
-                if (text.startsWith('{')) {
-                    report = JSON.parse(text);
-                    if (report) break;
-                }
-            }
-        } catch (e) {
-            console.log(`Fetch error: ${e.message}`);
-        }
-    }
+    await waitForCondition('State changed to techno', async () => {
+        const report = await getReport();
+        console.log('Current report:', report);
+        return report && report.activeVisualization === 'techno';
+    });
 
-    if (!report) {
-      throw new Error('❌ Failed to retrieve E2E report (Expected failure during TDD phase)');
-    }
+    // 3. Trigger Message
+    console.log('Triggering message...');
+    const msgId = 'e2e-test-msg-' + Date.now();
+    await sendCommand('trigger-message', {
+        id: msgId,
+        text: 'E2E Flow Test',
+        textStyle: 'scrolling-capitals'
+    });
 
-    console.log('✅ Got Report:', report);
+    await waitForCondition('Message is active', async () => {
+        const report = await getReport();
+        console.log('Current report:', report);
+        return report && report.activeMessages.includes(msgId);
+    });
+
+    console.log('✅ All flow tests passed!');
 
   } catch (err) {
-    console.error(err.message);
+    console.error('❌ Test Failed:', err.message);
     cleanup();
     process.exit(1);
   }
