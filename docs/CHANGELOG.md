@@ -85,6 +85,9 @@
 ## Recent Updates
 
 ### Visualizations
+- **Transition Demo Slideshow**: New visualization that displays a grid of the same image, with each cell demonstrating a different transition effect simultaneously. Useful for previewing all available transitions.
+  - Reuses Photo Slideshow settings and logic.
+  - Automatically adapts grid layout to the number of enabled transitions.
 - **Example Photos**: The Photo Slideshow plugin now includes bundled example photos (abstract SVG patterns) that are used automatically if no folder path is configured. This improves the out-of-the-box experience.
 - **Pulsing Glow**: Added an optional "Pulse Glow" setting to "Scrolling Capitals" text style, which animates the glow intensity for a dynamic effect.
 

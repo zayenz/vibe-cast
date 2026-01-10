@@ -8,40 +8,21 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { resolveResource } from '@tauri-apps/api/path';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../utils/settings';
+import { FacePosition } from './faceDetection';
 import { 
-  loadFaceDetectionModels, 
-  detectFacePosition, 
-  FacePosition
-} from './faceDetection';
-
-// Helper to convert file paths to displayable URLs
-function getMediaUrl(filePath: string): string {
-  // Use Tauri's convertFileSrc for asset protocol
-  const converted = convertFileSrc(filePath);
-  console.log(`[Photo Slideshow] Media URL conversion:
-    Original: ${filePath}
-    Converted: ${converted}`);
-  return converted;
-}
-
-// Video file extensions
-const VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'];
-
-// Check if a file path is a video
-function isVideoFile(filePath: string): boolean {
-  const ext = filePath.split('.').pop()?.toLowerCase() || '';
-  return VIDEO_EXTENSIONS.includes(ext);
-}
+  TransitionType, 
+  getAvailableTransitions, 
+  getTransitionStyles 
+} from './utils/transitions';
+import { usePhotoSlideshow, isVideoFile } from './hooks/usePhotoSlideshow';
 
 // ============================================================================
 // Settings Schema
 // ============================================================================
 
-const settingsSchema: SettingDefinition[] = [
+export const settingsSchema: SettingDefinition[] = [
   {
     type: 'select',
     id: 'sourceType',
@@ -155,125 +136,6 @@ const settingsSchema: SettingDefinition[] = [
 ];
 
 // ============================================================================
-// Types
-// ============================================================================
-
-type TransitionType = 'fade' | 'slideLeft' | 'slideRight' | 'slideUp' | 'slideDown' | 
-                      'zoomIn' | 'zoomOut' | 'rotate3DX' | 'rotate3DY' | 'cube' | 'flip';
-
-interface TransitionStyle {
-  opacity?: number;
-  transform?: string;
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
-
-function getAvailableTransitions(settings: Record<string, unknown>): TransitionType[] {
-  const transitions: TransitionType[] = [];
-  
-  if (getBooleanSetting(settings.enableFade, true)) {
-    transitions.push('fade');
-  }
-  if (getBooleanSetting(settings.enableSlide, true)) {
-    transitions.push('slideLeft', 'slideRight', 'slideUp', 'slideDown');
-  }
-  if (getBooleanSetting(settings.enableZoom, true)) {
-    transitions.push('zoomIn', 'zoomOut');
-  }
-  if (getBooleanSetting(settings.enable3DRotate, true)) {
-    transitions.push('rotate3DX', 'rotate3DY');
-  }
-  if (getBooleanSetting(settings.enableCube, false)) {
-    transitions.push('cube');
-  }
-  if (getBooleanSetting(settings.enableFlip, true)) {
-    transitions.push('flip');
-  }
-  
-  return transitions.length > 0 ? transitions : ['fade'];
-}
-
-function getTransitionStyles(
-  transition: TransitionType,
-  phase: 'enter' | 'active' | 'exit'
-): TransitionStyle {
-  const styles: Record<TransitionType, Record<string, TransitionStyle>> = {
-    fade: {
-      enter: { opacity: 0 },
-      active: { opacity: 1 },
-      exit: { opacity: 0 }
-    },
-    // Symmetric slides: exit left → enter from right
-    slideLeft: {
-      enter: { transform: 'translateX(100%)', opacity: 1 },  // Enter from right
-      active: { transform: 'translateX(0)', opacity: 1 },
-      exit: { transform: 'translateX(-100%)', opacity: 1 }   // Exit to left
-    },
-    // Symmetric slides: exit right → enter from left
-    slideRight: {
-      enter: { transform: 'translateX(-100%)', opacity: 1 }, // Enter from left
-      active: { transform: 'translateX(0)', opacity: 1 },
-      exit: { transform: 'translateX(100%)', opacity: 1 }    // Exit to right
-    },
-    // Symmetric slides: exit up → enter from bottom
-    slideUp: {
-      enter: { transform: 'translateY(100%)', opacity: 1 },  // Enter from bottom
-      active: { transform: 'translateY(0)', opacity: 1 },
-      exit: { transform: 'translateY(-100%)', opacity: 1 }   // Exit to top
-    },
-    // Symmetric slides: exit down → enter from top
-    slideDown: {
-      enter: { transform: 'translateY(-100%)', opacity: 1 }, // Enter from top
-      active: { transform: 'translateY(0)', opacity: 1 },
-      exit: { transform: 'translateY(100%)', opacity: 1 }    // Exit to bottom
-    },
-    zoomIn: {
-      enter: { transform: 'scale(0.8)', opacity: 0 },
-      active: { transform: 'scale(1)', opacity: 1 },
-      exit: { transform: 'scale(1.2)', opacity: 0 }
-    },
-    zoomOut: {
-      enter: { transform: 'scale(1.2)', opacity: 0 },
-      active: { transform: 'scale(1)', opacity: 1 },
-      exit: { transform: 'scale(0.8)', opacity: 0 }
-    },
-    rotate3DX: {
-      enter: { transform: 'perspective(1000px) rotateX(90deg)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateX(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateX(-90deg)', opacity: 0 }
-    },
-    rotate3DY: {
-      enter: { transform: 'perspective(1000px) rotateY(90deg)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(-90deg)', opacity: 0 }
-    },
-    cube: {
-      enter: { transform: 'perspective(1000px) rotateY(90deg)', opacity: 1 },
-      active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(-90deg)', opacity: 1 }
-    },
-    flip: {
-      enter: { transform: 'perspective(1000px) rotateY(180deg)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(-180deg)', opacity: 0 }
-    }
-  };
-  
-  return styles[transition][phase];
-}
-
-// ============================================================================
 // Component
 // ============================================================================
 
@@ -283,566 +145,48 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
 }) => {
   const { dim } = commonSettings;
   const sourceType = getStringSetting(customSettings.sourceType, 'local');
-  const folderPath = getStringSetting(customSettings.folderPath, '');
-  const displayDuration = getNumberSetting(customSettings.displayDuration, 5, 1, 60);
   const transitionDuration = getNumberSetting(customSettings.transitionDuration, 0.8, 0.2, 3);
-  const randomOrder = getBooleanSetting(customSettings.randomOrder, false);
   const fitMode = getStringSetting(customSettings.fitMode, 'cover');
   const smartCrop = getBooleanSetting(customSettings.smartCrop, true);
   const videoSound = getBooleanSetting(customSettings.videoSound, true);
   const videoVolume = getNumberSetting(customSettings.videoVolume, 50, 0, 100);
   
-  const [images, setImages] = useState<string[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [nextIndex, setNextIndex] = useState<number | null>(null);
-  const [isTransitioning, setIsTransitioning] = useState(false);
   const [currentTransition, setCurrentTransition] = useState<TransitionType>('fade');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [faceModelsLoaded, setFaceModelsLoaded] = useState(false);
-  const [facePositions, setFacePositions] = useState<Map<string, FacePosition>>(new Map());
-  // Map from image path to ready-to-display blob URL
-  const [readyImages, setReadyImages] = useState<Map<string, string>>(new Map());
-  // Track whether images are portrait (height > width)
-  const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
-  // Track enter animation phase for incoming media (enter -> active triggers CSS transition)
   const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
-  const [usingExamplePhotos, setUsingExamplePhotos] = useState(false);
-  
-  const timerRef = useRef<number | null>(null);
-  // Store blob URLs for cleanup
-  const blobUrls = useRef<Map<string, string>>(new Map());
-  // Track in-progress loading to avoid duplicates
-  const loadingPromises = useRef<Map<string, Promise<string | null>>>(new Map());
-  // Track current video element to listen for 'ended' event
-  const currentVideoRef = useRef<HTMLVideoElement | null>(null);
-  
-  // Generate a unique key for this slideshow instance based on source
-  const storageKey = `photo-slideshow-${folderPath}`;
-  
-  // Preload media: fetch as blob, create URL, decode/preload, and return ready URL
-  const preloadMedia = useCallback(async (path: string): Promise<string | null> => {
-    // Already have a ready blob URL
-    if (blobUrls.current.has(path)) {
-      return blobUrls.current.get(path)!;
-    }
-    
-    // Already loading - wait for it
-    if (loadingPromises.current.has(path)) {
-      return loadingPromises.current.get(path)!;
-    }
-    
-    const isVideo = isVideoFile(path);
-    
-    // Start loading with timeout to prevent promise accumulation
-    const promise = (async (): Promise<string | null> => {
-      const timeoutMs = 30000; // 30 second timeout
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-      
-      try {
-        const mediaUrl = getMediaUrl(path);
-        console.log(`[Photo Slideshow] Fetching ${isVideo ? 'video' : 'image'}:`, path.split('/').pop());
-        
-        // Set up timeout that will reject the promise if it takes too long
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error(`Preload timeout after ${timeoutMs}ms`));
-          }, timeoutMs);
-        });
-        
-        // Fetch media as blob
-        const fetchPromise = (async () => {
-          const response = await fetch(mediaUrl);
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const blob = await response.blob();
-          const blobUrl = URL.createObjectURL(blob);
-          
-          if (isVideo) {
-            // For videos, preload enough data to start playing
-            const video = document.createElement('video');
-            video.preload = 'auto';
-            video.src = blobUrl;
-            
-            // Wait for video to be ready to play
-            await new Promise<void>((resolve, reject) => {
-              video.oncanplaythrough = () => resolve();
-              video.onerror = () => reject(new Error('Video load failed'));
-              // Timeout after 10 seconds
-              setTimeout(() => resolve(), 10000);
-            });
-            
-            console.log('[Photo Slideshow] Video ready:', path.split('/').pop());
-          } else {
-            // For images, ensure complete load and decode
-            const img = new Image();
-            img.src = blobUrl;
-            
-            // Wait for complete load AND decode
-            await new Promise<void>((resolve, reject) => {
-              img.onload = async () => {
-                try {
-                  // Ensure decode is complete
-                  await img.decode();
-                  
-                  // Detect orientation for mosaic mode
-                  const isPortrait = img.naturalHeight > img.naturalWidth;
-                  setImageOrientations(prev => new Map(prev).set(path, isPortrait));
-                  
-                  console.log(`[Photo Slideshow] Image ready (${img.naturalWidth}x${img.naturalHeight}, ${isPortrait ? 'portrait' : 'landscape'}):`, path.split('/').pop());
-                  resolve();
-                } catch (err) {
-                  reject(err);
-                }
-              };
-              img.onerror = () => reject(new Error('Image load failed'));
-              // Timeout after 10 seconds
-              setTimeout(() => resolve(), 10000);
-            });
-          }
-          
-          return blobUrl;
-        })();
-        
-        // Race between fetch and timeout
-        const blobUrl = await Promise.race([fetchPromise, timeoutPromise]);
-        
-        // Clear timeout if we succeeded
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        
-        // Only mark as ready after everything is complete
-        blobUrls.current.set(path, blobUrl);
-        setReadyImages(prev => new Map(prev).set(path, blobUrl));
-        loadingPromises.current.delete(path);
-        return blobUrl;
-      } catch (err) {
-        // Clear timeout on error
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        console.error('[Photo Slideshow] Failed to preload:', path, err);
-        loadingPromises.current.delete(path);
-        return null;
-      }
-    })();
-    
-    loadingPromises.current.set(path, promise);
-    return promise;
-  }, []);
-  
-  // Cleanup blob URLs and loading promises on unmount to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      console.log('[Photo Slideshow] Cleaning up blob URLs and loading promises');
-      // Clean up all blob URLs
-      blobUrls.current.forEach((url) => {
-        URL.revokeObjectURL(url);
-      });
-      blobUrls.current.clear();
-      // Clear loading promises map (promises will continue but won't be tracked)
-      loadingPromises.current.clear();
-    };
-  }, []);
-  
-  // Load face detection models on mount if smart crop is enabled
-  useEffect(() => {
-    if (smartCrop && !faceModelsLoaded) {
-      console.log('[Photo Slideshow] Loading face detection models...');
-      loadFaceDetectionModels()
-        .then(() => {
-          console.log('[Photo Slideshow] Face detection models loaded');
-          setFaceModelsLoaded(true);
-        })
-        .catch((err) => {
-          console.error('[Photo Slideshow] Failed to load face detection models:', err);
-          // Continue without face detection
-        });
-    }
-  }, [smartCrop, faceModelsLoaded]);
-  
-  // Load images from source
-  const loadImages = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      console.log('[Photo Slideshow] Loading images...', { sourceType, folderPath });
-      
-      let imagePaths: string[] = [];
-      let isExample = false;
-      
-      if (sourceType === 'local') {
-        let targetPath = folderPath;
-        
-        if (!targetPath) {
-          try {
-            targetPath = await resolveResource('example-photos');
-            console.log('[Photo Slideshow] Using example photos at:', targetPath);
-            isExample = true;
-          } catch (e) {
-            console.warn('[Photo Slideshow] Failed to resolve example photos:', e);
-          }
-        }
-        
-        if (targetPath) {
-          console.log('[Photo Slideshow] Listing images in folder:', targetPath);
-          imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
-          console.log('[Photo Slideshow] Found', imagePaths.length, 'images in folder');
-        }
-      } else {
-        console.log('[Photo Slideshow] No source configured');
-        // Fallback to example photos if nothing else configured
-        try {
-           const targetPath = await resolveResource('example-photos');
-           console.log('[Photo Slideshow] Fallback to example photos at:', targetPath);
-           imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
-           isExample = true;
-        } catch (e) {
-           console.warn('[Photo Slideshow] Failed to resolve example photos fallback:', e);
-           setLoading(false);
-           return;
-        }
-      }
-      
-      setUsingExamplePhotos(isExample);
-      
-      if (imagePaths.length === 0) {
-        console.error('[Photo Slideshow] No images found');
-        setError(isExample 
-          ? 'No example images found.' 
-          : 'No images found. Please select a folder or album with images.');
-        setImages([]);
-        setLoading(false);
-        return;
-      }
-      
-      console.log(`[Photo Slideshow] Successfully loaded ${imagePaths.length} images from ${sourceType}`);
-      
-      const orderedImages = randomOrder ? shuffleArray(imagePaths) : imagePaths;
-      setImages(orderedImages);
-      
-      // Restore saved position if available
-      let startIndex = 0;
-      try {
-        const savedPosition = localStorage.getItem(storageKey);
-        if (savedPosition) {
-          const savedIndex = parseInt(savedPosition, 10);
-          if (!isNaN(savedIndex) && savedIndex >= 0 && savedIndex < orderedImages.length) {
-            startIndex = savedIndex;
-            console.log(`[Photo Slideshow] Restored position: ${startIndex}`);
-          }
-        }
-      } catch (err) {
-        console.warn('[Photo Slideshow] Failed to restore position:', err);
-      }
-      
-      setCurrentIndex(startIndex);
-      setError(null);
-      
-      // Preload image at start position as blob before showing (so it appears instantly)
-      const firstPath = orderedImages[startIndex];
-      const firstImgUrl = getMediaUrl(firstPath);
-      
-      console.log(`[Photo Slideshow] Fetching image at position ${startIndex}/${orderedImages.length} before display...`);
-      
-      try {
-        const response = await fetch(firstImgUrl);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        
-        // Store blob URL immediately so image can be displayed
-        blobUrls.current.set(firstPath, blobUrl);
-        
-        // Show slideshow immediately - don't wait for decode
-        console.log('[Photo Slideshow] First image blob ready, showing slideshow immediately');
-        setLoading(false);
-        
-        // Decode in background and only add to readyImages when fully decoded
-        const firstImg = new Image();
-        firstImg.src = blobUrl;
-        firstImg.decode()
-          .then(() => {
-            // Detect orientation for mosaic mode
-            const isPortrait = firstImg.naturalHeight > firstImg.naturalWidth;
-            setImageOrientations(prev => new Map(prev).set(firstPath, isPortrait));
-            // Only add to readyImages after full decode (for transition readiness)
-            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
-            console.log('[Photo Slideshow] First image fully decoded');
-          })
-          .catch((err) => {
-            console.warn('[Photo Slideshow] First image decode failed (non-critical):', err);
-            // Still add to readyImages even if decode fails (better than nothing)
-            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
-          });
-        
-        // Run face detection on first image in background
-        if (smartCrop) {
-          detectFacePosition(blobUrl).then(facePos => {
-            setFacePositions(prev => new Map(prev).set(firstPath, facePos));
-          }).catch(console.error);
-        }
-      } catch (err) {
-        console.error('[Photo Slideshow] Failed to load first image:', err);
-        setLoading(false);
-      }
-      
-    } catch (err) {
-      console.error('[Photo Slideshow] ERROR loading images:', err);
-      setError(`Failed to load images: ${err instanceof Error ? err.message : String(err)}`);
-      setImages([]);
-      setLoading(false);
-    }
-  }, [sourceType, folderPath, randomOrder, storageKey]);
-  
-  // Load images when settings change
-  useEffect(() => {
-    // For local source, we allow empty folderPath (to try fallback example photos)
-    if (sourceType === 'local') {
-      loadImages();
-    } else {
-      // No valid source configured: clear loading and show guidance instead of spinning
-      setImages([]);
-      setReadyImages(new Map());
-      setError(null);
-      setLoading(false);
-    }
-  }, [loadImages, sourceType, folderPath]);
-  
-  // Save current position whenever it changes
-  useEffect(() => {
-    if (images.length === 0) return;
-    
-    try {
-      localStorage.setItem(storageKey, currentIndex.toString());
-    } catch (err) {
-      console.warn('[Photo Slideshow] Failed to save position:', err);
-    }
-  }, [currentIndex, images.length, storageKey]);
-  
-  // Proactively preload next 3 images and run face detection
-  useEffect(() => {
-    if (images.length === 0) return;
-    
-    // Preload current image and next 3
-    const indicesToPreload = [0, 1, 2, 3].map(i => (currentIndex + i) % images.length);
-    
-    indicesToPreload.forEach(async (idx) => {
-      const path = images[idx];
-      
-      // Preload image using the blob-based preload function
-      const blobUrl = await preloadMedia(path);
-      
-      // Run face detection if enabled, not already cached, and we have a blob URL
-      if (blobUrl && smartCrop && faceModelsLoaded && !facePositions.has(path)) {
-        try {
-          const facePos = await detectFacePosition(blobUrl);
-          setFacePositions(prev => new Map(prev).set(path, facePos));
-        } catch (err) {
-          console.error('[Photo Slideshow] Face detection failed:', err);
-        }
-      }
-    });
-    
-    // Clean up old blob URLs that are far from current (but keep face positions cached)
-    const keepIndices = new Set(indicesToPreload);
-    keepIndices.add((currentIndex - 1 + images.length) % images.length);
-    
-    const keysToDelete: string[] = [];
-    blobUrls.current.forEach((_, path) => {
-      const idx = images.indexOf(path);
-      if (idx >= 0 && !keepIndices.has(idx)) {
-        keysToDelete.push(path);
-      }
-    });
-    keysToDelete.forEach(key => {
-      const blobUrl = blobUrls.current.get(key);
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
-      blobUrls.current.delete(key);
-      setReadyImages(prev => {
-        const next = new Map(prev);
-        next.delete(key);
-        return next;
-      });
-    });
-    
-  }, [currentIndex, images, smartCrop, faceModelsLoaded, facePositions, preloadMedia]);
-  
-  // Auto-advance timer - starts when current media blob URL is available
-  useEffect(() => {
-    if (images.length === 0 || isTransitioning) return;
-    
-    // Clear any existing timer first to prevent multiple timers from running
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    
-    const currentPath = images[currentIndex];
-    // Start timer if we have a blob URL (image can be displayed, even if not fully decoded)
-    if (!blobUrls.current.has(currentPath)) {
-      console.log('[Photo Slideshow] Waiting for current media blob URL before starting timer...');
-      return;
-    }
-    
-    // Preload next media before timer fires
-    const nextIdx = (currentIndex + 1) % images.length;
-    const nextPath = images[nextIdx];
-    
-    // Start preloading next media immediately
-    preloadMedia(nextPath).then(blobUrl => {
-      if (blobUrl) {
-        console.log('[Photo Slideshow] Next media preloaded and ready');
-      }
-    });
-    
-    const isVideo = isVideoFile(currentPath);
-    
-    if (isVideo) {
-      // For videos, wait for the video to end before advancing
-      console.log('[Photo Slideshow] Current is video - will advance when video ends');
-      
-      const handleVideoEnded = () => {
-        console.log('[Photo Slideshow] Video ended, advancing...');
-        advanceToNext();
-      };
-      
-      // Set up event listener when video ref is available
-      if (currentVideoRef.current) {
-        currentVideoRef.current.addEventListener('ended', handleVideoEnded);
-      }
-      
-      return () => {
-        // Clear timer if it was set (shouldn't be, but defensive)
-        if (timerRef.current) {
-          clearTimeout(timerRef.current);
-          timerRef.current = null;
-        }
-        // Remove event listener
-        if (currentVideoRef.current) {
-          currentVideoRef.current.removeEventListener('ended', handleVideoEnded);
-        }
-      };
-    } else {
-      // For images, use the display duration timer
-      timerRef.current = window.setTimeout(() => {
-        timerRef.current = null; // Clear ref when timer fires
-        advanceToNext();
-      }, displayDuration * 1000);
-      
-      return () => {
-        if (timerRef.current) {
-          clearTimeout(timerRef.current);
-          timerRef.current = null;
-        }
-      };
-    }
-  }, [currentIndex, images, displayDuration, isTransitioning, readyImages, preloadMedia]);
-  
-  const advanceToNext = async () => {
-    if (images.length === 0) return;
-    
-    // Clear any existing timer to prevent multiple advances
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    
-    // Check if we just showed a mosaic (two portraits side by side)
-    const currentIsPortrait = currentImage ? imageOrientations.get(currentImage) : false;
-    const nextIdx = (currentIndex + 1) % images.length;
-    const nextPath = images[nextIdx];
-    const nextIsPortrait = imageOrientations.get(nextPath);
-    const wasMosaic = fitMode === 'mosaic' && currentIsPortrait && nextIsPortrait && !isVideoFile(currentImage);
-    
-    // If we showed a mosaic, skip to the image after the partner
-    const targetIdx = wasMosaic ? (currentIndex + 2) % images.length : nextIdx;
-    const targetPath = images[targetIdx];
-    
-    // Ensure target media has a ready blob URL before transitioning
-    // Use blobUrls ref for synchronous check (more reliable than state)
-    if (!blobUrls.current.has(targetPath)) {
-      console.log('[Photo Slideshow] Waiting for next media to be ready...');
-      const blobUrl = await preloadMedia(targetPath);
-      if (!blobUrl) {
-        console.error('[Photo Slideshow] Failed to prepare next media, skipping');
-        // Skip to the one after if this one failed
-        setCurrentIndex(targetIdx);
-        return;
-      }
-    }
-    
+
+  const onBeforeAdvance = useCallback(() => {
     const availableTransitions = getAvailableTransitions(customSettings);
     const nextTransition = availableTransitions[Math.floor(Math.random() * availableTransitions.length)];
-    
     setCurrentTransition(nextTransition);
-    setNextIndex(targetIdx);
+    
     // Set enterPhase to 'enter' BEFORE isTransitioning so entering element renders in enter position first
     setEnterPhase('enter');
-    setIsTransitioning(true);
-    
-    setTimeout(() => {
-      setCurrentIndex(targetIdx);
-      setNextIndex(null);
-      setIsTransitioning(false);
-    }, transitionDuration * 1000);
-  };
-  
-  const currentImage = images[currentIndex];
-  const nextImage = nextIndex !== null ? images[nextIndex] : null;
-  
-  // Get blob URL - check state first, then ref as fallback
-  const getBlobUrl = (path: string | null): string | undefined => {
-    if (!path) return undefined;
-    return readyImages.get(path) || blobUrls.current.get(path);
-  };
-  
-  const currentBlobUrl = getBlobUrl(currentImage);
-  const nextBlobUrl = getBlobUrl(nextImage);
-  
-  // Check if we should use mosaic mode (two portraits side by side)
-  const currentIsPortrait = currentImage ? imageOrientations.get(currentImage) : false;
-  const nextIsPortrait = nextImage ? imageOrientations.get(nextImage) : false;
-  const useMosaic = fitMode === 'mosaic' && 
-                    currentIsPortrait && 
-                    !isVideoFile(currentImage) &&
-                    images.length > 1;
-  
-  // In mosaic mode, if next image is also portrait AND fully loaded, show both
-  // Must use readyImages state (not blobUrls ref) to ensure image is fully decoded
-  const nextIdx = (currentIndex + 1) % images.length;
-  const mosaicPartnerPath = images[nextIdx];
-  const mosaicPartnerLoaded = mosaicPartnerPath ? readyImages.has(mosaicPartnerPath) : false;
-  const mosaicPartner = useMosaic && nextIsPortrait && mosaicPartnerLoaded ? mosaicPartnerPath : null;
-  const mosaicPartnerUrl = mosaicPartner ? readyImages.get(mosaicPartner) : undefined;
-  
-  // Get face positions for both images
-  const currentFacePosition = currentImage ? facePositions.get(currentImage) : undefined;
-  const nextFacePosition = nextImage ? facePositions.get(nextImage) : undefined;
-  
-  // Pre-fetch face position for current image if not available
-  useEffect(() => {
-    const blobUrl = currentImage ? readyImages.get(currentImage) : undefined;
-    if (smartCrop && faceModelsLoaded && currentImage && blobUrl && !facePositions.has(currentImage)) {
-      detectFacePosition(blobUrl).then(facePos => {
-        setFacePositions(prev => new Map(prev).set(currentImage, facePos));
-      }).catch(console.error);
-    }
-  }, [currentImage, smartCrop, faceModelsLoaded, facePositions, readyImages]);
+  }, [customSettings]);
+
+  const {
+    loading,
+    error,
+    usingExamplePhotos,
+    images,
+    currentIndex,
+    nextIndex,
+    isTransitioning,
+    currentImage,
+    nextImage,
+    currentBlobUrl,
+    nextBlobUrl,
+    useMosaic,
+    mosaicPartner,
+    mosaicPartnerUrl,
+    currentFacePosition,
+    nextFacePosition,
+    onVideoRef,
+    readyImages
+  } = usePhotoSlideshow(customSettings, onBeforeAdvance);
   
   // Trigger enter animation: transition from 'enter' to 'active' after initial render
-  // The 'enter' phase is set synchronously in advanceToNext before isTransitioning becomes true
-  // This useEffect triggers the CSS transition by changing to 'active' after the element renders
   useEffect(() => {
     if (isTransitioning && enterPhase === 'enter') {
-      // Use double RAF for reliable style application across browsers
-      // First RAF waits for the current frame to complete
-      // Second RAF ensures styles are applied before transitioning
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setEnterPhase('active');
@@ -888,33 +232,19 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       };
     }
     
-    // Calculate center of face region
     const faceCenterX = faceRegion.x + faceRegion.width / 2;
     const faceCenterY = faceRegion.y + faceRegion.height / 2;
-    
-    // Simple strategy:
-    // - If faces span >65% of image width or height → use contain (show full image with black bars if needed)
-    // - Otherwise → use cover mode centered on faces (fill screen, may crop edges)
-    
     const faceSpan = Math.max(faceRegion.width, faceRegion.height);
     
-    console.log(`[Photo Slideshow] Face region: ${faceRegion.width.toFixed(1)}% x ${faceRegion.height.toFixed(1)}% at center (${faceCenterX.toFixed(1)}%, ${faceCenterY.toFixed(1)}%), span: ${faceSpan.toFixed(1)}%`);
-    
     if (faceSpan > 65) {
-      // Faces are spread wide - use contain to ensure all faces visible
-      // This may show black bars, but that's OK to show all faces
-      console.log(`[Photo Slideshow] Faces spread wide (${faceSpan.toFixed(1)}%), using contain mode`);
       return {
         objectFit: 'contain',
-        objectPosition: 'center center',  // Center the whole image
+        objectPosition: 'center center',
         width: '100%',
         height: '100%',
       };
     }
     
-    // Faces are concentrated in a region - use cover mode centered on faces
-    // This fills the screen and keeps faces in view
-    console.log(`[Photo Slideshow] Faces concentrated, using cover centered on faces`);
     return {
       objectFit: 'cover',
       objectPosition: `${faceCenterX}% ${faceCenterY}%`,
@@ -989,18 +319,15 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     transition: `opacity ${transitionDuration}s ease-in-out`,
                     ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
                   }}
-                  onError={(e) => {
-                    console.error('[Photo Slideshow] Failed to display image:', currentImage);
-                    console.error('[Photo Slideshow] Error event:', e);
-                  }}
+                  onError={(e) => console.error('[Photo Slideshow] Failed to display image:', currentImage, e)}
                 />
               </div>
               {/* Right image - anchored to right, contained within its half */}
               <div className="h-full flex items-center justify-end" style={{ width: '49%' }}>
                 <img
-                  key={`mosaic-right-${nextIdx}`}
+                  key={`mosaic-right-${nextIndex}`}
                   src={mosaicPartnerUrl}
-                  alt={`Photo ${nextIdx + 1}`}
+                  alt={`Photo ${nextIndex! + 1}`} // Note: nextIndex here is conceptually "current + 1" for mosaic partner
                   loading="eager"
                   style={{
                     maxHeight: '100%',
@@ -1010,10 +337,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     willChange: 'opacity',
                     transition: `opacity ${transitionDuration}s ease-in-out`,
                   }}
-                  onError={(e) => {
-                    console.error('[Photo Slideshow] Failed to display mosaic partner:', mosaicPartner);
-                    console.error('[Photo Slideshow] Error event:', e);
-                  }}
+                  onError={(e) => console.error('[Photo Slideshow] Failed to display mosaic partner:', mosaicPartner, e)}
                 />
               </div>
             </div>
@@ -1023,10 +347,8 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
               {isVideoFile(currentImage) ? (
                 <video
                   ref={(el) => {
-                    currentVideoRef.current = el;
-                    if (el) {
-                      el.volume = videoVolume / 100;
-                    }
+                    onVideoRef(el);
+                    if (el) el.volume = videoVolume / 100;
                   }}
                   key={`current-video-${currentIndex}`}
                   src={currentBlobUrl}
@@ -1038,10 +360,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
                     ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
                   }}
-                  onError={(e) => {
-                    console.error('[Photo Slideshow] Failed to display video:', currentImage);
-                    console.error('[Photo Slideshow] Error event:', e);
-                  }}
+                  onError={(e) => console.error('[Photo Slideshow] Failed to display video:', currentImage, e)}
                 />
               ) : (
                 <>
@@ -1058,13 +377,10 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
                       ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
                     }}
-                    onError={(e) => {
-                      console.error('[Photo Slideshow] Failed to display image:', currentImage);
-                      console.error('[Photo Slideshow] Error event:', e);
-                    }}
+                    onError={(e) => console.error('[Photo Slideshow] Failed to display image:', currentImage, e)}
                   />
                   {/* Subtle loading indicator for images still decoding */}
-                  {blobUrls.current.has(currentImage) && !readyImages.has(currentImage) && (
+                  {currentImage && readyImages && !readyImages.has(currentImage) && (
                     <div className="absolute top-4 right-4 bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-2">
                       <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
                       <span className="text-xs text-white/80 font-medium">Decoding...</span>
@@ -1078,9 +394,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                 isVideoFile(nextImage) ? (
                   <video
                     ref={(el) => {
-                      if (el) {
-                        el.volume = videoVolume / 100;
-                      }
+                      if (el) el.volume = videoVolume / 100;
                     }}
                     key={`next-video-${nextIndex}`}
                     src={nextBlobUrl}
@@ -1092,10 +406,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
                       ...getTransitionStyles(currentTransition, enterPhase),
                     }}
-                    onError={(e) => {
-                      console.error('[Photo Slideshow] Failed to display next video:', nextImage);
-                      console.error('[Photo Slideshow] Error event:', e);
-                    }}
+                    onError={(e) => console.error('[Photo Slideshow] Failed to display next video:', nextImage, e)}
                   />
                 ) : (
                   <img
@@ -1111,10 +422,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
                       ...getTransitionStyles(currentTransition, enterPhase),
                     }}
-                    onError={(e) => {
-                      console.error('[Photo Slideshow] Failed to display next image:', nextImage);
-                      console.error('[Photo Slideshow] Error event:', e);
-                    }}
+                    onError={(e) => console.error('[Photo Slideshow] Failed to display next image:', nextImage, e)}
                   />
                 )
               )}
@@ -1138,4 +446,3 @@ export const PhotoSlideshowPlugin: VisualizationPlugin = {
   settingsSchema,
   component: PhotoSlideshowVisualization,
 };
-
