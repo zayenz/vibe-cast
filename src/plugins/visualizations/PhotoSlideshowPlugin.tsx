@@ -47,8 +47,7 @@ const settingsSchema: SettingDefinition[] = [
     id: 'sourceType',
     label: 'Media Source',
     options: [
-      { value: 'local', label: 'Local Folder' },
-      { value: 'photos', label: 'Apple Photos (macOS only)' }
+      { value: 'local', label: 'Local Folder' }
     ],
     default: 'local'
   },
@@ -59,14 +58,6 @@ const settingsSchema: SettingDefinition[] = [
     default: '',
     placeholder: 'Click Browse to select folder',
     actionButton: 'folder'
-  },
-  {
-    type: 'text',
-    id: 'photosAlbumName',
-    label: 'Photos Album Name',
-    default: '',
-    placeholder: 'Click button to select album',
-    actionButton: 'album'
   },
   {
     type: 'range',
@@ -293,7 +284,6 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const { dim } = commonSettings;
   const sourceType = getStringSetting(customSettings.sourceType, 'local');
   const folderPath = getStringSetting(customSettings.folderPath, '');
-  const photosAlbumName = getStringSetting(customSettings.photosAlbumName, '');
   const displayDuration = getNumberSetting(customSettings.displayDuration, 5, 1, 60);
   const transitionDuration = getNumberSetting(customSettings.transitionDuration, 0.8, 0.2, 3);
   const randomOrder = getBooleanSetting(customSettings.randomOrder, false);
@@ -328,7 +318,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const currentVideoRef = useRef<HTMLVideoElement | null>(null);
   
   // Generate a unique key for this slideshow instance based on source
-  const storageKey = `photo-slideshow-${sourceType === 'local' ? folderPath : photosAlbumName}`;
+  const storageKey = `photo-slideshow-${folderPath}`;
   
   // Preload media: fetch as blob, create URL, decode/preload, and return ready URL
   const preloadMedia = useCallback(async (path: string): Promise<string | null> => {
@@ -479,7 +469,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       setLoading(true);
       setError(null);
       
-      console.log('[Photo Slideshow] Loading images...', { sourceType, folderPath, photosAlbumName });
+      console.log('[Photo Slideshow] Loading images...', { sourceType, folderPath });
       
       let imagePaths: string[] = [];
       let isExample = false;
@@ -502,10 +492,6 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
           imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
           console.log('[Photo Slideshow] Found', imagePaths.length, 'images in folder');
         }
-      } else if (sourceType === 'photos' && photosAlbumName) {
-        console.log('[Photo Slideshow] Getting photos from album:', photosAlbumName);
-        imagePaths = await invoke<string[]>('get_photos_from_album', { albumName: photosAlbumName });
-        console.log('[Photo Slideshow] Found', imagePaths.length, 'photos in album');
       } else {
         console.log('[Photo Slideshow] No source configured');
         // Fallback to example photos if nothing else configured
@@ -610,12 +596,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       setImages([]);
       setLoading(false);
     }
-  }, [sourceType, folderPath, photosAlbumName, randomOrder, storageKey]);
+  }, [sourceType, folderPath, randomOrder, storageKey]);
   
   // Load images when settings change
   useEffect(() => {
     // For local source, we allow empty folderPath (to try fallback example photos)
-    if (sourceType === 'local' || (sourceType === 'photos' && photosAlbumName)) {
+    if (sourceType === 'local') {
       loadImages();
     } else {
       // No valid source configured: clear loading and show guidance instead of spinning
@@ -624,7 +610,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       setError(null);
       setLoading(false);
     }
-  }, [loadImages, sourceType, folderPath, photosAlbumName]);
+  }, [loadImages, sourceType, folderPath]);
   
   // Save current position whenever it changes
   useEffect(() => {
@@ -949,17 +935,6 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
             <div className="text-zinc-300 font-medium mb-2 text-lg">Unable to Load Images</div>
             <div className="text-zinc-400 text-sm mb-4 px-4">{error}</div>
             
-            {sourceType === 'photos' && (
-              <div className="text-zinc-600 text-xs mt-4 space-y-2 bg-zinc-900/50 rounded-lg p-4">
-                <p className="font-medium text-zinc-500">Troubleshooting:</p>
-                <ul className="text-left space-y-1">
-                  <li>• Make sure Photos.app is running</li>
-                  <li>• Try a different album</li>
-                  <li>• For shared albums: export manually to a folder, then use "Local Folder" option</li>
-                </ul>
-              </div>
-            )}
-            
             {sourceType === 'local' && (
               <div className="text-zinc-600 text-xs mt-4">
                 Use the "Browse" button in settings to select a folder with images.
@@ -973,18 +948,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
           <div className="text-zinc-400 text-lg">Loading images...</div>
           <div className="text-zinc-600 text-sm max-w-md text-center px-4">
-            {sourceType === 'photos' 
-              ? (
-                <>
-                  <p>Exporting photos from Apple Photos...</p>
-                  <p className="mt-2 text-zinc-500">Album: <span className="text-zinc-400">{photosAlbumName}</span></p>
-                  <p className="mt-1 text-xs text-zinc-600">
-                    First export may take several minutes for large albums.
-                    <br />Results are cached for faster future loads.
-                  </p>
-                </>
-              )
-              : `Reading images from folder...`}
+            Reading images from folder...
           </div>
           <div className="w-32 h-1 bg-zinc-800 rounded-full overflow-hidden mt-2">
             <div className="h-full bg-gradient-to-r from-orange-500 to-orange-400 animate-[loading_1.5s_ease-in-out_infinite]" style={{ width: '100%' }} />

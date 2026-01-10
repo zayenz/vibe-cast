@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { TextStylePlugin, TextStyleProps, SettingDefinition } from '../types';
-import { getNumberSetting, getStringSetting } from '../utils/settings';
+import { getNumberSetting, getStringSetting, getBooleanSetting } from '../utils/settings';
 
 // ============================================================================
 // Settings Schema
@@ -47,6 +47,12 @@ const settingsSchema: SettingDefinition[] = [
     max: 1,
     step: 0.1,
     default: 0.5,
+  },
+  {
+    type: 'boolean',
+    id: 'pulseGlow',
+    label: 'Pulse Glow',
+    default: false,
   },
   {
     type: 'select',
@@ -90,6 +96,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
   const color = getStringSetting(settings.color, '#ffffff');
   const glowIntensity = getNumberSetting(settings.glowIntensity, 0.5, 0, 1);
+  const pulseGlow = getBooleanSetting(settings.pulseGlow, false);
   const position = getStringSetting(settings.position, 'top');
 
   // Calculate position classes
@@ -101,9 +108,19 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
 
   // Text shadow based on glow intensity
   const glowSize = 15 * glowIntensity;
+  const maxAlpha = glowIntensity;
+  const minAlpha = glowIntensity * 0.25;
+  
   const textShadow = glowIntensity > 0 
     ? `0 5px ${glowSize}px rgba(255, 255, 255, ${glowIntensity})`
     : 'none';
+    
+  const pulseKeyframes = `
+    @keyframes pulseGlow-${animationKey} {
+      0%, 100% { text-shadow: 0 5px ${glowSize}px rgba(255, 255, 255, ${maxAlpha}); }
+      50% { text-shadow: 0 5px ${glowSize * 0.8}px rgba(255, 255, 255, ${minAlpha}); }
+    }
+  `;
 
   // Track viewport width for responsive calculations
   useEffect(() => {
@@ -228,6 +245,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
                 transform: translate3d(${endPos}, 0, 0);
               }
             }
+            ${pulseGlow && glowIntensity > 0 ? pulseKeyframes : ''}
           `}</style>
           <div
             key={animationKey}
@@ -245,7 +263,8 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
               style={{ 
                 fontSize: `${fontSize}rem`,
                 color,
-                textShadow,
+                textShadow: pulseGlow && glowIntensity > 0 ? undefined : textShadow,
+                animation: pulseGlow && glowIntensity > 0 ? `pulseGlow-${animationKey} 2s ease-in-out infinite` : 'none',
               }}
             >
               {displayMessage}

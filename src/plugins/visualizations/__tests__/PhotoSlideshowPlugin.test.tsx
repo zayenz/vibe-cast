@@ -26,7 +26,7 @@ describe('PhotoSlideshowPlugin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default invoke implementation
-    mockInvoke.mockImplementation(async (cmd, args) => {
+    mockInvoke.mockImplementation(async (cmd, _args) => {
       if (cmd === 'list_images_in_folder') {
         return ['/path/to/image1.jpg', '/path/to/image2.jpg'];
       }

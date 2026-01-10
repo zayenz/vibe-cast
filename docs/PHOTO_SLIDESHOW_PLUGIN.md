@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Photo Slideshow plugin displays a smooth, transitioning slideshow of images and videos from local folders or Apple Photos shared albums (macOS only). It features multiple professional transition effects, smart face-aware cropping, mosaic mode for portrait images, and comprehensive configuration options.
+The Photo Slideshow plugin displays a smooth, transitioning slideshow of images and videos from local folders. It features multiple professional transition effects, smart face-aware cropping, mosaic mode for portrait images, and comprehensive configuration options.
 
 ## Features
 
@@ -13,12 +13,6 @@ The Photo Slideshow plugin displays a smooth, transitioning slideshow of images 
    - **Image formats**: JPG, JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC, HEIF
    - **Video formats**: MP4, MOV, WebM, M4V, AVI, MKV
    - Automatic file filtering
-
-2. **Apple Photos Albums (macOS only)**
-   - Direct integration with Apple Photos app
-   - Access regular albums, folders, and shared albums
-   - Automatic photo export and caching
-   - Works with most album types including iCloud Shared Albums
 
 ### Media Display Modes
 
@@ -69,15 +63,14 @@ Each transition type can be individually enabled/disabled. The plugin randomly s
 
 The plugin remembers your position in each slideshow:
 - When switching away and back, resumes from the same image/video
-- Each folder/album maintains its own position independently
+- Each folder maintains its own position independently
 - Position is saved automatically as you advance
 
 ## Configuration Options
 
 ### Media Source Settings
-- **Media Source**: Choose between Local Folder or Apple Photos
+- **Media Source**: Local Folder
 - **Folder Path**: Path to media folder (with Browse button)
-- **Photos Album Name**: Name of Apple Photos album (with Select Album button)
 
 ### Display Settings
 - **Display Duration**: 1-60 seconds per image (default: 5s)
@@ -104,22 +97,10 @@ The plugin remembers your position in each slideshow:
 4. Select a folder containing images and/or videos
 5. Configure display and transition settings as desired
 
-### Setting Up Apple Photos (macOS only)
-
-1. Open Control Plane settings for Photo Slideshow visualization
-2. Select "Apple Photos (macOS only)" as Media Source
-3. Click "Select Album" next to Photos Album Name
-4. **Search for your album** - Type to filter (e.g., "family", "2024")
-5. **Click the album** you want from the filtered list
-6. Wait for initial export (first time may take a moment)
-7. Configure display and transition settings
-
-**Tip:** The search box filters 470+ albums in real-time, making it easy to find your album!
-
 ### Using Mosaic Mode
 
 1. Set **Media Fit** to "Mosaic (2 portraits side-by-side)"
-2. Ensure your folder/album contains portrait images (height > width)
+2. Ensure your folder contains portrait images (height > width)
 3. The plugin will automatically display two portrait images side-by-side when available
 4. Each image maintains its original aspect ratio with black bars as needed
 
@@ -151,20 +132,11 @@ The plugin implements advanced preloading:
 - Fallback mechanisms prevent hanging if video events don't fire
 - Respects all fit modes (Cover, Contain, Mosaic, Fill)
 
-### Apple Photos Integration
-
-On macOS, the plugin uses AppleScript to:
-1. Query available albums in Photos app (including shared albums)
-2. Export photos to temporary directory
-3. Cache exported paths using LRU cache for performance
-4. Clean up when switching albums
-
 ### Error Handling
 
 The plugin gracefully handles:
-- Empty folders or albums
+- Empty folders
 - Missing/corrupted media (skipped automatically)
-- Apple Photos not available (non-macOS)
 - Permission issues (shows user-friendly error)
 - Video playback errors (advances to next item)
 
@@ -175,15 +147,8 @@ The plugin gracefully handles:
 - Check folder permissions
 - Try browsing to select folder again
 
-### Apple Photos not working
-- Ensure you're on macOS
-- Grant Photos app permissions if prompted
-- Verify album name is typed correctly
-- Try the "Select Album" button
-
 ### Media not loading / blank screens
 - Check if file paths are accessible
-- For Apple Photos, try re-selecting the album
 - Verify media files aren't corrupted
 - Wait a moment - first load may take time for preloading
 
@@ -248,4 +213,4 @@ If no **Folder Path** is configured (default state), the plugin will automatical
 - **Content:** The examples are lightweight, abstract SVG patterns (or placeholder images).
 - **Purpose:** Allows users to test transitions and display modes immediately.
 
-To switch to your own photos, simply browse and select a local folder or Apple Photos album. To revert to examples, clear the **Folder Path** field.
+To switch to your own photos, simply browse and select a local folder. To revert to examples, clear the **Folder Path** field.

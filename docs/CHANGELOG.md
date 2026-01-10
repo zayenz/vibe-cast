@@ -81,3 +81,13 @@
 - **AppleScript Syntax**: Fixed "Expected end of line" errors by removing invalid `cloud shared albums` syntax and using a more robust query.
 - **Path Handling**: Fixed issues with special characters and folder paths in AppleScript.
 - **Message Display**: Fixed issues where messages wouldn't appear by ensuring proper state synchronization between SSE and Tauri events.
+
+## Recent Updates
+
+### Visualizations
+- **Example Photos**: The Photo Slideshow plugin now includes bundled example photos (abstract SVG patterns) that are used automatically if no folder path is configured. This improves the out-of-the-box experience.
+- **Pulsing Glow**: Added an optional "Pulse Glow" setting to "Scrolling Capitals" text style, which animates the glow intensity for a dynamic effect.
+
+### UX Improvements
+- **Toggle Stage**: Renamed "Toggle Stage" to "Show/Hide Stage" and added tooltips to clarify functionality.
+- **Restart Stability**: Fixed an issue where restarting the stage would briefly flash default settings by delaying visualization rendering until state is loaded.
