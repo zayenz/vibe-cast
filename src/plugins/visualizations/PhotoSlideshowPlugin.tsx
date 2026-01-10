@@ -9,6 +9,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { resolveResource } from '@tauri-apps/api/path';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../utils/settings';
 import { 
@@ -316,6 +317,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
   // Track enter animation phase for incoming media (enter -> active triggers CSS transition)
   const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
+  const [usingExamplePhotos, setUsingExamplePhotos] = useState(false);
   
   const timerRef = useRef<number | null>(null);
   // Store blob URLs for cleanup
@@ -480,24 +482,52 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       console.log('[Photo Slideshow] Loading images...', { sourceType, folderPath, photosAlbumName });
       
       let imagePaths: string[] = [];
+      let isExample = false;
       
-      if (sourceType === 'local' && folderPath) {
-        console.log('[Photo Slideshow] Listing images in folder:', folderPath);
-        imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath });
-        console.log('[Photo Slideshow] Found', imagePaths.length, 'images in folder');
+      if (sourceType === 'local') {
+        let targetPath = folderPath;
+        
+        if (!targetPath) {
+          try {
+            targetPath = await resolveResource('example-photos');
+            console.log('[Photo Slideshow] Using example photos at:', targetPath);
+            isExample = true;
+          } catch (e) {
+            console.warn('[Photo Slideshow] Failed to resolve example photos:', e);
+          }
+        }
+        
+        if (targetPath) {
+          console.log('[Photo Slideshow] Listing images in folder:', targetPath);
+          imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+          console.log('[Photo Slideshow] Found', imagePaths.length, 'images in folder');
+        }
       } else if (sourceType === 'photos' && photosAlbumName) {
         console.log('[Photo Slideshow] Getting photos from album:', photosAlbumName);
         imagePaths = await invoke<string[]>('get_photos_from_album', { albumName: photosAlbumName });
         console.log('[Photo Slideshow] Found', imagePaths.length, 'photos in album');
       } else {
         console.log('[Photo Slideshow] No source configured');
-        setLoading(false);
-        return;
+        // Fallback to example photos if nothing else configured
+        try {
+           const targetPath = await resolveResource('example-photos');
+           console.log('[Photo Slideshow] Fallback to example photos at:', targetPath);
+           imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+           isExample = true;
+        } catch (e) {
+           console.warn('[Photo Slideshow] Failed to resolve example photos fallback:', e);
+           setLoading(false);
+           return;
+        }
       }
+      
+      setUsingExamplePhotos(isExample);
       
       if (imagePaths.length === 0) {
         console.error('[Photo Slideshow] No images found');
-        setError('No images found. Please select a folder or album with images.');
+        setError(isExample 
+          ? 'No example images found.' 
+          : 'No images found. Please select a folder or album with images.');
         setImages([]);
         setLoading(false);
         return;
@@ -584,7 +614,8 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   
   // Load images when settings change
   useEffect(() => {
-    if ((sourceType === 'local' && folderPath) || (sourceType === 'photos' && photosAlbumName)) {
+    // For local source, we allow empty folderPath (to try fallback example photos)
+    if (sourceType === 'local' || (sourceType === 'photos' && photosAlbumName)) {
       loadImages();
     } else {
       // No valid source configured: clear loading and show guidance instead of spinning
@@ -964,6 +995,12 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
               50% { transform: translateX(100%); }
             }
           `}</style>
+        </div>
+      )}
+      
+      {!error && !loading && usingExamplePhotos && (
+        <div className="absolute top-4 left-4 bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 flex items-center gap-2 z-20 pointer-events-none">
+          <span className="text-xs text-white/60 font-medium">Using example photos</span>
         </div>
       )}
       

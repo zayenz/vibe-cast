@@ -236,3 +236,16 @@ To create custom presets:
 6. **Random Order**: Great for large photo collections to avoid predictability
 7. **Mixed media**: Mix images and videos in the same folder for variety
 8. **Video sound**: Disable if you want videos to play silently with background music
+
+## Example Configuration
+
+The plugin now includes a set of **example photos** (bundled with the application) to provide an out-of-the-box experience without requiring initial setup.
+
+### Using Example Photos
+
+If no **Folder Path** is configured (default state), the plugin will automatically load the bundled example photos.
+- **Indicator:** A "Using example photos" badge will appear in the top-left corner.
+- **Content:** The examples are lightweight, abstract SVG patterns (or placeholder images).
+- **Purpose:** Allows users to test transitions and display modes immediately.
+
+To switch to your own photos, simply browse and select a local folder or Apple Photos album. To revert to examples, clear the **Folder Path** field.
