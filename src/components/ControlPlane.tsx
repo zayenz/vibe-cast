@@ -940,11 +940,12 @@ export const ControlPlane: React.FC = () => {
             <button 
               onClick={toggleViz}
               className="group relative px-6 py-3 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-xl transition-all active:scale-95 overflow-hidden"
+              title="Toggle visibility of the visualization window (Show or Hide)"
             >
               <div className="absolute inset-0 bg-gradient-to-tr from-orange-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="relative flex items-center gap-3 font-bold text-sm">
                 <Monitor size={18} className="text-orange-500" />
-                Toggle Stage
+                Show/Hide Stage
               </div>
             </button>
 

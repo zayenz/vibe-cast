@@ -1063,19 +1063,25 @@ export const VisualizerWindow: React.FC = () => {
         </div>
       )}
       <div className="absolute inset-0">
-        <VisualizationRenderer
-          key={vizRemountKey}
-          visualizationId={targetVizId}
-          audioData={audioData}
-          commonSettings={commonSettings}
-          visualizationSettings={vizSettings}
-          debug={import.meta.env.DEV && showDevOverlay}
-          presetSettings={
-            activePreset && activePreset.visualizationId === targetVizId
-              ? activePreset.settings
-              : undefined
-          }
-        />
+        {/* Only render visualization when state is loaded to prevent flashing defaults */}
+        {isStateLoaded ? (
+          <VisualizationRenderer
+            key={vizRemountKey}
+            visualizationId={targetVizId}
+            audioData={audioData}
+            commonSettings={commonSettings}
+            visualizationSettings={vizSettings}
+            debug={import.meta.env.DEV && showDevOverlay}
+            presetSettings={
+              activePreset && activePreset.visualizationId === targetVizId
+                ? activePreset.settings
+                : undefined
+            }
+          />
+        ) : (
+          /* Loading / Connecting state - keep black to be unobtrusive */
+          <div className="w-full h-full bg-black" />
+        )}
       </div>
       {/* Message overlay container - always created to ensure proper initialization */}
       {/* This container must exist even when window is recreated in production */}
