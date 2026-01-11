@@ -33,8 +33,18 @@ async function main() {
   const args = process.argv.slice(2);
   const versionArg = args[0];
 
-  if (!versionArg) {
-    console.error('Usage: node scripts/create_release.mjs <version|patch|minor|major>');
+  if (!versionArg || versionArg === '--help' || versionArg === '-h') {
+    console.log('Usage: node scripts/create_release.mjs <version|patch|minor|major>');
+    process.exit(0);
+  }
+
+  // Basic validation to prevent passing garbage to npm version
+  const validBumps = ['patch', 'minor', 'major', 'prepatch', 'preminor', 'premajor', 'prerelease'];
+  // Simple semver regex (relaxed)
+  const isSemVer = /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(versionArg);
+
+  if (!validBumps.includes(versionArg) && !isSemVer) {
+    console.error(`Error: Invalid version argument '${versionArg}'. Must be a semver string or one of: ${validBumps.join(', ')}`);
     process.exit(1);
   }
 
