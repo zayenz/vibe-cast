@@ -415,7 +415,7 @@ export const VisualizerWindow: React.FC = () => {
       
     switch (command) {
       case 'set-mode':
-        if (typeof payload === 'string') setMode(payload, false);
+        if (typeof payload === 'string') setMode(payload as 'fireplace' | 'techno', false);
         break;
       case 'set-active-visualization':
         if (typeof payload === 'string') setActiveVisualization(payload, false);
@@ -755,7 +755,7 @@ export const VisualizerWindow: React.FC = () => {
       
       switch (type) {
         case 'SET_MODE':
-          if (typeof payload === 'string') setMode(payload, false);
+          if (typeof payload === 'string') setMode(payload as 'fireplace' | 'techno', false);
           break;
         case 'SET_ACTIVE_VISUALIZATION':
           if (typeof payload === 'string') setActiveVisualization(payload, false);

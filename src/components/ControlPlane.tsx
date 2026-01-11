@@ -21,7 +21,7 @@ import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
 import { VisualizationPresetsManager } from './settings/VisualizationPresetsManager';
 import { TextStylePresetsManager } from './settings/TextStylePresetsManager';
 import { HelpModal } from './HelpModal';
-import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode, getDefaultsFromSchema } from '../plugins/types';
+import { MessageConfig, AppConfiguration, VisualizationPreset, TextStylePreset, MessageTreeNode, MessageFolderNode, getDefaultsFromSchema } from '../plugins/types';
 import { useStore } from '../store';
 import { adjustPathForRemoval } from './messageTreeDnd';
 import { applyStyleOverrideChange } from './messageStyleOverrides';
@@ -414,7 +414,7 @@ export const ControlPlane: React.FC = () => {
     return node;
   };
 
-  const updateFolderAtPath = (tree: MessageTreeNode[], folderPath: string, updater: (f: MessageTreeNode) => MessageTreeNode): MessageTreeNode[] => {
+  const updateFolderAtPath = (tree: MessageTreeNode[], folderPath: string, updater: (f: MessageFolderNode) => MessageTreeNode): MessageTreeNode[] => {
     const indices = pathToIndices(folderPath);
     const next = cloneTree(tree);
     let children = next;
@@ -423,7 +423,9 @@ export const ControlPlane: React.FC = () => {
       const node = children[idx];
       if (!node) return next;
       if (d === indices.length - 1) {
-        children[idx] = updater(node);
+        if (node.type === 'folder') {
+          children[idx] = updater(node);
+        }
         return next;
       }
       if (node.type !== 'folder') return next;
@@ -465,7 +467,7 @@ export const ControlPlane: React.FC = () => {
   const isDescendantPath = (ancestor: string, maybeDesc: string) =>
     maybeDesc === ancestor || maybeDesc.startsWith(`${ancestor}.`);
 
-  const countFolder = (folder: MessageTreeNode): { triggered: number; total: number } => {
+  const countFolder = (folder: MessageFolderNode): { triggered: number; total: number } => {
     let total = 0;
     let triggered = 0;
     const walk = (nodes: MessageTreeNode[]) => {
