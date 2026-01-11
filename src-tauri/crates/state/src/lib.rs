@@ -181,7 +181,7 @@ impl AppStateSync {
             },
             VisualizationPreset {
                 id: "fireplace-blue-glow".to_string(),
-                name: "Blue Glow Fireplace".to_string(),
+                name: "Blue Glow".to_string(),
                 visualization_id: "fireplace".to_string(),
                 settings: serde_json::json!({
                     "emberCount": 0,
@@ -222,7 +222,7 @@ impl AppStateSync {
             },
             VisualizationPreset {
                 id: "particles-default".to_string(),
-                name: "Particles Default".to_string(),
+                name: "Particles".to_string(),
                 visualization_id: "particles".to_string(),
                 settings: serde_json::json!({
                     "particleCount": 80,
@@ -238,7 +238,7 @@ impl AppStateSync {
             },
             VisualizationPreset {
                 id: "youtube-default".to_string(),
-                name: "YouTube Default".to_string(),
+                name: "YouTube".to_string(),
                 visualization_id: "youtube".to_string(),
                 settings: serde_json::json!({
                     "videoUrl": "https://youtu.be/uNNk-V08J7k?si=0chlR1UB6XYRxPc3",
@@ -252,7 +252,7 @@ impl AppStateSync {
             },
             VisualizationPreset {
                 id: "techno-default".to_string(),
-                name: "Techno Default".to_string(),
+                name: "Techno".to_string(),
                 visualization_id: "techno".to_string(),
                 settings: serde_json::json!({
                     "barCount": 48,
@@ -288,7 +288,7 @@ impl AppStateSync {
             common_settings: Mutex::new(CommonSettings::default()),
             visualization_settings: Mutex::new(serde_json::json!({})),
             visualization_presets: Mutex::new(default_viz_presets),
-            active_visualization_preset: Mutex::new(Some("fireplace-default".to_string())),
+            active_visualization_preset: Mutex::new(Some("fireplace-blue-glow".to_string())),
             messages: Mutex::new(default_messages),
             message_tree: Mutex::new(default_message_tree),
             default_text_style: Mutex::new("scrolling-capitals".to_string()),
