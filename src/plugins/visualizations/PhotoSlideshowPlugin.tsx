@@ -142,7 +142,6 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   customSettings,
 }) => {
   const { dim } = commonSettings;
-  const sourceType = getStringSetting(customSettings.sourceType, 'local');
   const transitionDuration = getNumberSetting(customSettings.transitionDuration, 0.8, 0.2, 3);
   const fitMode = getStringSetting(customSettings.fitMode, 'cover');
   const smartCrop = getBooleanSetting(customSettings.smartCrop, true);
@@ -273,11 +272,9 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
             <div className="text-zinc-300 font-medium mb-2 text-lg">Unable to Load Images</div>
             <div className="text-zinc-400 text-sm mb-4 px-4">{error}</div>
             
-            {sourceType === 'local' && (
-              <div className="text-zinc-600 text-xs mt-4">
-                Use the &quot;Browse&quot; button in settings to select a folder with images.
-              </div>
-            )}
+            <div className="text-zinc-600 text-xs mt-4">
+              Use the &quot;Browse&quot; button in settings to select a folder with images.
+            </div>
           </div>
         </div>
       )}
