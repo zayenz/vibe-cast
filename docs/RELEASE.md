@@ -4,18 +4,29 @@ Vibe Cast uses GitHub Actions to automate releases for macOS and Windows.
 
 ## Triggering a Release
 
-To create a new release:
-
-1.  **Update Version**: Bump the version in `package.json` and `src-tauri/tauri.conf.json`.
-2.  **Tag**: Create and push a git tag starting with `v` (e.g., `v0.1.0`).
+To create a new release, use the automated script:
 
 ```bash
-npm version patch # or minor/major - this updates package.json
-# Manually update tauri.conf.json version to match!
-git add package.json src-tauri/tauri.conf.json
-git commit -m "chore: bump version to 0.1.0"
-git tag v0.1.0
-git push origin main --tags
+# Create a patch release (e.g., 0.1.0 -> 0.1.1)
+node scripts/create_release.mjs patch
+
+# Or minor/major
+node scripts/create_release.mjs minor
+
+# Or specific version
+node scripts/create_release.mjs 1.2.3
+```
+
+The script will:
+1.  Bump version in `package.json` and `package-lock.json`.
+2.  Bump version in `src-tauri/crates/app/tauri.conf.json`.
+3.  Bump version in `src-tauri/crates/app/Cargo.toml`.
+4.  Create a git commit and tag.
+
+Finally, push the changes to trigger the release workflow:
+
+```bash
+git push && git push --tags
 ```
 
 3.  **Action**: The `Release` workflow will start automatically.

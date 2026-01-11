@@ -38,7 +38,7 @@ describe('PhotoSlideshowPlugin', () => {
     const Component = PhotoSlideshowPlugin.component;
     
     // Setup mock for resolveResource
-    mockResolveResource.mockResolvedValue('/resolved/resource/example-photos');
+    mockResolveResource.mockResolvedValue('/resolved/resource/kittens');
 
     render(
       <Component
@@ -50,13 +50,13 @@ describe('PhotoSlideshowPlugin', () => {
 
     // Expect resolveResource to be called
     await waitFor(() => {
-      expect(mockResolveResource).toHaveBeenCalledWith('example-photos');
+      expect(mockResolveResource).toHaveBeenCalledWith('kittens');
     });
 
     // Expect list_images_in_folder to be called with the resolved path
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('list_images_in_folder', {
-        folderPath: '/resolved/resource/example-photos'
+        folderPath: '/resolved/resource/kittens'
       });
     });
   });

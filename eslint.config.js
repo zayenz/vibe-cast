@@ -84,6 +84,16 @@ export default [
     },
   },
   {
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        fetch: 'readonly',
+      },
+    },
+  },
+  {
     files: ['**/*Techno*.tsx', '**/*Techno*.ts'],
     rules: {
       'react/no-unknown-property': ['error', {

@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::fs;
 use std::path::Path;
 use tokio::sync::broadcast;
 use vibe_cast_models::{
-    MessageConfig, VisualizationPreset, TextStylePreset, MessageStats, 
+    MessageConfig, VisualizationPreset, TextStylePreset, 
     CommonSettings, FolderPlaybackQueue, BroadcastState, E2EReport, RemoteCommand
 };
 

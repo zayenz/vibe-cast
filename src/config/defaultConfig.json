@@ -92,7 +92,7 @@
       "enabled": true
     }
   ],
-  "activeVisualizationPreset": "fireplace-default",
+  "activeVisualizationPreset": "fireplace-blue-glow",
   "commonSettings": {
     "intensity": 1.0,
     "dim": 1.0

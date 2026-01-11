@@ -4,7 +4,7 @@ use local_ip_address::local_ip;
 use vibe_cast_audio::AudioState;
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
-    MessageConfig, VisualizationPreset, TextStylePreset, MessageStats, 
+    MessageConfig, VisualizationPreset, TextStylePreset, 
     CommonSettings, flatten_message_tree_value
 };
 

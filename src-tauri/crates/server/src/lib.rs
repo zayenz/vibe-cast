@@ -8,7 +8,6 @@ use axum::{
     Json, Router,
 };
 use futures::{stream::Stream, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;

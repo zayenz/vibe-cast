@@ -16,8 +16,8 @@ describe('Default Presets', () => {
     expect(fireplace).toBeDefined();
     expect(fireplace?.settings).toHaveProperty('showLogs', true);
 
-    // 2. Blue Glow Fireplace
-    const blueGlow = presets.find(p => p.name === 'Blue Glow Fireplace' || p.name === 'Blue glow');
+    // 2. Blue Glow
+    const blueGlow = presets.find(p => p.name === 'Blue Glow' && p.visualizationId === 'fireplace');
     expect(blueGlow).toBeDefined();
     expect(blueGlow?.visualizationId).toBe('fireplace');
     expect(blueGlow?.settings).toMatchObject({
