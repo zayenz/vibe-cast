@@ -235,7 +235,7 @@ export function usePhotoSlideshow(
            const targetPath = await resolveResource('kittens');
            imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
            isExample = true;
-        } catch (e) {
+        } catch (_e) {
            setLoading(false);
            return;
         }
@@ -265,7 +265,7 @@ export function usePhotoSlideshow(
             startIndex = savedIndex;
           }
         }
-      } catch (err) {
+      } catch (_err) {
         // ignore
       }
       
@@ -303,8 +303,8 @@ export function usePhotoSlideshow(
             setFacePositions(prev => new Map(prev).set(firstPath, facePos));
           }).catch(console.error);
         }
-      } catch (_err) {
-        console.error(_err);
+      } catch (_e) {
+        console.error(_e);
         setLoading(false);
       }
       
