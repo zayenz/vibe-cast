@@ -38,7 +38,6 @@ export function usePhotoSlideshow(
   customSettings: Record<string, unknown>,
   onBeforeAdvance?: (nextIndex: number) => void
 ) {
-  const sourceType = getStringSetting(customSettings.sourceType, 'local');
   const folderPath = getStringSetting(customSettings.folderPath, '');
   const displayDuration = getNumberSetting(customSettings.displayDuration, 5, 1, 60);
   const transitionDuration = getNumberSetting(customSettings.transitionDuration, 0.8, 0.2, 3);
@@ -215,30 +214,19 @@ export function usePhotoSlideshow(
       let imagePaths: string[] = [];
       let isExample = false;
       
-      if (sourceType === 'local') {
-        let targetPath = folderPath;
-        
-        if (!targetPath) {
-          try {
-            targetPath = await resolveResource('kittens');
-            isExample = true;
-          } catch (_e) {
-            console.warn('[Photo Slideshow] Failed to resolve kittens resource:', _e);
-          }
-        }
-        
-        if (targetPath) {
-          imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
-        }
-      } else {
+      let targetPath = folderPath;
+      
+      if (!targetPath) {
         try {
-           const targetPath = await resolveResource('kittens');
-           imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
-           isExample = true;
+          targetPath = await resolveResource('kittens');
+          isExample = true;
         } catch (_e) {
-           setLoading(false);
-           return;
+          console.warn('[Photo Slideshow] Failed to resolve kittens resource:', _e);
         }
+      }
+      
+      if (targetPath) {
+        imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
       }
       
       setUsingExamplePhotos(isExample);
@@ -313,19 +301,12 @@ export function usePhotoSlideshow(
       setImages([]);
       setLoading(false);
     }
-  }, [sourceType, folderPath, randomOrder, storageKey, smartCrop]);
+  }, [folderPath, randomOrder, storageKey, smartCrop]);
   
   // Trigger load
   useEffect(() => {
-    if (sourceType === 'local') {
-      loadImages();
-    } else {
-      setImages([]);
-      setReadyImages(new Map());
-      setError(null);
-      setLoading(false);
-    }
-  }, [loadImages, sourceType, folderPath]);
+    loadImages();
+  }, [loadImages, folderPath]);
   
   // Save position
   useEffect(() => {
@@ -424,17 +405,15 @@ export function usePhotoSlideshow(
   }, [images, currentIndex, fitMode, imageOrientations, preloadMedia, transitionDuration, onBeforeAdvance]);
 
   // Auto-advance timer
+  const currentPath = images[currentIndex];
+  const isCurrentImageReady = currentPath ? readyImages.has(currentPath) : false;
+
   useEffect(() => {
-    if (images.length === 0 || isTransitioning) return;
+    if (images.length === 0 || isTransitioning || !isCurrentImageReady) return;
     
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
-    }
-    
-    const currentPath = images[currentIndex];
-    if (!blobUrls.current.has(currentPath)) {
-      return;
     }
     
     const nextIdx = (currentIndex + 1) % images.length;
@@ -468,7 +447,7 @@ export function usePhotoSlideshow(
         if (timerRef.current) clearTimeout(timerRef.current);
       };
     }
-  }, [currentIndex, images, displayDuration, isTransitioning, readyImages, preloadMedia, advanceToNext]);
+  }, [currentIndex, images, displayDuration, isTransitioning, isCurrentImageReady, currentPath, preloadMedia, advanceToNext]);
   
   // Computed values for rendering
   const currentImage = images[currentIndex];
