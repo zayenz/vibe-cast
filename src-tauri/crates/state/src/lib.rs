@@ -199,7 +199,6 @@ impl AppStateSync {
                 name: "Photo Slideshow".to_string(),
                 visualization_id: "photo-slideshow".to_string(),
                 settings: serde_json::json!({
-                    "sourceType": "local",
                     "folderPath": "",
                     "photosAlbumName": "",
                     "displayDuration": 5,
@@ -209,10 +208,10 @@ impl AppStateSync {
                     "enableSlide": true,
                     "enableZoom": true,
                     "enable3DRotate": true,
-                    "enableCube": false,
+                    "enableCube": true,
                     "enableFlip": true,
-                    "fitMode": "cover",
-                    "smartCrop": true,
+                    "fitMode": "contain",
+                    "smartCrop": false,
                     "videoSound": true,
                     "videoVolume": 50
                 }),

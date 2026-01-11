@@ -32,7 +32,6 @@
       "name": "Photo Slideshow",
       "visualizationId": "photo-slideshow",
       "settings": {
-        "sourceType": "local",
         "folderPath": "",
         "photosAlbumName": "",
         "displayDuration": 5,

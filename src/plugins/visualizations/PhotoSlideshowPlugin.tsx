@@ -24,15 +24,6 @@ import { usePhotoSlideshow, isVideoFile } from './hooks/usePhotoSlideshow';
 
 export const settingsSchema: SettingDefinition[] = [
   {
-    type: 'select',
-    id: 'sourceType',
-    label: 'Media Source',
-    options: [
-      { value: 'local', label: 'Local Folder' }
-    ],
-    default: 'local'
-  },
-  {
     type: 'text',
     id: 'folderPath',
     label: 'Folder Path',
