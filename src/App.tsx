@@ -33,6 +33,7 @@ function App() {
   const [view, setView] = useState<"loading" | "viz" | "control" | "remote">("loading");
 
   useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
     if (!isTauri) {

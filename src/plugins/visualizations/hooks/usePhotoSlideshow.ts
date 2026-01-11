@@ -186,12 +186,14 @@ export function usePhotoSlideshow(
   
   // Cleanup
   useEffect(() => {
+    const urls = blobUrls.current;
+    const promises = loadingPromises.current;
     return () => {
-      blobUrls.current.forEach((url) => {
+      urls.forEach((url) => {
         URL.revokeObjectURL(url);
       });
-      blobUrls.current.clear();
-      loadingPromises.current.clear();
+      urls.clear();
+      promises.clear();
     };
   }, []);
   
@@ -220,8 +222,8 @@ export function usePhotoSlideshow(
           try {
             targetPath = await resolveResource('kittens');
             isExample = true;
-          } catch (e) {
-            console.warn('[Photo Slideshow] Failed to resolve kittens resource:', e);
+          } catch (_e) {
+            console.warn('[Photo Slideshow] Failed to resolve kittens resource:', _e);
           }
         }
         
@@ -301,8 +303,8 @@ export function usePhotoSlideshow(
             setFacePositions(prev => new Map(prev).set(firstPath, facePos));
           }).catch(console.error);
         }
-      } catch (err) {
-        console.error(err);
+      } catch (_err) {
+        console.error(_err);
         setLoading(false);
       }
       
@@ -419,7 +421,7 @@ export function usePhotoSlideshow(
       setNextIndex(null);
       setIsTransitioning(false);
     }, transitionDuration * 1000);
-  }, [images, currentIndex, fitMode, imageOrientations, preloadMedia, transitionDuration]);
+  }, [images, currentIndex, fitMode, imageOrientations, preloadMedia, transitionDuration, onBeforeAdvance]);
 
   // Auto-advance timer
   useEffect(() => {

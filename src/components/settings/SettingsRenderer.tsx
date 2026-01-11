@@ -272,7 +272,7 @@ const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, ac
         
         if (!albums || albums.length === 0) {
           console.log('[Album Picker] No albums found');
-          alert('No albums found in Apple Photos.\n\nMake sure you have albums in the Photos app and have granted access.');
+          window.alert('No albums found in Apple Photos.\n\nMake sure you have albums in the Photos app and have granted access.');
           return;
         }
         
@@ -285,7 +285,7 @@ const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, ac
       } catch (err) {
         console.error('[Album Picker] ERROR:', err);
         const errorMsg = err instanceof Error ? err.message : String(err);
-        alert(`Error getting albums: ${errorMsg}\n\nMake sure you're running on macOS and have granted Photos access.`);
+        window.alert(`Error getting albums: ${errorMsg}\n\nMake sure you're running on macOS and have granted Photos access.`);
       }
     }
   };

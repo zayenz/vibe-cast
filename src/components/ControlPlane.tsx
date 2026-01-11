@@ -97,8 +97,7 @@ export const ControlPlane: React.FC = () => {
     } catch (e) {
       console.error('[ControlPlane] Error serializing messageStats:', e);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasMessageStats]); // ONLY hasMessageStats - state is accessed via closure
+  }, [state]); // Sync whenever state changes (ref check handles de-duplication)
 
   // Sync the full SSE state into the store so saves include the live data
   const stateSyncRef = useRef<string>('');
@@ -414,10 +413,10 @@ export const ControlPlane: React.FC = () => {
     return node;
   };
 
-  const updateFolderAtPath = (tree: MessageTreeNode[], folderPath: string, updater: (f: any) => any): MessageTreeNode[] => {
+  const updateFolderAtPath = (tree: MessageTreeNode[], folderPath: string, updater: (f: MessageTreeNode) => MessageTreeNode): MessageTreeNode[] => {
     const indices = pathToIndices(folderPath);
     const next = cloneTree(tree);
-    let children = next as any[];
+    let children = next;
     for (let d = 0; d < indices.length; d++) {
       const idx = indices[d];
       const node = children[idx];
@@ -438,7 +437,7 @@ export const ControlPlane: React.FC = () => {
     const next = cloneTree(tree);
     const parentIndices = indices.slice(0, -1);
     const removeIdx = indices[indices.length - 1];
-    let children: any[] = next as any[];
+    let children: MessageTreeNode[] = next;
     for (const idx of parentIndices) {
       const node = children[idx];
       if (!node || node.type !== 'folder') return { tree: next, removed: null };
@@ -451,7 +450,7 @@ export const ControlPlane: React.FC = () => {
   const insertNode = (tree: MessageTreeNode[], parentPath: string, index: number, node: MessageTreeNode): MessageTreeNode[] => {
     const next = cloneTree(tree);
     if (!parentPath) {
-      const arr = next as any[];
+      const arr = next;
       arr.splice(Math.max(0, Math.min(arr.length, index)), 0, node);
       return next;
     }
@@ -465,7 +464,7 @@ export const ControlPlane: React.FC = () => {
   const isDescendantPath = (ancestor: string, maybeDesc: string) =>
     maybeDesc === ancestor || maybeDesc.startsWith(`${ancestor}.`);
 
-  const countFolder = (folder: any): { triggered: number; total: number } => {
+  const countFolder = (folder: MessageTreeNode): { triggered: number; total: number } => {
     let total = 0;
     let triggered = 0;
     const walk = (nodes: MessageTreeNode[]) => {

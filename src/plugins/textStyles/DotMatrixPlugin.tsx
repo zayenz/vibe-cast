@@ -178,7 +178,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
   repeatCount = 1,
   onComplete,
 }) => {
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible, setIsVisible] = useState(!!message);
   const [displayedChars, setDisplayedChars] = useState<number>(0);
   const [scrollPosition, setScrollPosition] = useState(0);
   const [currentRepeat, setCurrentRepeat] = useState(0);
@@ -243,17 +243,6 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
     }
   };
 
-  // Fade in animation
-  useEffect(() => {
-    if (message) {
-      completedRef.current = false;
-      setIsVisible(true);
-      setDisplayedChars(0);
-      setScrollPosition(0);
-      setCurrentRepeat(0);
-    }
-  }, [message, messageTimestamp]);
-
   // Scroll animation - restart on each repeat
   useEffect(() => {
     if (!isVisible || !message) return;
@@ -287,7 +276,7 @@ const DotMatrixStyle: React.FC<TextStyleProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isVisible, message, scrollSpeed, charWidth, viewportWidth, currentRepeat]);
+  }, [isVisible, message, scrollSpeed, charWidth, viewportWidth, currentRepeat, handleComplete]);
 
   // Render dots on canvas
   useEffect(() => {

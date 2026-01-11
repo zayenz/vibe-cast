@@ -174,7 +174,6 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const {
     loading,
     error,
-    usingExamplePhotos,
     images,
     currentIndex,
     nextIndex,
@@ -275,7 +274,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
             
             {sourceType === 'local' && (
               <div className="text-zinc-600 text-xs mt-4">
-                Use the "Browse" button in settings to select a folder with images.
+                Use the &quot;Browse&quot; button in settings to select a folder with images.
               </div>
             )}
           </div>

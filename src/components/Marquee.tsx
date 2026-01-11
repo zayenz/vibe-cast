@@ -17,7 +17,7 @@ export const Marquee: React.FC = () => {
   useEffect(() => {
     if (activeMessage) {
       // Force a reset if the same message is triggered again
-      setDisplayMessage(null);
+      const resetTimer = setTimeout(() => setDisplayMessage(null), 0);
       
       // Small delay to allow AnimatePresence to see the null state
       const nextTick = setTimeout(() => {
@@ -31,6 +31,7 @@ export const Marquee: React.FC = () => {
       }, 10050); // Show for 10 seconds + delay
       
       return () => {
+        clearTimeout(resetTimer);
         clearTimeout(nextTick);
         clearTimeout(timer);
       };

@@ -369,31 +369,34 @@ export const VisualizerWindow: React.FC = () => {
   const setMode = useStore((state) => state.setMode);
 
   // Helper to handle remote commands (from both Tauri events and SSE)
-  const handleRemoteCommand = useCallback((command: string, payload: any) => {
+  const handleRemoteCommand = useCallback((command: string, payload: unknown) => {
     console.log('Received remote-command:', command, payload);
       
     switch (command) {
       case 'set-mode':
-        setMode(payload, false);
+        if (typeof payload === 'string') setMode(payload, false);
         break;
       case 'set-active-visualization':
-        setActiveVisualization(payload, false);
+        if (typeof payload === 'string') setActiveVisualization(payload, false);
         break;
       case 'set-active-visualization-preset':
         // Handle preset activation from remote
-        useStore.setState({ activeVisualizationPreset: payload });
-        // Also update active visualization based on preset
-        if (payload) {
-          const preset = useStore.getState().visualizationPresets.find(p => p.id === payload);
-          if (preset) {
-            setActiveVisualization(preset.visualizationId, false);
+        if (payload === null || typeof payload === 'string') {
+          useStore.setState({ activeVisualizationPreset: payload });
+          // Also update active visualization based on preset
+          if (payload) {
+            const preset = useStore.getState().visualizationPresets.find(p => p.id === payload);
+            if (preset) {
+              setActiveVisualization(preset.visualizationId, false);
+            }
           }
         }
         break;
       case 'set-visualization-presets':
         // Update visualization presets from remote
         if (payload && Array.isArray(payload)) {
-          useStore.setState({ visualizationPresets: payload });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          useStore.setState({ visualizationPresets: payload as any[] });
         }
         break;
       case 'trigger-message': {
@@ -414,7 +417,8 @@ export const VisualizerWindow: React.FC = () => {
         break;
       }
       case 'set-common-settings':
-        setCommonSettings(payload, false);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setCommonSettings(payload as any, false);
         break;
       case 'set-visualization-settings':
         console.log('VisualizerWindow: Received set-visualization-settings', payload);
@@ -423,7 +427,8 @@ export const VisualizerWindow: React.FC = () => {
         }
         break;
       case 'load-configuration':
-        loadConfiguration(payload, false);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        loadConfiguration(payload as any, false);
         break;
       case 'toggle-debug-overlay':
         // Enable debug overlay via remote command (useful when keyboard shortcuts don't work)
@@ -756,19 +761,20 @@ export const VisualizerWindow: React.FC = () => {
 
     // Listen for state changes from other windows
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const unlistenStatePromise = listen<{ type: string, payload: any }>('state-changed', (event) => {
+    const unlistenStatePromise = listen<{ type: string, payload: unknown }>('state-changed', (event) => {
       console.log('Received state-changed:', event.payload);
       const { type, payload } = event.payload;
       
       switch (type) {
         case 'SET_MODE':
-          setMode(payload, false);
+          if (typeof payload === 'string') setMode(payload, false);
           break;
         case 'SET_ACTIVE_VISUALIZATION':
-          setActiveVisualization(payload, false);
+          if (typeof payload === 'string') setActiveVisualization(payload, false);
           break;
         case 'SET_MESSAGES':
-          setMessages(payload, false);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setMessages(payload as any[], false);
           break;
         case 'TRIGGER_MESSAGE': {
           // Handle both legacy string and new MessageConfig formats
@@ -787,7 +793,8 @@ export const VisualizerWindow: React.FC = () => {
           break;
         }
         case 'SET_COMMON_SETTINGS':
-          setCommonSettings(payload, false);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setCommonSettings(payload as any, false);
           break;
         case 'SET_VISUALIZATION_SETTINGS':
           // Full replacement of visualization settings
@@ -798,12 +805,15 @@ export const VisualizerWindow: React.FC = () => {
         case 'SET_VISUALIZATION_PRESETS':
           // Update visualization presets
           if (payload && Array.isArray(payload)) {
-            useStore.setState({ visualizationPresets: payload });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            useStore.setState({ visualizationPresets: payload as any[] });
           }
           break;
         case 'SET_ACTIVE_VISUALIZATION_PRESET':
           // Update active preset
-          useStore.setState({ activeVisualizationPreset: payload });
+          if (typeof payload === 'string' || payload === null) {
+            useStore.setState({ activeVisualizationPreset: payload });
+          }
           break;
         case 'SET_TEXT_STYLE_SETTINGS':
           // Full replacement of text style settings
@@ -816,11 +826,13 @@ export const VisualizerWindow: React.FC = () => {
         case 'SET_TEXT_STYLE_PRESETS':
           // Update text style presets
           if (payload && Array.isArray(payload)) {
-            useStore.setState({ textStylePresets: payload });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            useStore.setState({ textStylePresets: payload as any[] });
           }
           break;
         case 'LOAD_CONFIGURATION':
-          loadConfiguration(payload, false);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          loadConfiguration(payload as any, false);
           break;
         case 'REMOUNT_VIZ':
           setRecoveryCount((c) => c + 1);
