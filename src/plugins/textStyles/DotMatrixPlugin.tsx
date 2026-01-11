@@ -172,7 +172,7 @@ function getCharMatrix(char: string): number[][] {
 
 const DotMatrixStyle: React.FC<TextStyleProps> = ({
   message,
-  messageTimestamp,
+  messageTimestamp: _messageTimestamp,
   settings,
   verticalOffset = 0,
   repeatCount = 1,

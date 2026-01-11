@@ -243,18 +243,20 @@ const VisualizationRenderer: React.FC<{
   
   // Debug logging (opt-in): avoid heavy JSON/logging in the hot path for long-running stability.
   const lastLoggedRef = useRef<string>('');
-  if (debug && import.meta.env.DEV) {
-    const logKey = `${visualizationId}|${presetSettings ? Object.keys(presetSettings).join(',') : 'none'}|${Object.keys(visualizationSettings).join(',')}`;
-    if (logKey !== lastLoggedRef.current) {
-      lastLoggedRef.current = logKey;
-      console.log('[VisualizationRenderer] Settings update:', {
-        visualizationId,
-        pluginFound: !!plugin,
-        presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
-        storedSettingsKeys: Object.keys(visualizationSettings),
-      });
+  useEffect(() => {
+    if (debug && import.meta.env.DEV) {
+      const logKey = `${visualizationId}|${presetSettings ? Object.keys(presetSettings).join(',') : 'none'}|${Object.keys(visualizationSettings).join(',')}`;
+      if (logKey !== lastLoggedRef.current) {
+        lastLoggedRef.current = logKey;
+        console.log('[VisualizationRenderer] Settings update:', {
+          visualizationId,
+          pluginFound: !!plugin,
+          presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
+          storedSettingsKeys: Object.keys(visualizationSettings),
+        });
+      }
     }
-  }
+  }, [debug, visualizationId, presetSettings, visualizationSettings, plugin]);
   
   if (!plugin) {
     // Fallback to fireplace if visualization not found
@@ -337,6 +339,45 @@ export const VisualizerWindow: React.FC = () => {
   const commonSettings = useStore((state) => state.commonSettings);
   const visualizationSettings = useStore((state) => state.visualizationSettings);
   const activeMessages = useStore((state) => state.activeMessages);
+  
+  // Debug overlay - works in both dev and production
+  // Enable via query param ?vizDebug=1, localStorage key 'vibecast:vizDebug', or click the debug button
+  const devOverlayEnabledByQuery = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('vizDebug') === '1';
+    } catch {
+      return false;
+    }
+  }, []);
+  
+  // Check for auto-enable conditions (production-friendly)
+  const shouldAutoEnableDebug = useMemo(() => {
+    // Auto-enable if query param is set
+    if (devOverlayEnabledByQuery) return true;
+    
+    // Auto-enable if localStorage flag is set
+    try {
+      const stored = window.localStorage.getItem('vibecast:vizDebug');
+      if (stored === '1') return true;
+    } catch {
+      // ignore
+    }
+    
+    // Auto-enable if we detect we're in a problematic state (no SSE connection after 3 seconds)
+    // This helps diagnose issues automatically
+    return false;
+  }, [devOverlayEnabledByQuery]);
+  
+  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(shouldAutoEnableDebug);
+
+  // Persist debug overlay state to localStorage (works in both dev and production)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [showDevOverlay]);
   
   // Debug: Log activeMessages changes
   useEffect(() => {
@@ -559,7 +600,7 @@ export const VisualizerWindow: React.FC = () => {
       hasTextStylePresets: Array.isArray(sseState.textStylePresets),
       hasReceivedSSEState,
     });
-  }, [sseState, loadConfiguration, hasReceivedSSEState]);
+  }, [sseState, sseConnected, loadConfiguration, hasReceivedSSEState]);
 
   // Sync folderPlaybackQueue from SSE state to zustand store
   // This is runtime state (not config), so sync it separately
@@ -656,59 +697,6 @@ export const VisualizerWindow: React.FC = () => {
   // Throttle audio updates to at most one store update per animation frame.
   const audioRafRef = useRef<number | null>(null);
   const latestAudioRef = useRef<number[] | null>(null);
-
-  // Debug overlay - works in both dev and production
-  // Enable via query param ?vizDebug=1, localStorage key 'vibecast:vizDebug', or click the debug button
-  const devOverlayEnabledByQuery = useMemo(() => {
-    try {
-      return new URLSearchParams(window.location.search).get('vizDebug') === '1';
-    } catch {
-      return false;
-    }
-  }, []);
-  
-  // Check for auto-enable conditions (production-friendly)
-  const shouldAutoEnableDebug = useMemo(() => {
-    // Auto-enable if query param is set
-    if (devOverlayEnabledByQuery) return true;
-    
-    // Auto-enable if localStorage flag is set
-    try {
-      const stored = window.localStorage.getItem('vibecast:vizDebug');
-      if (stored === '1') return true;
-    } catch {
-      // ignore
-    }
-    
-    // Auto-enable if we detect we're in a problematic state (no SSE connection after 3 seconds)
-    // This helps diagnose issues automatically
-    return false;
-  }, [devOverlayEnabledByQuery]);
-  
-  const [showDevOverlay, setShowDevOverlay] = useState<boolean>(shouldAutoEnableDebug);
-  
-  // Auto-enable debug overlay if SSE doesn't connect within 3 seconds (production debugging)
-  useEffect(() => {
-    if (shouldAutoEnableDebug) return; // Already enabled
-    
-    const timer = setTimeout(() => {
-      if (!sseConnected && !hasReceivedSSEState) {
-        console.warn('[VisualizerWindow] SSE not connected after 3s, auto-enabling debug overlay');
-        setShowDevOverlay(true);
-      }
-    }, 3000);
-    
-    return () => clearTimeout(timer);
-  }, [sseConnected, hasReceivedSSEState, shouldAutoEnableDebug]);
-
-  // Persist debug overlay state to localStorage (works in both dev and production)
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('vibecast:vizDebug', showDevOverlay ? '1' : '0');
-    } catch {
-      // ignore
-    }
-  }, [showDevOverlay]);
 
   // Keyboard shortcut to toggle debug overlay (works in both dev and production)
   useEffect(() => {
@@ -887,6 +875,7 @@ export const VisualizerWindow: React.FC = () => {
     setVisualizationSettings,
     setTextStyleSetting,
     loadConfiguration,
+    handleRemoteCommand,
   ]);
 
   useEffect(() => {
@@ -900,9 +889,9 @@ export const VisualizerWindow: React.FC = () => {
   }, []);
 
   // Get settings for the target visualization
-  const vizSettings = activePreset 
+  const vizSettings = useMemo(() => activePreset 
     ? { [targetVizId]: activePreset.settings }
-    : visualizationSettings;
+    : visualizationSettings, [activePreset, targetVizId, visualizationSettings]);
   
   useEffect(() => {
     if (!import.meta.env.DEV) return;

@@ -20,7 +20,7 @@ import {
   // Movement & Direction
   ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Move, Navigation,
   // Symbols
-  Infinity, Atom, Brain, Eye, EyeOff, Lock, Unlock, Key,
+  Infinity as InfinityIcon, Atom, Brain, Eye, EyeOff, Lock, Unlock, Key,
   // Other
   Settings, Settings2, Sliders, Palette, Paintbrush, Brush, Wand2,
 } from 'lucide-react';
@@ -56,7 +56,7 @@ const iconMap: Record<IconName, React.ComponentType<{ size?: number; className?:
   // Movement & Direction
   ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Move, Navigation,
   // Symbols
-  Infinity, Atom, Brain, Eye, EyeOff, Lock, Unlock, Key,
+  Infinity: InfinityIcon, Atom, Brain, Eye, EyeOff, Lock, Unlock, Key,
   // Other
   Settings, Settings2, Sliders, Palette, Paintbrush, Brush, Wand2,
 };
@@ -125,7 +125,7 @@ export const iconOptions: IconOption[] = [
   { name: 'Navigation', label: 'Navigation', category: 'Movement & Direction', component: Navigation },
   
   // Symbols
-  { name: 'Infinity', label: 'Infinity', category: 'Symbols', component: Infinity },
+  { name: 'Infinity', label: 'Infinity', category: 'Symbols', component: InfinityIcon },
   { name: 'Atom', label: 'Atom', category: 'Symbols', component: Atom },
   { name: 'Brain', label: 'Brain', category: 'Symbols', component: Brain },
   { name: 'Eye', label: 'Eye', category: 'Symbols', component: Eye },

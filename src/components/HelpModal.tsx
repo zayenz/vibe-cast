@@ -40,7 +40,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
               <li><strong>Visualizer Stage:</strong> A dedicated, borderless window meant for your secondary display (TV, Projector).</li>
             </ul>
             <div className="bg-zinc-800/50 p-4 rounded-lg border border-zinc-700/50 text-sm text-zinc-400">
-              <span className="text-orange-400 font-bold">Tip:</span> If you lose the Visualizer window, use the "Toggle Stage" or "Restart Stage" buttons in the top right.
+              <span className="text-orange-400 font-bold">Tip:</span> If you lose the Visualizer window, use the &quot;Toggle Stage&quot; or &quot;Restart Stage&quot; buttons in the top right.
             </div>
           </section>
 

@@ -205,7 +205,7 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
   // Load YouTube API and initialize player
   useEffect(() => {
     if (!videoId) {
-      setError('Invalid YouTube URL. Please provide a valid YouTube video URL.');
+      setTimeout(() => setError('Invalid YouTube URL. Please provide a valid YouTube video URL.'), 0);
       return;
     }
     
@@ -316,6 +316,8 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
     
     initPlayer();
     
+    const container = containerRef.current;
+    
     return () => {
       // Save position before cleanup
       if (playerRef.current && videoId) {
@@ -337,13 +339,14 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
       }
       
       // Clean up container to ensure React can render into it again
-      if (containerRef.current) {
-        containerRef.current.innerHTML = '';
+      if (container) {
+        container.innerHTML = '';
       }
       
       playerRef.current = null;
       setIsReady(false);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, showControls, playerId]);
   
   // Update mute state

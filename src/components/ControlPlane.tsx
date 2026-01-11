@@ -74,7 +74,6 @@ export const ControlPlane: React.FC = () => {
   // CRITICAL: Use a ref to track the last synced value and only sync when state changes
   // Use a stable boolean dependency instead of computing a string key during render
   const messageStatsSyncedRef = useRef<string>('');
-  const hasMessageStats = state?.messageStats != null;
   
   // Sync messageStats in useEffect with stable boolean dependency
   // CRITICAL: Only depend on hasMessageStats (always a boolean, never undefined)
@@ -97,6 +96,7 @@ export const ControlPlane: React.FC = () => {
     } catch (e) {
       console.error('[ControlPlane] Error serializing messageStats:', e);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]); // Sync whenever state changes (ref check handles de-duplication)
 
   // Sync the full SSE state into the store so saves include the live data
@@ -163,6 +163,7 @@ export const ControlPlane: React.FC = () => {
       console.log('[ControlPlane] Syncing folderPlaybackQueue from SSE:', sseQueue);
       useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.folderPlaybackQueue]);
 
   // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)

@@ -487,7 +487,7 @@ const RaymarchPipeline: React.FC<{
     gl.setRenderTarget(taaHistBRef.current);
     gl.clear(true, true, true);
     gl.setRenderTarget(null);
-  }, [rtW, rtH, gl, rayMat, fbMat]);
+  }, [rtW, rtH, gl, rayMat, fbMat, taaMat]);
 
   const [webglLost, setWebglLost] = useState(false);
   useEffect(() => {

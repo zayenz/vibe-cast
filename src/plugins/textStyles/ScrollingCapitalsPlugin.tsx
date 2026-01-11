@@ -182,7 +182,7 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
   // Restart animation when repeat changes
   useEffect(() => {
     if (displayMessage && currentRepeat > 0) {
-      setAnimationKey(prev => prev + 1);
+      setTimeout(() => setAnimationKey(prev => prev + 1), 0);
     }
   }, [currentRepeat, displayMessage]);
 
@@ -192,14 +192,14 @@ const ScrollingCapitalsStyle: React.FC<TextStyleProps> = ({
       // New message - reset everything
       lastMessageTimestampRef.current = messageTimestamp;
       completedRef.current = false;
-      setCurrentRepeat(0);
+      setTimeout(() => setCurrentRepeat(0), 0);
       // Clear any pending timeouts
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
       // Immediately show the message
-      setDisplayMessage(message);
+      setTimeout(() => setDisplayMessage(message), 0);
       
       // Safety timeout: ensure message is cleared even if animation doesn't complete
       const { animDuration } = calculateAnimationParams(message);

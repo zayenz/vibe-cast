@@ -121,6 +121,13 @@ const BounceStyle: React.FC<TextStyleProps> = ({
 
   const effectiveRepeats = Math.max(1, Math.floor(Number(repeatCount) || 1));
 
+  const springTransition = React.useMemo(() => ({
+    type: "spring" as const,
+    stiffness: 300,
+    damping: 20,
+    mass: 0.8,
+  }), []);
+
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
@@ -184,15 +191,8 @@ const BounceStyle: React.FC<TextStyleProps> = ({
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [message, messageTimestamp]);
+  }, [message, messageTimestamp, bounceIntensity, controls, displayDuration, effectiveRepeats, fadeOutDuration, springTransition]);
 
-
-  const springTransition = {
-    type: "spring" as const,
-    stiffness: 300,
-    damping: 20,
-    mass: 0.8,
-  };
 
   return (
     <div 

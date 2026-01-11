@@ -57,7 +57,7 @@ async function main() {
 
   // Cleanup
   console.log('Cleaning up ports...');
-  try { execSync('node scripts/kill-port.mjs 8080'); } catch {}
+  try { execSync('node scripts/kill-port.mjs 8080'); } catch { /* ignore */ }
 
   // Launch App
   console.log('Launching app...');
@@ -68,8 +68,8 @@ async function main() {
   
   const cleanup = () => {
     console.log('Cleaning up...');
-    try { process.kill(appProcess.pid); } catch {}
-    try { execSync('node scripts/kill-port.mjs 8080'); } catch {}
+    try { process.kill(appProcess.pid); } catch { /* ignore */ }
+    try { execSync('node scripts/kill-port.mjs 8080'); } catch { /* ignore */ }
   };
   
   process.on('SIGINT', () => { cleanup(); process.exit(); });
@@ -85,7 +85,7 @@ async function main() {
           connected = true;
           break;
         }
-      } catch {}
+      } catch { /* ignore */ }
       await setTimeout(1000);
     }
 

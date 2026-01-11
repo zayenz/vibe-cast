@@ -70,9 +70,16 @@ const settingsSchema: SettingDefinition[] = [
   },
 ];
 
-// ============================================================================
-// Component
-// ============================================================================
+// Cache canvas for text measurement (module-level to avoid ref access during render)
+let cachedMeasureCanvas: HTMLCanvasElement | null = null;
+
+const ensureCanvas = (): CanvasRenderingContext2D | null => {
+  if (typeof document === 'undefined') return null;
+  if (!cachedMeasureCanvas) {
+    cachedMeasureCanvas = document.createElement('canvas');
+  }
+  return cachedMeasureCanvas.getContext('2d');
+};
 
 const CreditsStyle: React.FC<TextStyleProps> = ({
   message,
@@ -96,7 +103,6 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
   const lastMessageTimestampRef = useRef<number>(0);
   const lastMessageRef = useRef<string>('');
   const onCompleteRef = useRef(onComplete);
-  const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const scrollSpeed = getNumberSetting(settings.scrollSpeed, 100, 50, 500);
   const fontSize = getNumberSetting(settings.fontSize, 8, 4, 16);
@@ -132,14 +138,6 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
 
   const alignment = (align === 'left' || align === 'right' || align === 'center') ? align : 'center';
   const textAlign: 'left' | 'center' | 'right' = alignment;
-
-  const ensureCanvas = (): CanvasRenderingContext2D | null => {
-    if (typeof document === 'undefined') return null;
-    if (!measureCanvasRef.current) {
-      measureCanvasRef.current = document.createElement('canvas');
-    }
-    return measureCanvasRef.current.getContext('2d');
-  };
 
   const wrapLine = (ctx: CanvasRenderingContext2D, line: string, maxWidthPx: number): string[] => {
     // Preserve blank lines as actual vertical spacing
@@ -212,18 +210,11 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
     return out;
   }, [displayMessage, fontSizePx, viewportWidth]);
 
-  // Calculate total text height in pixels
-  const calculateTextHeight = (lineCount: number): number => {
-    if (lineCount === 0) return 0;
-    const lineHeight = lineHeightPx;
-    const spacing = spacingPx;
-    // Total height = (lineCount * lineHeight) + (spacing * (lineCount - 1))
-    return (lineCount * lineHeight) + (spacing * (lineCount - 1));
-  };
-
   // Calculate animation parameters
-  const calculateAnimationParams = (lineCount: number) => {
-    const totalTextHeight = calculateTextHeight(lineCount);
+  const calculateAnimationParams = React.useCallback((lineCount: number) => {
+    // Calculate total text height in pixels
+    const totalTextHeight = lineCount === 0 ? 0 : (lineCount * lineHeightPx) + (spacingPx * (lineCount - 1));
+    
     // Start just below the viewport so credits appear immediately (previously we started below by totalTextHeight)
     const edgePaddingPx = Math.max(24, fontSizePx); // enough space for glow/first line
     const startPos = viewportHeight + edgePaddingPx;
@@ -233,7 +224,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
     const animDuration = travelDistance / scrollSpeed; // Duration based on scroll speed
     
     return { startPos, endPos, animDuration, totalTextHeight };
-  };
+  }, [fontSizePx, lineHeightPx, spacingPx, viewportHeight, scrollSpeed]);
 
   // Handle animation completion
   const handleAnimationEnd = () => {
@@ -265,7 +256,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
   // Restart animation when repeat changes
   useEffect(() => {
     if (displayMessage && currentRepeat > 0) {
-      setAnimationKey(prev => prev + 1);
+      setTimeout(() => setAnimationKey(prev => prev + 1), 0);
     }
   }, [currentRepeat, displayMessage]);
 
@@ -278,14 +269,14 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
       lastMessageTimestampRef.current = messageTimestamp;
       lastMessageRef.current = message;
       completedRef.current = false;
-      setCurrentRepeat(0);
+      setTimeout(() => setCurrentRepeat(0), 0);
       // Clear any pending timeouts
       if (safetyTimeoutRef.current) {
         clearTimeout(safetyTimeoutRef.current);
         safetyTimeoutRef.current = null;
       }
       // Set the message
-      setDisplayMessage(message);
+      setTimeout(() => setDisplayMessage(message), 0);
       
       // Safety timeout: ensure message is cleared even if animation doesn't complete
       const rawLineCount = message.split('\n').length;
@@ -308,7 +299,7 @@ const CreditsStyle: React.FC<TextStyleProps> = ({
         }
       };
     }
-  }, [message, messageTimestamp, repeatCount, viewportHeight, viewportWidth, fontSize, lineSpacing, scrollSpeed]);
+  }, [message, messageTimestamp, repeatCount, viewportHeight, viewportWidth, fontSize, lineSpacing, scrollSpeed, calculateAnimationParams]);
 
   // Calculate animation parameters for current state
   const { startPos, endPos, animDuration } = wrappedLines.length > 0 

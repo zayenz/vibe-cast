@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { VisualizationPlugin, VisualizationProps } from '../types';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../utils/settings';
 import { FacePosition } from './faceDetection';
 import { 
-  TransitionType, 
   getAvailableTransitions, 
   getTransitionStyles 
 } from './utils/transitions';
@@ -48,7 +47,6 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
   const {
     loading,
     error,
-    usingExamplePhotos,
     images,
     currentIndex,
     nextIndex,
@@ -78,7 +76,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
   useEffect(() => {
     if (!isTransitioning && enterPhase === 'active') {
       // Reset to 'enter' so next transition starts correctly
-      setEnterPhase('enter');
+      setTimeout(() => setEnterPhase('enter'), 0);
     }
   }, [isTransitioning, enterPhase]);
 
@@ -156,7 +154,7 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
             
             {sourceType === 'local' && (
               <div className="text-zinc-600 text-xs mt-4">
-                Use the "Browse" button in settings to select a folder with images.
+                Use the &quot;Browse&quot; button in settings to select a folder with images.
               </div>
             )}
           </div>

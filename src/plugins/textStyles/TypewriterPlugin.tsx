@@ -111,12 +111,12 @@ const TypewriterStyle: React.FC<TextStyleProps> = ({
 
   useEffect(() => {
     if (!message) {
-      setDisplayedText('');
+      setTimeout(() => setDisplayedText(''), 0);
       return;
     }
 
     completedRef.current = false;
-    setDisplayedText('');
+    setTimeout(() => setDisplayedText(''), 0);
 
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let currentRepeat = 0;

@@ -40,6 +40,7 @@ export default [
         EventSource: 'readonly',
         process: 'readonly',
         HTMLDivElement: 'readonly',
+        HTMLSpanElement: 'readonly',
         HTMLImageElement: 'readonly',
         HTMLVideoElement: 'readonly',
         HTMLCanvasElement: 'readonly',
