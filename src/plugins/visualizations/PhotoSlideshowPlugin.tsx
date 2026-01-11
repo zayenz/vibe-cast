@@ -153,14 +153,24 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const [currentTransition, setCurrentTransition] = useState<TransitionType>('fade');
   const [enterPhase, setEnterPhase] = useState<'enter' | 'active'>('enter');
 
+  // De-structure individual settings used by onBeforeAdvance to ensure dependency stability
+  const enableFade = !!customSettings.enableFade;
+  const enableSlide = !!customSettings.enableSlide;
+  const enableZoom = !!customSettings.enableZoom;
+  const enable3DRotate = !!customSettings.enable3DRotate;
+  const enableCube = !!customSettings.enableCube;
+  const enableFlip = !!customSettings.enableFlip;
+
   const onBeforeAdvance = useCallback(() => {
-    const availableTransitions = getAvailableTransitions(customSettings);
+    // Re-create settings object for helper function
+    const transitionSettings = { enableFade, enableSlide, enableZoom, enable3DRotate, enableCube, enableFlip };
+    const availableTransitions = getAvailableTransitions(transitionSettings);
     const nextTransition = availableTransitions[Math.floor(Math.random() * availableTransitions.length)];
     setCurrentTransition(nextTransition);
     
     // Set enterPhase to 'enter' BEFORE isTransitioning so entering element renders in enter position first
     setEnterPhase('enter');
-  }, [customSettings]);
+  }, [enableFade, enableSlide, enableZoom, enable3DRotate, enableCube, enableFlip]);
 
   const {
     loading,

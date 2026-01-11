@@ -282,11 +282,15 @@ const VisualizationRenderer: React.FC<{
 
   const VizComponent = plugin.component;
   // Merge stored settings with defaults from schema
-  const defaultSettings = getDefaultsFromSchema(plugin.settingsSchema);
+  const defaultSettings = useMemo(() => getDefaultsFromSchema(plugin.settingsSchema), [plugin]);
   const storedSettings = visualizationSettings[visualizationId] || {};
   // If an active preset is selected, merge its settings as well (preset overrides default, but per-visualization stored settings win last)
   // Order: defaults -> stored -> active preset (preset wins over stored)
-  const customSettings = { ...defaultSettings, ...storedSettings, ...(presetSettings || {}) };
+  const customSettings = useMemo(() => ({ 
+    ...defaultSettings, 
+    ...storedSettings, 
+    ...(presetSettings || {}) 
+  }), [defaultSettings, storedSettings, presetSettings]);
   
   // Debug log the final merged settings (opt-in)
   if (debug && import.meta.env.DEV) {

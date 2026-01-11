@@ -33,16 +33,15 @@ const TransitionDemoVisualization: React.FC<VisualizationProps> = ({
     setEnterPhase('enter');
   }, []);
 
-  // Force fitMode to avoid mosaic logic in the grid cells (too complex/small)
-  // If user selects Mosaic, treat as Contain for the demo
-  // Override displayDuration default to 2 seconds for transition demo
+  // Stabilize demo settings so they don't change every frame (audio updates)
+  const fitModeSetting = getStringSetting(customSettings.fitMode, 'cover');
+  const displayDurationSetting = getNumberSetting(customSettings.displayDuration, 2, 1, 60);
+
   const demoSettings = useMemo(() => ({
     ...customSettings,
-    fitMode: getStringSetting(customSettings.fitMode, 'cover') === 'mosaic' 
-      ? 'contain' 
-      : customSettings.fitMode,
-    displayDuration: getNumberSetting(customSettings.displayDuration, 2, 1, 60)
-  }), [customSettings]);
+    fitMode: fitModeSetting === 'mosaic' ? 'contain' : fitModeSetting,
+    displayDuration: displayDurationSetting
+  }), [customSettings, fitModeSetting, displayDurationSetting]);
 
   const {
     loading,
