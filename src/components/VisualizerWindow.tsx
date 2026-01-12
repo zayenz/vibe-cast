@@ -239,7 +239,10 @@ const VisualizationRenderer: React.FC<{
   presetSettings?: Record<string, unknown>;
   debug?: boolean;
 }> = ({ visualizationId, audioData, commonSettings, visualizationSettings, presetSettings, debug = false }) => {
-  const plugin = getVisualization(visualizationId);
+  const requestedPlugin = getVisualization(visualizationId);
+  const fallbackPlugin = getVisualization('fireplace');
+  // Use requested plugin if found, otherwise fallback
+  const plugin = requestedPlugin || fallbackPlugin;
   
   // Debug logging (opt-in): avoid heavy JSON/logging in the hot path for long-running stability.
   const lastLoggedRef = useRef<string>('');
@@ -250,55 +253,49 @@ const VisualizationRenderer: React.FC<{
         lastLoggedRef.current = logKey;
         console.log('[VisualizationRenderer] Settings update:', {
           visualizationId,
-          pluginFound: !!plugin,
+          pluginFound: !!requestedPlugin,
+          usingFallback: !requestedPlugin && !!plugin,
           presetSettings: presetSettings ? Object.keys(presetSettings) : 'none',
           storedSettingsKeys: Object.keys(visualizationSettings),
         });
       }
     }
-  }, [debug, visualizationId, presetSettings, visualizationSettings, plugin]);
+  }, [debug, visualizationId, presetSettings, visualizationSettings, requestedPlugin, plugin]);
   
-  if (!plugin) {
-    // Fallback to fireplace if visualization not found
-    const fallback = getVisualization('fireplace');
-    if (!fallback) return <div className="absolute inset-0 bg-black" />;
-    
-    const VizComponent = fallback.component;
-    // Merge stored settings with defaults from schema
-    const defaultSettings = getDefaultsFromSchema(fallback.settingsSchema);
-    const storedSettings = visualizationSettings['fireplace'] || {};
-    const customSettings = { ...defaultSettings, ...storedSettings };
-    
-    return (
-      <div className="absolute inset-0">
-        <VizComponent
-          audioData={audioData}
-          commonSettings={commonSettings}
-          customSettings={customSettings}
-        />
-      </div>
-    );
-  }
+  // Memoize default settings (safely handle null plugin just in case)
+  const defaultSettings = useMemo(() => 
+    plugin ? getDefaultsFromSchema(plugin.settingsSchema) : {}, 
+    [plugin]
+  );
 
-  const VizComponent = plugin.component;
-  // Merge stored settings with defaults from schema
-  const defaultSettings = useMemo(() => getDefaultsFromSchema(plugin.settingsSchema), [plugin]);
-  const storedSettings = visualizationSettings[visualizationId] || {};
-  // If an active preset is selected, merge its settings as well (preset overrides default, but per-visualization stored settings win last)
-  // Order: defaults -> stored -> active preset (preset wins over stored)
-  const customSettings = useMemo(() => ({ 
-    ...defaultSettings, 
-    ...storedSettings, 
-    ...(presetSettings || {}) 
-  }), [defaultSettings, storedSettings, presetSettings]);
+  // Memoize merged settings
+  // If we are using the requested plugin, we use its ID for stored settings and mix in presetSettings.
+  // If we fell back, we use 'fireplace' ID and IGNORE presetSettings (since they were for the missing viz).
+  const customSettings = useMemo(() => {
+    if (!plugin) return {};
+    
+    const isFallback = plugin !== requestedPlugin;
+    const targetId = plugin.id;
+    const stored = visualizationSettings[targetId] || {};
+    
+    if (isFallback) {
+      return { ...defaultSettings, ...stored };
+    } else {
+      return { ...defaultSettings, ...stored, ...(presetSettings || {}) };
+    }
+  }, [plugin, requestedPlugin, defaultSettings, visualizationSettings, presetSettings]);
   
   // Debug log the final merged settings (opt-in)
   if (debug && import.meta.env.DEV) {
     console.log('[VisualizationRenderer] Final customSettings keys:', {
-      visualizationId,
+      visualizationId: plugin?.id || 'none',
       keys: Object.keys(customSettings),
     });
   }
+
+  if (!plugin) return <div className="absolute inset-0 bg-black" />;
+
+  const VizComponent = plugin.component;
 
   return (
     <div className="absolute inset-0">
