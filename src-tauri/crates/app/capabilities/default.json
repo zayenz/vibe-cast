@@ -26,6 +26,11 @@
     "opener:default",
     "core:event:default",
     "core:webview:default",
-    "core:window:default"
+    "core:webview:allow-get-all-webviews",
+    "core:window:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible"
   ]
 }

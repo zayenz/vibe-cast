@@ -81,6 +81,7 @@
 - **AppleScript Syntax**: Fixed "Expected end of line" errors by removing invalid `cloud shared albums` syntax and using a more robust query.
 - **Path Handling**: Fixed issues with special characters and folder paths in AppleScript.
 - **Message Display**: Fixed issues where messages wouldn't appear by ensuring proper state synchronization between SSE and Tauri events.
+- **Show/Hide Stage**: Fixed an issue where the "Show/Hide Stage" button would not work due to missing permissions for window management.
 
 ## Recent Updates
 

@@ -4,12 +4,21 @@
   <img src="docs/assets/vibe-cast-icon.png" alt="Vibe Cast Icon" width="200"/>
 </div>
 
-**Vibe Cast** is a visualizer application designed for dual-screen setups. It runs a control panel on your main display (e.g., MacBook) and a fullscreen visualizer on a secondary display (e.g., TV via AirPlay), allowing you to control visuals and messages from your phone.
+**Vibe Cast** is an application designed for a visualization monitor at a party.
+The main idea is to have a dual-screen set-up, with a control pane on a laptop
+and a fullscreen visualizer window on a secondary large display (e.g., a TV via AirPlay). 
+The visualizer can show (audio-reactive) visualizations, the control pane controls which visualization to show, and set up an trigger messages to display. 
+There is also a remote control web page available on the local network that can be used for switching visualizations and triggering messages form a phone.
 
-It features immersive, audio-reactive visualizations (Fireplace, Techno, Waves) and a scrolling message marquee, perfect for parties, events, or chill vibes.
+> [!WARNING] 
+> This application has been vibe-coded and developed 
+> for a single use-case, it is not meant for general usage 
+> nor has it been extensively tested or audited. 
+> It has only been used on a Mac.
+> It may have a lot of bugs, it has very little
+> documentation and may crash in the middle of yur usage.
+> You have been warned!
 
-> [!NOTE]
-> This application is built with Tauri v2 and React. It is a hobby project and may have bugs or stability issues.
 
 ## 🚀 Features
 
@@ -17,7 +26,7 @@ It features immersive, audio-reactive visualizations (Fireplace, Techno, Waves) 
   - **Control Plane**: Manage everything from your Mac.
   - **Visualizer**: Borderless, full-screen visuals for your TV/Monitor.
 - **Remote Control**: Scan a QR code to control the app from your iPhone (no app install needed).
-- **Audio Reactive**: Visuals dance to your system audio (Spotify, Apple Music, etc.).
+- **Audio Reactive**: Visuals dance to your system audio (using a loopback audio device).
 - **Visualizations**:
   - **Fireplace**: Cozy, procedural flames and embers.
   - **Techno**: 3D geometric audio visualization.
@@ -26,10 +35,10 @@ It features immersive, audio-reactive visualizations (Fireplace, Techno, Waves) 
   - **YouTube**: Loop videos (great for ambiance loops). [Docs](docs/YOUTUBE_PLUGIN.md)
   - **Photo Slideshow**: Stream local photos or albums. [Docs](docs/PHOTO_SLIDESHOW_PLUGIN.md)
 - **Message Marquee**:
-  - Send scrolling messages to the screen.
+  - Send messages to the screen.
   - Styles: Scrolling Capitals, Fade, Typewriter, Bounce, Credits.
   - Queue management and presets.
-  - [File Loading Docs](docs/FILE_LOADING.md)
+  - [Load long messages from file](docs/FILE_LOADING.md)
 
 ## 🚦 Quick Start
 
@@ -50,12 +59,17 @@ npm run tauri dev
 
 ## 📚 Documentation
 
+- [Installation Guide](INSTALLATION.md)
 - [Release Process](docs/RELEASE.md)
 - [Architecture & Development](docs/ARCHITECTURE.md)
 - [Changelog](docs/CHANGELOG.md)
 
 ## 🛠️ Built With
 
+This application has been vibe coded using Cursos and Gemini CLI. 
+A plethora of models have been used, most of the models available in Cursor and Gemini CLI have been tested.
+
+The technical stack uses
 -   **Core**: Tauri v2 (Rust)
 -   **Frontend**: React, TypeScript, Tailwind CSS
 -   **Graphics**: React Three Fiber, Three.js, Framer Motion
