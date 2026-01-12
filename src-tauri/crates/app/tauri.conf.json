@@ -33,13 +33,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$RESOURCE/**",
-          "$HOME/**",
-          "/tmp/**",
-          "/var/folders/**",
-          "/Users/**"
-        ]
+        "scope": ["**"]
       }
     }
   },

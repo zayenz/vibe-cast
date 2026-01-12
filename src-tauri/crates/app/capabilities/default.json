@@ -19,7 +19,7 @@
     },
     {
       "identifier": "fs:scope",
-      "allow": [{"path": "$RESOURCE/**"}, {"path": "$HOME/**"}, {"path": "/tmp/**"}, {"path": "/var/folders/**"}, {"path": "/Users/**"}]
+      "allow": [{"path": "**"}]
     },
     "shell:default",
     "shell:allow-execute",
