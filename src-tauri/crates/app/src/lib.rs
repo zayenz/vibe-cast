@@ -431,7 +431,13 @@ fn list_images_in_folder(
                         let ext_str = ext.to_string_lossy().to_lowercase();
                         if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
                             if let Some(path_str) = entry_path.to_str() {
-                                media_files.push(path_str.to_string());
+                                // Strip \\?\ prefix on Windows if present, as it can confuse frontend APIs
+                                let clean_path = if cfg!(windows) && path_str.starts_with(r"\\?\") {
+                                    &path_str[4..]
+                                } else {
+                                    path_str
+                                };
+                                media_files.push(clean_path.to_string());
                             }
                         }
                     }

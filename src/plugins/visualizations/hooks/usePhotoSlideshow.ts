@@ -219,6 +219,7 @@ export function usePhotoSlideshow(
       if (!targetPath) {
         try {
           targetPath = await resolveResource('kittens');
+          console.log('[Photo Slideshow] Resolved kittens resource path:', targetPath);
           isExample = true;
         } catch (_e) {
           console.warn('[Photo Slideshow] Failed to resolve kittens resource:', _e);
@@ -227,6 +228,7 @@ export function usePhotoSlideshow(
       
       if (targetPath) {
         imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+        console.log(`[Photo Slideshow] Found ${imagePaths.length} images in ${targetPath}`);
       }
       
       setUsingExamplePhotos(isExample);
