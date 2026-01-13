@@ -889,7 +889,7 @@ export const ControlPlane: React.FC = () => {
         </div>
       </div>
       ) : (
-    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-x-hidden">
+    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-orange-500/30 overflow-y-auto overflow-x-hidden">
       {/* Dynamic Background */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-orange-600/10 blur-[120px] rounded-full mix-blend-screen" />

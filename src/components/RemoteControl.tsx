@@ -240,7 +240,7 @@ export const RemoteControl: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-hidden">
+    <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-y-auto">
       {/* Background Glows */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute -top-24 -left-24 w-64 h-64 bg-orange-600/20 blur-[100px] rounded-full" />
@@ -316,9 +316,9 @@ export const RemoteControl: React.FC = () => {
         </div>
       </section>
 
-      <section className="relative flex-1 flex flex-col min-h-0">
+      <section className="relative">
         <h2 className="text-zinc-500 text-[10px] font-bold uppercase mb-6 tracking-[0.2em]">Broadcast</h2>
-        <div className="flex-1 space-y-3 overflow-y-auto pb-8 custom-scrollbar">
+        <div className="space-y-3 pb-8">
           {messageTree.length > 0 ? renderMessageTree(messageTree) : (
             messages.map((msg) => {
               const stats = messageStats[msg.id];
