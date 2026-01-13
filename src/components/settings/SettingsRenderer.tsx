@@ -252,17 +252,25 @@ const TextControl: React.FC<TextControlProps> = ({ label, value, placeholder, ac
   const handleActionInternal = async () => {
     if (actionButton === 'folder') {
       try {
+        console.log('[SettingsRenderer] Opening folder picker...');
         const selected = await open({
           directory: true,
           multiple: false,
-          title: 'Select Image Folder'
         });
+        console.log('[SettingsRenderer] Folder picker result:', selected);
         if (selected && typeof selected === 'string') {
+          console.log('[SettingsRenderer] Selected folder:', selected);
           onChange(selected);
+        } else if (selected === null) {
+          console.log('[SettingsRenderer] Folder picker cancelled');
+        } else {
+          console.warn('[SettingsRenderer] Unexpected folder picker result type:', typeof selected, selected);
         }
       } catch (err) {
-        console.error('Failed to open folder picker:', err);
+        console.error('[SettingsRenderer] Failed to open folder picker:', err);
         const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : 'No stack trace';
+        console.error('[SettingsRenderer] Error details:', { message: errorMsg, stack: errorStack });
         window.alert(`Failed to open folder browser: ${errorMsg}\n\nCheck console for details.`);
       }
     } else if (actionButton === 'album') {
