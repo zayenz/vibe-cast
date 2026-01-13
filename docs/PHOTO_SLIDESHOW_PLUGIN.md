@@ -51,8 +51,8 @@ The plugin includes 6 categories of smooth, symmetric transitions:
 1. **Fade** - Classic crossfade between images
 2. **Slide** - Images slide in from 4 directions (left, right, up, down) with symmetric enter/exit
 3. **Zoom** - Images zoom in or out during transition
-4. **3D Rotate** - Images rotate in 3D space (X and Y axis)
-5. **Cube** - 3D cube rotation effect with perspective
+4. **3D Rotate** - Images rotate in 3D space (X and Y axis) with realistic depth
+5. **Cube** - Immersive 3D cube rotation effect with perspective and volume
 6. **Flip** - Images flip over in 3D space
 
 Each transition type can be individually enabled/disabled. The plugin randomly selects from enabled transitions for variety.

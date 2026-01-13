@@ -10,6 +10,7 @@ export type TransitionType = 'fade' | 'slideLeft' | 'slideRight' | 'slideUp' | '
 export interface TransitionStyle {
   opacity?: number;
   transform?: string;
+  transformOrigin?: string;
 }
 
 // ============================================================================
@@ -86,20 +87,20 @@ export function getTransitionStyles(
       exit: { transform: 'scale(0.8)', opacity: 0 }
     },
     rotate3DX: {
-      enter: { transform: 'perspective(1000px) rotateX(90deg)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateX(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateX(-90deg)', opacity: 0 }
+      enter: { transform: 'perspective(1000px) rotateX(90deg) translateZ(100px)', opacity: 0 },
+      active: { transform: 'perspective(1000px) rotateX(0deg) translateZ(0)', opacity: 1 },
+      exit: { transform: 'perspective(1000px) rotateX(-90deg) translateZ(100px)', opacity: 0 }
     },
     rotate3DY: {
-      enter: { transform: 'perspective(1000px) rotateY(90deg)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(-90deg)', opacity: 0 }
+      enter: { transform: 'perspective(1000px) rotateY(-90deg) translateZ(100px)', opacity: 0 },
+      active: { transform: 'perspective(1000px) rotateY(0deg) translateZ(0)', opacity: 1 },
+      exit: { transform: 'perspective(1000px) rotateY(90deg) translateZ(100px)', opacity: 0 }
     },
     cube: {
-      // Cube transition: uses X-axis rotation with full opacity (no fade) to differentiate from rotate3DY
-      enter: { transform: 'perspective(1000px) rotateX(90deg)', opacity: 1 },
-      active: { transform: 'perspective(1000px) rotateX(0deg)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateX(-90deg)', opacity: 1 }
+      // Improved Cube transition using rotate and translate to simulate a rotating volume
+      enter: { transform: 'perspective(2000px) rotateY(90deg) translateZ(50vw)', opacity: 0, transformOrigin: 'center center -50vw' },
+      active: { transform: 'perspective(2000px) rotateY(0deg) translateZ(0)', opacity: 1, transformOrigin: 'center center 0' },
+      exit: { transform: 'perspective(2000px) rotateY(-90deg) translateZ(50vw)', opacity: 0, transformOrigin: 'center center -50vw' }
     },
     flip: {
       enter: { transform: 'perspective(1000px) rotateY(180deg)', opacity: 0 },
