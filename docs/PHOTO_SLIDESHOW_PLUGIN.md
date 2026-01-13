@@ -208,9 +208,9 @@ The plugin now includes a set of **example photos** (bundled with the applicatio
 
 ### Using Example Photos
 
-If no **Folder Path** is configured (default state), the plugin will automatically load the bundled example photos.
+If no **Folder Path** is configured (default state), the plugin will automatically load the bundled example photos (featuring cute kittens!).
 - **Indicator:** A "Using example photos" badge will appear in the top-left corner.
-- **Content:** The examples are lightweight, abstract SVG patterns (or placeholder images).
+- **Content:** The examples are high-quality kitten photos bundled with the app.
 - **Purpose:** Allows users to test transitions and display modes immediately.
 
 To switch to your own photos, simply browse and select a local folder. To revert to examples, clear the **Folder Path** field.
