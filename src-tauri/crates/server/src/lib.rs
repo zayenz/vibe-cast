@@ -156,7 +156,8 @@ struct AppState {
 pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSync>, port: u16) {
     let dist_path = if cfg!(debug_assertions) {
         let mut path = std::env::current_dir().unwrap();
-        if path.ends_with("src-tauri") {
+        // Climb up until we find the project root (where package.json and src-tauri exist)
+        while path.parent().is_some() && !(path.join("package.json").exists() && path.join("src-tauri").exists()) {
             path = path.parent().unwrap().to_path_buf();
         }
         path.join("dist")
