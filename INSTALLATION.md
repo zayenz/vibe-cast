@@ -104,3 +104,4 @@ On Linux (PulseAudio/PipeWire):
 
 -   **Visualizations are silent/flat:** Ensure your system output is routed to the loopback device, and the loopback device is set as the default input (or selected within the app if supported).
 -   **Permissions (macOS):** VibeCast requires Microphone permission to capture audio. If prompted, click "Allow". Check System Settings > Privacy & Security > Microphone if you denied it previously.
+-   **"App is Damaged" (macOS):** If you see a message that "VibeCast is damaged and can't be opened" after downloading it, this is due to macOS security quarantine on unsigned apps. To fix it, open Terminal and run: `xattr -d com.apple.quarantine /Applications/VibeCast.app` (adjust the path if you installed it elsewhere).

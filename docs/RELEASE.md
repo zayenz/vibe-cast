@@ -45,3 +45,17 @@ For signed builds (recommended for macOS to avoid security warnings), configure 
 - `APPLE_API_KEY_PATH`: Path or content of the private key.
 
 Without these, the macOS app will be unsigned and may require users to right-click -> Open to run.
+
+## Troubleshooting
+
+### macOS: "VibeCast is damaged and can't be opened"
+
+If users download the app from GitHub and see this error, it is because the app is unsigned and has been quarantined by macOS Gatekeeper.
+
+**Fix:**
+Run the following command in Terminal to remove the quarantine attribute:
+
+```bash
+xattr -d com.apple.quarantine /Applications/VibeCast.app
+```
+*(Replace `/Applications/VibeCast.app` with the actual path to the app if it's not in the Applications folder)*
