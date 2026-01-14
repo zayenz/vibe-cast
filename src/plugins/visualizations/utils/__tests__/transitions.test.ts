@@ -2,15 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { getTransitionStyles } from '../transitions';
 
 describe('transitions', () => {
-  it('cube transition should have 3D properties', () => {
-    const enter = getTransitionStyles('cube', 'enter');
-    const exit = getTransitionStyles('cube', 'exit');
+  it('flip transition should have 3D perspective', () => {
+    const active = getTransitionStyles('flip', 'active');
+    const exit = getTransitionStyles('flip', 'exit');
 
-    // Currently it just uses rotateX/rotateY without translateZ or special origin
-    // Once I improve it, these should fail if I don't update the test.
-    // Actually, I'll write the test to expect what I WANT.
-    
-    expect(enter.transform).toContain('translateZ');
-    expect(exit.transform).toContain('translateZ');
+    expect(active.transform).toContain('perspective');
+    expect(exit.transform).toContain('perspective');
   });
 });

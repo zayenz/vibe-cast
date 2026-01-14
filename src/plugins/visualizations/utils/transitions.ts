@@ -5,12 +5,11 @@ import { getBooleanSetting } from '../../utils/settings';
 // ============================================================================
 
 export type TransitionType = 'fade' | 'slideLeft' | 'slideRight' | 'slideUp' | 'slideDown' | 
-                      'zoomIn' | 'zoomOut' | 'rotate3DX' | 'rotate3DY' | 'cube' | 'flip';
+                      'zoomIn' | 'zoomOut' | 'flip';
 
 export interface TransitionStyle {
   opacity?: number;
   transform?: string;
-  transformOrigin?: string;
 }
 
 // ============================================================================
@@ -29,12 +28,7 @@ export function getAvailableTransitions(settings: Record<string, unknown>): Tran
   if (getBooleanSetting(settings.enableZoom, true)) {
     transitions.push('zoomIn', 'zoomOut');
   }
-  if (getBooleanSetting(settings.enable3DRotate, true)) {
-    transitions.push('rotate3DX', 'rotate3DY');
-  }
-  if (getBooleanSetting(settings.enableCube, true)) {
-    transitions.push('cube');
-  }
+  // rotate3d and cube removed as they require complex 3D compositing not currently supported
   if (getBooleanSetting(settings.enableFlip, true)) {
     transitions.push('flip');
   }
@@ -85,22 +79,6 @@ export function getTransitionStyles(
       enter: { transform: 'scale(1.2)', opacity: 0 },
       active: { transform: 'scale(1)', opacity: 1 },
       exit: { transform: 'scale(0.8)', opacity: 0 }
-    },
-    rotate3DX: {
-      enter: { transform: 'perspective(1000px) rotateX(90deg) translateZ(100px)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateX(0deg) translateZ(0)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateX(-90deg) translateZ(100px)', opacity: 0 }
-    },
-    rotate3DY: {
-      enter: { transform: 'perspective(1000px) rotateY(-90deg) translateZ(100px)', opacity: 0 },
-      active: { transform: 'perspective(1000px) rotateY(0deg) translateZ(0)', opacity: 1 },
-      exit: { transform: 'perspective(1000px) rotateY(90deg) translateZ(100px)', opacity: 0 }
-    },
-    cube: {
-      // Improved Cube transition using rotate and translate to simulate a rotating volume
-      enter: { transform: 'perspective(2000px) rotateY(90deg) translateZ(50vw)', opacity: 0, transformOrigin: 'center center -50vw' },
-      active: { transform: 'perspective(2000px) rotateY(0deg) translateZ(0)', opacity: 1, transformOrigin: 'center center 0' },
-      exit: { transform: 'perspective(2000px) rotateY(-90deg) translateZ(50vw)', opacity: 0, transformOrigin: 'center center -50vw' }
     },
     flip: {
       enter: { transform: 'perspective(1000px) rotateY(180deg)', opacity: 0 },

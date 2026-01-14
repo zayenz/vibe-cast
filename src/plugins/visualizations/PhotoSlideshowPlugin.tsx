@@ -14,7 +14,7 @@ import { FacePosition } from './faceDetection';
 import { 
   TransitionType, 
   getAvailableTransitions, 
-  getTransitionStyles 
+  getTransitionStyles
 } from './utils/transitions';
 import { usePhotoSlideshow, isVideoFile } from './hooks/usePhotoSlideshow';
 
@@ -71,18 +71,6 @@ export const settingsSchema: SettingDefinition[] = [
     type: 'boolean',
     id: 'enableZoom',
     label: 'Zoom Transition',
-    default: true
-  },
-  {
-    type: 'boolean',
-    id: 'enable3DRotate',
-    label: '3D Rotate Transition',
-    default: true
-  },
-  {
-    type: 'boolean',
-    id: 'enableCube',
-    label: 'Cube Transition',
     default: true
   },
   {
@@ -156,20 +144,19 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const enableFade = !!customSettings.enableFade;
   const enableSlide = !!customSettings.enableSlide;
   const enableZoom = !!customSettings.enableZoom;
-  const enable3DRotate = !!customSettings.enable3DRotate;
-  const enableCube = !!customSettings.enableCube;
   const enableFlip = !!customSettings.enableFlip;
 
   const onBeforeAdvance = useCallback(() => {
     // Re-create settings object for helper function
-    const transitionSettings = { enableFade, enableSlide, enableZoom, enable3DRotate, enableCube, enableFlip };
+    // rotate3d and cube removed
+    const transitionSettings = { enableFade, enableSlide, enableZoom, enableFlip };
     const availableTransitions = getAvailableTransitions(transitionSettings);
     const nextTransition = availableTransitions[Math.floor(Math.random() * availableTransitions.length)];
     setCurrentTransition(nextTransition);
     
     // Set enterPhase to 'enter' BEFORE isTransitioning so entering element renders in enter position first
     setEnterPhase('enter');
-  }, [enableFade, enableSlide, enableZoom, enable3DRotate, enableCube, enableFlip]);
+  }, [enableFade, enableSlide, enableZoom, enableFlip]);
 
   const {
     loading,
@@ -258,6 +245,19 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
       width: '100%',
       height: '100%',
     };
+  };
+
+  const currentPhase = isTransitioning ? 'exit' : 'active';
+  
+  // Get transition styles directly
+  const currentTransitionStyles = {
+    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+    ...(currentImage ? getTransitionStyles(currentTransition, currentPhase) : {})
+  };
+    
+  const nextTransitionStyles = {
+    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
+    ...(isTransitioning && nextImage ? getTransitionStyles(currentTransition, enterPhase) : {})
   };
   
   return (
@@ -361,10 +361,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                   playsInline
                   muted={!videoSound}
                   className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
-                  style={{
-                    transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                    ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
-                  }}
+                  style={currentTransitionStyles}
                   onError={(e) => console.error('[Photo Slideshow] Failed to display video:', currentImage, e)}
                 />
               ) : (
@@ -379,8 +376,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       ...getSmartCropStyle(currentFacePosition),
                       imageRendering: 'auto',
                       willChange: 'opacity, transform',
-                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                      ...getTransitionStyles(currentTransition, isTransitioning ? 'exit' : 'active'),
+                      ...currentTransitionStyles,
                     }}
                     onError={(e) => console.error('[Photo Slideshow] Failed to display image:', currentImage, e)}
                   />
@@ -407,10 +403,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     playsInline
                     muted={!videoSound}
                     className={`absolute inset-0 w-full h-full ${fitMode === 'contain' ? 'object-contain' : fitMode === 'fill' ? 'object-fill' : 'object-cover'}`}
-                    style={{
-                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                      ...getTransitionStyles(currentTransition, enterPhase),
-                    }}
+                    style={nextTransitionStyles}
                     onError={(e) => console.error('[Photo Slideshow] Failed to display next video:', nextImage, e)}
                   />
                 ) : (
@@ -424,8 +417,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                       ...getSmartCropStyle(nextFacePosition),
                       imageRendering: 'auto',
                       willChange: 'opacity, transform',
-                      transition: `opacity ${transitionDuration}s ease-in-out, transform ${transitionDuration}s ease-in-out`,
-                      ...getTransitionStyles(currentTransition, enterPhase),
+                      ...nextTransitionStyles,
                     }}
                     onError={(e) => console.error('[Photo Slideshow] Failed to display next image:', nextImage, e)}
                   />
