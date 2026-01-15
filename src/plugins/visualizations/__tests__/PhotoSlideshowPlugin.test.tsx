@@ -5,15 +5,10 @@ import { DEFAULT_COMMON_SETTINGS } from '../../types';
 
 // Mock Tauri APIs
 const mockInvoke = vi.fn();
-const mockResolveResource = vi.fn();
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
   convertFileSrc: (path: string) => `asset://${path}`,
-}));
-
-vi.mock('@tauri-apps/api/path', () => ({
-  resolveResource: (...args: any[]) => mockResolveResource(...args),
 }));
 
 // Mock face detection to avoid loading models
@@ -37,9 +32,6 @@ describe('PhotoSlideshowPlugin', () => {
   it('should attempt to load example photos when folderPath is empty', async () => {
     const Component = PhotoSlideshowPlugin.component;
     
-    // Setup mock for resolveResource
-    mockResolveResource.mockResolvedValue('/resolved/resource/kittens');
-
     render(
       <Component
         audioData={[]}
@@ -48,15 +40,10 @@ describe('PhotoSlideshowPlugin', () => {
       />
     );
 
-    // Expect resolveResource to be called
-    await waitFor(() => {
-      expect(mockResolveResource).toHaveBeenCalledWith('kittens');
-    });
-
-    // Expect list_images_in_folder to be called with the resolved path
+    // Expect list_images_in_folder to be called with the special resource path
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('list_images_in_folder', {
-        folderPath: '/resolved/resource/kittens'
+        folderPath: '$RESOURCES/kittens'
       });
     });
   });

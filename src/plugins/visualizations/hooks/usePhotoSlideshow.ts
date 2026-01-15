@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { resolveResource } from '@tauri-apps/api/path';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../../utils/settings';
 import { 
   loadFaceDetectionModels, 
@@ -217,12 +216,10 @@ export function usePhotoSlideshow(
       let targetPath = folderPath;
       
       if (!targetPath) {
-        try {
-          targetPath = await resolveResource('kittens');
-          isExample = true;
-        } catch (_e) {
-          console.warn('[Photo Slideshow] Failed to resolve kittens resource:', _e);
-        }
+        // Use default example photos via backend resolution
+        // Pass a special prefix that the backend understands to look up the bundled resource
+        targetPath = '$RESOURCES/kittens';
+        isExample = true;
       }
       
       if (targetPath) {

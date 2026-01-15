@@ -391,19 +391,35 @@ fn emit_state_change(
 
 #[tauri::command]
 fn list_images_in_folder(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppStateSync>>,
     folder_path: String
 ) -> Result<Vec<String>, String> {
     use std::fs;
     use std::path::Path;
+    use tauri::path::BaseDirectory;
     
     eprintln!("Listing media files in folder: {}", folder_path);
     
-    // Resolve path relative to config base path
-    let base_path_opt = state.config_base_path.lock() 
-        .ok()
-        .and_then(|p| p.clone());
-    let resolved = resolve_path(&folder_path, base_path_opt.as_deref());
+    let resolved = if folder_path.starts_with("$RESOURCES/") {
+        let subpath = &folder_path["$RESOURCES/".len()..];
+        match app.path().resolve(subpath, BaseDirectory::Resource) {
+            Ok(p) => {
+                eprintln!("Resolved resource '{}' to: {:?}", subpath, p);
+                p.to_string_lossy().to_string()
+            },
+            Err(e) => {
+                eprintln!("ERROR: Failed to resolve resource '{}': {}", subpath, e);
+                return Err(format!("Failed to resolve resource: {}", e));
+            }
+        }
+    } else {
+        // Resolve path relative to config base path
+        let base_path_opt = state.config_base_path.lock() 
+            .ok()
+            .and_then(|p| p.clone());
+        resolve_path(&folder_path, base_path_opt.as_deref())
+    };
     
     eprintln!("Resolved path: {}", resolved);
     
