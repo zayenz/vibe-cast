@@ -1,6 +1,6 @@
 [package]
 name = "vibe_cast"
-version = "0.2.3"
+version = "0.2.4"
 description = "A Tauri VibeCast App"
 authors = ["you"]
 edition = "2021"
