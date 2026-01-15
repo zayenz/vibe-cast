@@ -1053,8 +1053,18 @@ export const VisualizerWindow: React.FC = () => {
                     </span>{' '}
                     <strong>[{log.level}]</strong> {log.message}
                     {log.data !== undefined && (
-                      <div style={{ marginLeft: '8px', fontSize: 8, color: 'rgba(255,255,255,0.5)' }}>
-                        {JSON.stringify(log.data, null, 2).substring(0, 100)}...
+                      <div style={{ 
+                        marginLeft: '8px', 
+                        fontSize: 8, 
+                        color: 'rgba(255,255,255,0.5)', 
+                        whiteSpace: 'pre-wrap', 
+                        maxHeight: '300px', 
+                        overflowY: 'auto' 
+                      }}>
+                        {(() => {
+                          const str = JSON.stringify(log.data, null, 2);
+                          return str.length > 2000 ? str.substring(0, 2000) + '...' : str;
+                        })()}
                       </div>
                     )}
                   </div>

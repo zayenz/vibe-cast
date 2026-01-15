@@ -215,23 +215,29 @@ export function usePhotoSlideshow(
       
       let targetPath = folderPath;
       
+      console.log('[Photo Slideshow] Loading images. folderPath:', folderPath ? `'${folderPath}'` : 'empty');
+      
       if (!targetPath) {
         // Use default example photos via backend resolution
         // Pass a special prefix that the backend understands to look up the bundled resource
         targetPath = '$RESOURCES/kittens';
         isExample = true;
+        console.log('[Photo Slideshow] Using example path:', targetPath);
       }
       
       if (targetPath) {
         imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+        console.log('[Photo Slideshow] Found images:', imagePaths.length, 'isExample:', isExample);
       }
       
       setUsingExamplePhotos(isExample);
       
       if (imagePaths.length === 0) {
-        setError(isExample 
+        const errorMsg = isExample 
           ? 'No default images found.' 
-          : 'No images found. Please select a folder or album with images.');
+          : 'No images found. Please select a folder or album with images.';
+        console.warn('[Photo Slideshow] Error:', errorMsg);
+        setError(errorMsg);
         setImages([]);
         setLoading(false);
         return;
