@@ -9,15 +9,17 @@ import {
 
 // Helper to convert file paths to displayable URLs
 function getMediaUrl(filePath: string): string {
-  // If running via HTTP (e.g. production build or remote), use the server endpoint
-  if (window.location.protocol.startsWith('http')) {
+  // If running via HTTP in production (Remote Web Interface), use the server endpoint
+  // In Dev (Vite), we use Tauri's asset protocol support via invoke/convertFileSrc
+  const isWebRemote = window.location.protocol.startsWith('http') && !import.meta.env.DEV;
+  
+  if (isWebRemote) {
     // Determine API base - use empty string for relative path (same origin)
-    // or configure it if needed. Here we assume same origin.
     const apiBase = ''; 
     return `${apiBase}/api/images/serve?path=${encodeURIComponent(filePath)}`;
   }
   
-  // Use Tauri's convertFileSrc for asset protocol (desktop dev / production if properly configured)
+  // Use Tauri's convertFileSrc for asset protocol (Desktop Dev & Prod)
   const converted = convertFileSrc(filePath);
   return converted;
 }
@@ -232,7 +234,11 @@ export function usePhotoSlideshow(
       
       if (targetPath) {
         // Check if we should use HTTP (Axum) or Tauri Invoke
-        if (window.location.protocol.startsWith('http')) {
+        // Use HTTP only for Web Remote (Production Web Interface)
+        // Desktop App (Dev & Prod) should use Invoke for performance and asset:// support
+        const isWebRemote = window.location.protocol.startsWith('http') && !import.meta.env.DEV;
+
+        if (isWebRemote) {
             const response = await fetch(`/api/images/list?folder=${encodeURIComponent(targetPath)}`);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status} ${response.statusText}`);
