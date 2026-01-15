@@ -1,5 +1,5 @@
 import { render, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PhotoSlideshowPlugin } from '../PhotoSlideshowPlugin';
 import { DEFAULT_COMMON_SETTINGS } from '../../types';
 
@@ -18,6 +18,8 @@ vi.mock('../faceDetection', () => ({
 }));
 
 describe('PhotoSlideshowPlugin', () => {
+  const originalFetch = global.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
     // Default invoke implementation
@@ -27,9 +29,27 @@ describe('PhotoSlideshowPlugin', () => {
       }
       return [];
     });
+    
+    // Mock fetch for HTTP path
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.toString().includes('/api/images/list')) {
+        return {
+          ok: true,
+          json: async () => ['/path/to/image1.jpg', '/path/to/image2.jpg'],
+        };
+      }
+      return {
+        ok: true,
+        blob: async () => new Blob([''], { type: 'image/jpeg' }),
+      };
+    });
   });
 
-  it('should attempt to load example photos when folderPath is empty', async () => {
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('should attempt to load example photos via HTTP when folderPath is empty', async () => {
     const Component = PhotoSlideshowPlugin.component;
     
     render(
@@ -40,11 +60,11 @@ describe('PhotoSlideshowPlugin', () => {
       />
     );
 
-    // Expect list_images_in_folder to be called with the special resource path
+    // Expect fetch to be called with the special resource path (encoded)
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('list_images_in_folder', {
-        folderPath: '$RESOURCES/kittens'
-      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/images/list?folder=%24RESOURCES%2Fkittens')
+      );
     });
   });
 });

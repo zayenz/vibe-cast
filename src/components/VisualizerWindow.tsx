@@ -312,58 +312,18 @@ const VisualizationRenderer: React.FC<{
 const debugLogBuffer: Array<{ timestamp: number; level: string; message: string; data?: unknown }> = [];
 const MAX_LOG_ENTRIES = 100;
 
-// Monkey patch console to capture logs from all sources (including hooks/plugins)
-if (typeof window !== 'undefined' && !(window as any).__vibecast_console_patched) {
-  const originalConsole = {
-    log: console.log,
-    warn: console.warn,
-    error: console.error,
-  };
-
-  function proxyLog(level: 'log' | 'warn' | 'error', ...args: unknown[]) {
-    // Call original console method
-    originalConsole[level](...args);
-    
-    // Add to debug buffer
-    try {
-      const message = typeof args[0] === 'string' ? args[0] : String(args[0]);
-      // If we have multiple args, treat the rest as data
-      // If the first arg wasn't a string, treat all args as data (conceptually), but we already stringified the first
-      let data: unknown = undefined;
-      if (args.length > 1) {
-        data = args.length === 2 ? args[1] : args.slice(1);
-      } else if (typeof args[0] !== 'string') {
-        // Single non-string argument: treat as data too for inspection
-        data = args[0];
-      }
-      
-      debugLogBuffer.push({
-        timestamp: Date.now(),
-        level,
-        message,
-        data,
-      });
-      
-      // Keep buffer size limited
-      if (debugLogBuffer.length > MAX_LOG_ENTRIES) {
-        debugLogBuffer.shift();
-      }
-    } catch (e) {
-      // Fallback if logging fails
-      originalConsole.error('Failed to capture log:', e);
-    }
-  }
-
-  console.log = (...args) => proxyLog('log', ...args);
-  console.warn = (...args) => proxyLog('warn', ...args);
-  console.error = (...args) => proxyLog('error', ...args);
-
-  (window as any).__vibecast_console_patched = true;
-}
-
 function addDebugLog(level: string, message: string, data?: unknown) {
-  // Delegate to the (now patched) console methods
-  // This ensures uniform logging and buffering
+  debugLogBuffer.push({
+    timestamp: Date.now(),
+    level,
+    message,
+    data,
+  });
+  // Keep only last MAX_LOG_ENTRIES
+  if (debugLogBuffer.length > MAX_LOG_ENTRIES) {
+    debugLogBuffer.shift();
+  }
+  // Also log to console if available
   const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   if (data !== undefined) {
     logFn(`[VisualizerWindow] ${message}`, data);

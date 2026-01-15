@@ -9,7 +9,15 @@ import {
 
 // Helper to convert file paths to displayable URLs
 function getMediaUrl(filePath: string): string {
-  // Use Tauri's convertFileSrc for asset protocol
+  // If running via HTTP (e.g. production build or remote), use the server endpoint
+  if (window.location.protocol.startsWith('http')) {
+    // Determine API base - use empty string for relative path (same origin)
+    // or configure it if needed. Here we assume same origin.
+    const apiBase = ''; 
+    return `${apiBase}/api/images/serve?path=${encodeURIComponent(filePath)}`;
+  }
+  
+  // Use Tauri's convertFileSrc for asset protocol (desktop dev / production if properly configured)
   const converted = convertFileSrc(filePath);
   return converted;
 }
@@ -215,19 +223,24 @@ export function usePhotoSlideshow(
       
       let targetPath = folderPath;
       
-      console.log('[Photo Slideshow] Loading images. folderPath:', folderPath ? `'${folderPath}'` : 'empty');
-      
       if (!targetPath) {
         // Use default example photos via backend resolution
         // Pass a special prefix that the backend understands to look up the bundled resource
         targetPath = '$RESOURCES/kittens';
         isExample = true;
-        console.log('[Photo Slideshow] Using example path:', targetPath);
       }
       
       if (targetPath) {
-        imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
-        console.log('[Photo Slideshow] Found images:', imagePaths.length, 'isExample:', isExample);
+        // Check if we should use HTTP (Axum) or Tauri Invoke
+        if (window.location.protocol.startsWith('http')) {
+            const response = await fetch(`/api/images/list?folder=${encodeURIComponent(targetPath)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+            imagePaths = await response.json();
+        } else {
+            imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+        }
       }
       
       setUsingExamplePhotos(isExample);
@@ -236,7 +249,6 @@ export function usePhotoSlideshow(
         const errorMsg = isExample 
           ? 'No default images found.' 
           : 'No images found. Please select a folder or album with images.';
-        console.warn('[Photo Slideshow] Error:', errorMsg);
         setError(errorMsg);
         setImages([]);
         setLoading(false);

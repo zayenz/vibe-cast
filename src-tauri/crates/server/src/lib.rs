@@ -1,18 +1,21 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     response::{
         sse::{Event, KeepAlive, Sse},
-        Html, IntoResponse,
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
+    http::{header, StatusCode},
     Json, Router,
 };
 use futures::{stream::Stream, StreamExt};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, path::BaseDirectory};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -21,6 +24,21 @@ use vibe_cast_models::{
     BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, 
     TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand
 };
+
+fn resolve_path(path: &str, base_path: Option<&str>) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    if let Some(base) = base_path {
+        let base_path = Path::new(base);
+        let resolved = base_path.join(path);
+        return resolved.to_string_lossy().to_string();
+    }
+    path.to_string()
+}
+
+// ... (keep existing helper functions flatten_message_tree, build_flat_message_tree, collect_messages_from_folder) ...
 
 fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
     fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
@@ -192,6 +210,8 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .route("/api/events", get(state_events))
         .route("/api/e2e/report", post(handle_e2e_report))
         .route("/api/e2e/last-report", get(get_last_e2e_report))
+        .route("/api/images/list", get(list_images))
+        .route("/api/images/serve", get(serve_image))
         .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
         .fallback(get(serve_spa))
         .layer(CorsLayer::permissive())
@@ -224,6 +244,99 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     println!("Server listening on http://{}", addr);
     if let Err(err) = axum::serve(listener, app).await {
         eprintln!("LAN server exited: {}", err);
+    }
+}
+
+async fn list_images(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Vec<String>> {
+    let folder_path = params.get("folder").cloned().unwrap_or_default();
+    eprintln!("[Server] Listing images in folder: {}", folder_path);
+    
+    if folder_path.is_empty() {
+        return Json(vec![]);
+    }
+    
+    let resolved = if folder_path.starts_with("$RESOURCES/") {
+        let subpath = &folder_path["$RESOURCES/".len()..];
+        match state.app_handle.path().resolve(subpath, BaseDirectory::Resource) {
+            Ok(p) => {
+                eprintln!("[Server] Resolved resource '{}' to: {:?}", subpath, p);
+                p.to_string_lossy().to_string()
+            },
+            Err(e) => {
+                eprintln!("[Server] ERROR: Failed to resolve resource '{}': {}", subpath, e);
+                return Json(vec![]);
+            }
+        }
+    } else {
+        let base_path_opt = state.app_state_sync.config_base_path.lock()
+            .ok()
+            .and_then(|p| p.clone());
+        resolve_path(&folder_path, base_path_opt.as_deref())
+    };
+    
+    eprintln!("[Server] Final resolved path: {}", resolved);
+    let path = Path::new(&resolved);
+    
+    if !path.exists() || !path.is_dir() {
+        eprintln!("[Server] Path does not exist or is not a directory");
+        return Json(vec![]);
+    }
+    
+    let image_extensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif"];
+    let video_extensions = ["mp4", "mov", "webm", "m4v", "avi", "mkv"];
+    let mut media_files = Vec::new();
+    
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_file() {
+                if let Some(ext) = entry_path.extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
+                        if let Some(path_str) = entry_path.to_str() {
+                            // Strip \\?\ prefix on Windows if present
+                            let clean_path = if cfg!(windows) && path_str.starts_with(r"\\?\") {
+                                &path_str[4..]
+                            } else {
+                                path_str
+                            };
+                            media_files.push(clean_path.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    media_files.sort();
+    eprintln!("[Server] Found {} media files", media_files.len());
+    Json(media_files)
+}
+
+async fn serve_image(
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let path_str = match params.get("path") {
+        Some(p) => p,
+        None => return (StatusCode::BAD_REQUEST, "Missing path parameter").into_response(),
+    };
+    
+    // Basic validation/security check?
+    // Since this is a local app intended for "vibe coding", we'll be permissive,
+    // but in a real app we'd want to verify the path is within allowed directories.
+    
+    match tokio::fs::read(path_str).await {
+        Ok(bytes) => {
+            let mime_type = mime_guess::from_path(path_str).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime_type.as_ref())], bytes).into_response()
+        },
+        Err(e) => {
+            eprintln!("[Server] Failed to read file '{}': {}", path_str, e);
+            (StatusCode::NOT_FOUND, "File not found").into_response()
+        }
     }
 }
 

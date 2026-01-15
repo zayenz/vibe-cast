@@ -14,3 +14,4 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tauri = { version = "2" }
 vibe-cast-state = { path = "../state" }
 vibe-cast-models = { path = "../models" }
+mime_guess = "2"
