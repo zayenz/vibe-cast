@@ -5,7 +5,7 @@ import { getBooleanSetting } from '../../utils/settings';
 // ============================================================================
 
 export type TransitionType = 'fade' | 'slideLeft' | 'slideRight' | 'slideUp' | 'slideDown' | 
-                      'zoomIn' | 'zoomOut' | 'flip';
+                      'zoomIn' | 'zoomOut' | 'flipX' | 'flipY';
 
 export interface TransitionStyle {
   opacity?: number;
@@ -28,9 +28,28 @@ export function getAvailableTransitions(settings: Record<string, unknown>): Tran
   if (getBooleanSetting(settings.enableZoom, true)) {
     transitions.push('zoomIn', 'zoomOut');
   }
-  // rotate3d and cube removed as they require complex 3D compositing not currently supported
-  if (getBooleanSetting(settings.enableFlip, true)) {
-    transitions.push('flip');
+  
+  // Handle legacy enableFlip setting
+  const legacyFlip = settings.enableFlip !== undefined ? getBooleanSetting(settings.enableFlip, true) : undefined;
+  
+  // Enable FlipX (Horizontal axis)
+  // If specific setting exists, use it. Otherwise fall back to legacy setting.
+  // If legacy is also undefined, default to true (per requirements).
+  const enableFlipX = settings.enableFlipX !== undefined 
+    ? getBooleanSetting(settings.enableFlipX, true)
+    : (legacyFlip ?? true);
+    
+  if (enableFlipX) {
+    transitions.push('flipX');
+  }
+
+  // Enable FlipY (Vertical axis)
+  const enableFlipY = settings.enableFlipY !== undefined 
+    ? getBooleanSetting(settings.enableFlipY, true)
+    : (legacyFlip ?? true);
+    
+  if (enableFlipY) {
+    transitions.push('flipY');
   }
   
   return transitions.length > 0 ? transitions : ['fade'];
@@ -80,10 +99,15 @@ export function getTransitionStyles(
       active: { transform: 'scale(1)', opacity: 1 },
       exit: { transform: 'scale(0.8)', opacity: 0 }
     },
-    flip: {
+    flipY: {
       enter: { transform: 'perspective(1000px) rotateY(180deg)', opacity: 0 },
       active: { transform: 'perspective(1000px) rotateY(0deg)', opacity: 1 },
       exit: { transform: 'perspective(1000px) rotateY(-180deg)', opacity: 0 }
+    },
+    flipX: {
+      enter: { transform: 'perspective(1000px) rotateX(180deg)', opacity: 0 },
+      active: { transform: 'perspective(1000px) rotateX(0deg)', opacity: 1 },
+      exit: { transform: 'perspective(1000px) rotateX(-180deg)', opacity: 0 }
     }
   };
   

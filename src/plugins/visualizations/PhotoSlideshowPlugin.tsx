@@ -75,8 +75,14 @@ export const settingsSchema: SettingDefinition[] = [
   },
   {
     type: 'boolean',
-    id: 'enableFlip',
-    label: 'Flip Transition',
+    id: 'enableFlipX',
+    label: 'Flip Horizontal (X-Axis)',
+    default: true
+  },
+  {
+    type: 'boolean',
+    id: 'enableFlipY',
+    label: 'Flip Vertical (Y-Axis)',
     default: true
   },
   {
@@ -145,18 +151,27 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
   const enableSlide = !!customSettings.enableSlide;
   const enableZoom = !!customSettings.enableZoom;
   const enableFlip = !!customSettings.enableFlip;
+  const enableFlipX = !!customSettings.enableFlipX;
+  const enableFlipY = !!customSettings.enableFlipY;
 
   const onBeforeAdvance = useCallback(() => {
     // Re-create settings object for helper function
     // rotate3d and cube removed
-    const transitionSettings = { enableFade, enableSlide, enableZoom, enableFlip };
+    const transitionSettings = { 
+      enableFade, 
+      enableSlide, 
+      enableZoom, 
+      enableFlip,
+      enableFlipX,
+      enableFlipY
+    };
     const availableTransitions = getAvailableTransitions(transitionSettings);
     const nextTransition = availableTransitions[Math.floor(Math.random() * availableTransitions.length)];
     setCurrentTransition(nextTransition);
     
     // Set enterPhase to 'enter' BEFORE isTransitioning so entering element renders in enter position first
     setEnterPhase('enter');
-  }, [enableFade, enableSlide, enableZoom, enableFlip]);
+  }, [enableFade, enableSlide, enableZoom, enableFlip, enableFlipX, enableFlipY]);
 
   const {
     loading,
