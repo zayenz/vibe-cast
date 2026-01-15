@@ -49,7 +49,7 @@ export const ControlPlane: React.FC = () => {
       console.log('[ControlPlane] Detecting server port for desktop production...');
       invoke<{ port: number }>('get_server_info')
         .then(info => {
-          const url = `http://localhost:${info.port}`;
+          const url = `http://127.0.0.1:${info.port}`;
           console.log(`[ControlPlane] Server found at ${url}`);
           setApiBase(url);
         })
