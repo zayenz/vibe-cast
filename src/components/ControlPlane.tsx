@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useFetcher } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
@@ -621,14 +620,6 @@ export const ControlPlane: React.FC = () => {
     }
   };
 
-  // Helper to send commands via fetcher
-  const sendCommand = (command: string, payload: unknown) => {
-    fetcher.submit(
-      { command, payload: JSON.stringify(payload) },
-      { method: 'post', action: '/' }
-    );
-  };
-
   const handleAddMessage = () => {
     if (newMessage.trim()) {
       const preset = newMessageTextStylePresetId
@@ -849,7 +840,6 @@ export const ControlPlane: React.FC = () => {
   };
 
   const remoteUrl = serverInfo ? `http://${serverInfo.ip}:${serverInfo.port}` : '';
-  const isPending = fetcher.state !== 'idle';
 
 
 
