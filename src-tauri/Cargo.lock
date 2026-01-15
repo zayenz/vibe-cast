@@ -5062,6 +5062,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "futures",
+ "mime_guess",
  "serde",
  "serde_json",
  "tauri",
