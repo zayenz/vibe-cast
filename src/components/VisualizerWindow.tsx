@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
@@ -8,9 +9,6 @@ import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
 import { useAppState } from '../hooks/useAppState';
 import { resolveMessageText } from '../utils/messageLoader';
-
-// API base for sending commands to Rust backend
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8080' : '';
 
 /**
  * Helper to calculate the effective height for a message based on its text style settings.
@@ -49,27 +47,6 @@ function getMessageHeight(
   // Convert rem to pixels (1rem = 16px) and add margin
   const fontSizePx = fontSizeRem * 16;
   return fontSizePx + 40; // Add 40px margin between messages
-}
-
-/**
- * Send a command to the Rust backend via HTTP
- * This is the single source of truth for state changes
- */
-async function sendCommand(command: string, payload: unknown): Promise<void> {
-  try {
-    const response = await fetch(`${API_BASE}/api/command`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, payload }),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    console.log(`[VisualizerWindow] Successfully sent command ${command}`);
-  } catch (err) {
-    console.error(`[VisualizerWindow] Failed to send command ${command}:`, err);
-    throw err; // Re-throw so callers can handle it
-  }
 }
 
 /**
@@ -333,6 +310,49 @@ function addDebugLog(level: string, message: string, data?: unknown) {
 }
 
 export const VisualizerWindow: React.FC = () => {
+  // Determine API Base URL
+  // In Dev: localhost:8080 (backend)
+  // In Web Remote: '' (served by backend)
+  // In Desktop Prod: Need to find backend port via invoke
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
+  
+  useEffect(() => {
+    // If Desktop Prod (not http/https protocol), find server port
+    const isDesktopProd = !import.meta.env.DEV && 
+      window.location.protocol !== 'http:' && 
+      window.location.protocol !== 'https:';
+      
+    if (isDesktopProd) {
+      addDebugLog('log', 'Detecting server port for desktop production...');
+      invoke<{ port: number }>('get_server_info')
+        .then(info => {
+          const url = `http://localhost:${info.port}`;
+          addDebugLog('log', `Server found at ${url}`);
+          setApiBase(url);
+        })
+        .catch(err => {
+          addDebugLog('error', 'Failed to get server info', err);
+        });
+    }
+  }, []);
+
+  const sendCommand = useCallback(async (command: string, payload: unknown): Promise<void> => {
+    try {
+      const response = await fetch(`${apiBase}/api/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command, payload }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      console.log(`[VisualizerWindow] Successfully sent command ${command}`);
+    } catch (err) {
+      console.error(`[VisualizerWindow] Failed to send command ${command}:`, err);
+      throw err; // Re-throw so callers can handle it
+    }
+  }, [apiBase]);
+
   // State for showing log viewer in debug overlay
   const [showLogs, setShowLogs] = useState(false);
   
@@ -509,7 +529,7 @@ export const VisualizerWindow: React.FC = () => {
           fps: undefined,
           messageCount: currentStore.activeMessages.length
         };
-        fetch(`${API_BASE}/api/e2e/report`, {
+        fetch(`${apiBase}/api/e2e/report`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(report)
@@ -525,7 +545,8 @@ export const VisualizerWindow: React.FC = () => {
     setCommonSettings, 
     setVisualizationSettings, 
     loadConfiguration, 
-    triggerMessage
+    triggerMessage,
+    apiBase
   ]);
 
   const handleRemoteCommandCallback = useCallback((cmd: RemoteCommand) => {
@@ -536,7 +557,7 @@ export const VisualizerWindow: React.FC = () => {
   // This ensures VisualizerWindow gets the same config as ControlPlane on startup
   // Must use the same API base as ControlPlane to connect to the Axum server
   const { state: sseState, isConnected: sseConnected } = useAppState({ 
-    apiBase: API_BASE,
+    apiBase: apiBase,
     onCommand: handleRemoteCommandCallback
   });
 
@@ -997,6 +1018,7 @@ export const VisualizerWindow: React.FC = () => {
           )}
           <div>triggeredMsg (SSE): {sseState?.triggeredMessage ? `${sseState.triggeredMessage.id} (${sseState.triggeredMessage.text?.substring(0, 20)}...)` : 'none'}</div>
           <div>textStylePresets: {textStylePresets.length}</div>
+          <div>API Base: {apiBase || '(relative)'}</div>
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px', fontSize: 9, color: 'rgba(255,255,255,0.6)' }}>
             <button
               onClick={() => setShowDevOverlay(false)}

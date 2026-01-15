@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { useAppState } from '../hooks/useAppState';
+import { useAppState, useSendCommand } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
@@ -26,9 +26,6 @@ import { useStore } from '../store';
 import { adjustPathForRemoval } from './messageTreeDnd';
 import { applyStyleOverrideChange } from './messageStyleOverrides';
 
-// API base for Tauri windows - they need to hit the Axum server directly
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8080' : '';
-
 // Icon map for visualizations
 const iconMap: Record<string, React.ReactNode> = {
   'Flame': <Flame size={32} />,
@@ -39,9 +36,43 @@ const iconMap: Record<string, React.ReactNode> = {
 export const ControlPlane: React.FC = () => {
   console.log('[ControlPlane] Component rendering');
   
+  // Determine API Base URL (dynamic for Desktop Prod)
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
+  
+  useEffect(() => {
+    // If Desktop Prod (not http/https protocol), find server port
+    // We check window.location.protocol because in Web Remote (Prod) it is http/https
+    const isDesktopProd = !import.meta.env.DEV && 
+      window.location.protocol !== 'http:' && 
+      window.location.protocol !== 'https:';
+      
+    if (isDesktopProd) {
+      console.log('[ControlPlane] Detecting server port for desktop production...');
+      invoke<{ port: number }>('get_server_info')
+        .then(info => {
+          const url = `http://localhost:${info.port}`;
+          console.log(`[ControlPlane] Server found at ${url}`);
+          setApiBase(url);
+        })
+        .catch(err => {
+          console.error('[ControlPlane] Failed to get server info:', err);
+        });
+    }
+  }, []);
+  
   // SSE-based state - single source of truth
-  const { state, isConnected } = useAppState({ apiBase: API_BASE });
+  const { state, isConnected } = useAppState({ apiBase });
   console.log('[ControlPlane] useAppState returned - state:', state, 'isConnected:', isConnected);
+  
+  // Command sender
+  const { sendCommand: sendCommandRaw, isPending } = useSendCommand({ apiBase });
+  
+  // Helper wrapper for sending commands (replaces old fetcher logic)
+  const sendCommand = (command: string, payload: unknown) => {
+    sendCommandRaw(command, payload).catch(err => {
+      console.error(`[ControlPlane] Command '${command}' failed:`, err);
+    });
+  };
   
   // Loading state while SSE connects - but don't wait forever
   // CRITICAL: This must be declared BEFORE any conditional returns to maintain hook order
@@ -163,8 +194,8 @@ export const ControlPlane: React.FC = () => {
       console.log('[ControlPlane] Syncing folderPlaybackQueue from SSE:', sseQueue);
       useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.folderPlaybackQueue]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }, [state?.folderPlaybackQueue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)
   useEffect(() => {
@@ -236,10 +267,6 @@ export const ControlPlane: React.FC = () => {
       dndDebugRef.current = false;
     }
   }, []);
-
-  // Fetcher for form submissions - no navigation, just mutation
-  const fetcher = useFetcher();
-  
 
   // Fetch server info from Tauri on mount
   useEffect(() => {
