@@ -900,6 +900,7 @@ async fn get_last_e2e_report(State(state): State<AppState>) -> Json<Option<E2ERe
 async fn state_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    println!("[SSE] Client connected");
     // Subscribe to the broadcast channels
     let rx_state = state.app_state_sync.state_tx.subscribe();
     let rx_command = state.app_state_sync.command_tx.subscribe();
@@ -910,7 +911,12 @@ async fn state_events(
     // Convert broadcast receiver to a stream, mapping directly to SSE events
     // filter_map skips lagged errors (when client is slower than broadcast rate)
     let state_stream = BroadcastStream::new(rx_state)
-        .filter_map(|result| async move { result.ok() })
+        .filter_map(|result| async move { 
+            if result.is_err() {
+                eprintln!("[SSE] State stream lagged");
+            }
+            result.ok() 
+        })
         .map(|broadcast_state: BroadcastState| -> Result<Event, Infallible> {
             Ok(Event::default()
                 .event("state")
@@ -918,7 +924,12 @@ async fn state_events(
         });
         
     let command_stream = BroadcastStream::new(rx_command)
-        .filter_map(|result| async move { result.ok() })
+        .filter_map(|result| async move { 
+            if result.is_err() {
+                eprintln!("[SSE] Command stream lagged");
+            }
+            result.ok() 
+        })
         .map(|command: RemoteCommand| -> Result<Event, Infallible> {
             Ok(Event::default()
                 .event("command")
@@ -927,6 +938,7 @@ async fn state_events(
     
     // Prepend with initial state
     let initial_event = futures::stream::once(async move {
+        println!("[SSE] Sending initial state");
         Ok(Event::default()
             .event("state")
             .data(serde_json::to_string(&initial_state).unwrap_or_default()))

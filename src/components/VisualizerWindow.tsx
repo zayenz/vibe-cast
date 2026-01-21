@@ -311,10 +311,10 @@ function addDebugLog(level: string, message: string, data?: unknown) {
 
 export const VisualizerWindow: React.FC = () => {
   // Determine API Base URL
-  // In Dev: localhost:1420 (proxied to backend 8080) -> use relative path ''
+  // In Dev: localhost:8080 (backend)
   // In Web Remote: '' (served by backend)
   // In Desktop Prod: Need to find backend port via invoke
-  const [apiBase, setApiBase] = useState('');
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://127.0.0.1:8080' : '');
   
   useEffect(() => {
     // If Desktop Prod (not http/https protocol), find server port

@@ -180,8 +180,9 @@ export function useAppState(options: UseAppStateOptions = {}) {
         });
       }
 
-      eventSource.onerror = () => {
+      eventSource.onerror = (e) => {
         if (!isMounted) return;
+        console.error('SSE connection error:', e);
         setIsConnected(false);
         eventSource?.close();
         
