@@ -88,7 +88,7 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
     // If Web Remote (http/s) or Dev (http), use current origin or localhost:8080
     if (window.location.protocol.startsWith('http')) {
       if (import.meta.env.DEV) {
-        setServerUrl('http://localhost:8080');
+        setServerUrl('http://127.0.0.1:8080');
       } else {
         setServerUrl(window.location.origin);
       }
