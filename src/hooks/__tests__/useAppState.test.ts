@@ -108,16 +108,12 @@ describe('useAppState', () => {
   });
 
   it('uses custom API base when provided', async () => {
-    renderHook(() => 
-      useAppState({ apiBase: 'http://localhost:8080' })
-    );
+    const { result } = renderHook(() => useAppState({ apiBase: 'http://127.0.0.1:8080' }));
     
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    });
-
-    const sse = MockEventSource.getLatest();
-    expect(sse?.url).toBe('http://localhost:8080/api/events');
+    // Verify EventSource was created with correct URL
+    const sse = MockEventSource.instances[0];
+    expect(sse).toBeDefined();
+    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
   });
 
   it('cleans up SSE connection on unmount', async () => {
@@ -191,7 +187,7 @@ describe('useSendCommand', () => {
 
   it('uses custom API base', async () => {
     const { result } = renderHook(() => 
-      useSendCommand({ apiBase: 'http://localhost:8080' })
+      useSendCommand({ apiBase: 'http://127.0.0.1:8080' })
     );
     
     await act(async () => {
@@ -199,7 +195,7 @@ describe('useSendCommand', () => {
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/command',
+      'http://127.0.0.1:8080/api/command',
       expect.anything()
     );
   });

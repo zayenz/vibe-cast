@@ -31,7 +31,7 @@ export async function commandAction({ request }: { request: Request }) {
   // In Tauri windows, we need to hit localhost:8080
   // In browser (remote), we're already on that origin
   const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
-  const apiBase = isTauri ? 'http://localhost:8080' : '';
+  const apiBase = isTauri ? 'http://127.0.0.1:8080' : '';
 
   const response = await fetch(`${apiBase}/api/command`, {
     method: 'POST',

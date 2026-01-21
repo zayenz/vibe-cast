@@ -5086,7 +5086,7 @@ dependencies = [
 
 [[package]]
 name = "vibe_cast"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "local-ip-address",
  "serde",
