@@ -314,7 +314,7 @@ export const VisualizerWindow: React.FC = () => {
   // In Dev: localhost:8080 (backend)
   // In Web Remote: '' (served by backend)
   // In Desktop Prod: Need to find backend port via invoke
-  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://127.0.0.1:8080' : '');
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
   
   useEffect(() => {
     // If Desktop Prod (not http/https protocol), find server port
