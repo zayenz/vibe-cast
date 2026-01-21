@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, path::BaseDirectory};
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::{cors::CorsLayer, services::{ServeDir, ServeFile}};
 
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
@@ -212,6 +212,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .route("/api/e2e/last-report", get(get_last_e2e_report))
         .route("/api/images/list", get(list_images))
         .route("/api/images/serve", get(serve_image))
+        .route_service("/youtube_player.html", ServeFile::new(dist_path.join("youtube_player.html")))
         .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
         .fallback(get(serve_spa))
         .layer(CorsLayer::permissive())
