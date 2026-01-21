@@ -85,13 +85,9 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
 
   // Determine Server URL
   useEffect(() => {
-    // If Web Remote (http/s) or Dev (http), use current origin or localhost:8080
+    // If Web Remote (http/s) or Dev (http), use current origin (proxied in Dev)
     if (window.location.protocol.startsWith('http')) {
-      if (import.meta.env.DEV) {
-        setServerUrl('http://127.0.0.1:8080');
-      } else {
-        setServerUrl(window.location.origin);
-      }
+      setServerUrl(window.location.origin);
     } else {
       // Desktop Prod (tauri:// or asset://) -> Find server port
       invoke<{ port: number }>('get_server_info')

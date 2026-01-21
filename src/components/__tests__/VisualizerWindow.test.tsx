@@ -130,8 +130,8 @@ describe('VisualizerWindow', () => {
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
-          // In dev (DEV=true), API_BASE should be 'http://127.0.0.1:8080'
-          // So SSE URL should be 'http://127.0.0.1:8080/api/events'
-          expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');    });
+              // In dev (DEV=true), API_BASE should be '' (relative, handled by Vite proxy)
+              // So SSE URL should be '/api/events'
+              expect(sse?.url).toBe('/api/events');    });
   });
 });
