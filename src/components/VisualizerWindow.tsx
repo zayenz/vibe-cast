@@ -314,7 +314,7 @@ export const VisualizerWindow: React.FC = () => {
   // In Dev: localhost:8080 (backend)
   // In Web Remote: '' (served by backend)
   // In Desktop Prod: Need to find backend port via invoke
-  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://127.0.0.1:8080' : '');
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
   
   useEffect(() => {
     // If Desktop Prod (not http/https protocol), find server port
@@ -627,6 +627,22 @@ export const VisualizerWindow: React.FC = () => {
       hasReceivedSSEState,
     });
   }, [sseState, sseConnected, loadConfiguration, hasReceivedSSEState]);
+
+  // Fallback timeout: If SSE state doesn't arrive within 2 seconds, enable rendering with defaults.
+  // This prevents a permanent black screen in debug builds or if the backend is unreachable.
+  useEffect(() => {
+    if (isStateLoaded) return;
+    
+    const timer = setTimeout(() => {
+      if (!isStateLoaded) {
+        addDebugLog('warn', 'SSE connection timed out, falling back to local defaults');
+        console.warn('[VisualizerWindow] SSE connection timed out, falling back to local defaults');
+        setIsStateLoaded(true);
+      }
+    }, 2000);
+    
+    return () => clearTimeout(timer);
+  }, [isStateLoaded]);
 
   // Sync folderPlaybackQueue from SSE state to zustand store
   // This is runtime state (not config), so sync it separately

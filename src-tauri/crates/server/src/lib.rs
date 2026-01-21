@@ -221,7 +221,10 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     // Try a range of ports (helps when a previous instance is still running).
     let mut bound_listener: Option<(tokio::net::TcpListener, SocketAddr)> = None;
     for p in port..=port.saturating_add(20) {
-        let addr = SocketAddr::from(([0, 0, 0, 0], p));
+        // Try binding to IPv6 [::] (which often covers IPv4 as well on dual-stack systems)
+        // If that fails or isn't desired, we could fallback to IPv4.
+        // For local development on macOS, localhost often resolves to ::1, so IPv6 support is crucial.
+        let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, p));
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
                 bound_listener = Some((listener, addr));
@@ -230,9 +233,22 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
                 }
                 break;
             }
-            Err(err) => {
-                eprintln!("Failed to bind {} ({}), trying next port...", addr, err);
-                continue;
+            Err(_) => {
+                // Fallback to IPv4 0.0.0.0 if IPv6 fails
+                let addr_v4 = SocketAddr::from(([0, 0, 0, 0], p));
+                match tokio::net::TcpListener::bind(addr_v4).await {
+                    Ok(listener) => {
+                        bound_listener = Some((listener, addr_v4));
+                        if let Ok(mut sp) = app_state_sync.server_port.lock() {
+                            *sp = p;
+                        }
+                        break;
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to bind port {}: {}", p, err);
+                        continue;
+                    }
+                }
             }
         }
     }
