@@ -108,7 +108,7 @@ describe('useAppState', () => {
   });
 
   it('uses custom API base when provided', async () => {
-    const { result } = renderHook(() => useAppState({ apiBase: 'http://127.0.0.1:8080' }));
+    renderHook(() => useAppState({ apiBase: 'http://127.0.0.1:8080' }));
     
     // Verify EventSource was created with correct URL
     const sse = MockEventSource.instances[0];

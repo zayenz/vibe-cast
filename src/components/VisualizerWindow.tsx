@@ -326,7 +326,7 @@ export const VisualizerWindow: React.FC = () => {
         addDebugLog('log', `Server found at ${url}`);
         setApiBase(url);
       })
-      .catch(err => {
+      .catch(_err => {
         // Expected error in browser environment
         addDebugLog('log', 'Could not get server info (browser env?), using default:', apiBase);
       });

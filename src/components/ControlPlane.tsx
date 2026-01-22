@@ -48,7 +48,7 @@ export const ControlPlane: React.FC = () => {
         console.log(`[ControlPlane] Server found at ${url}`);
         setApiBase(url);
       })
-      .catch(err => {
+      .catch(_err => {
         console.log('[ControlPlane] Could not get server info (browser env?), using default:', apiBase);
       });
   }, []);
