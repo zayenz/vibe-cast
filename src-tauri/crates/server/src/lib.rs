@@ -221,6 +221,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     // Try a range of ports (helps when a previous instance is still running).
     let mut bound_listener: Option<(tokio::net::TcpListener, SocketAddr)> = None;
     for p in port..=port.saturating_add(20) {
+        eprintln!("[Server] Attempting to bind port {}", p);
         // Try binding to IPv6 [::] (which often covers IPv4 as well on dual-stack systems)
         // If that fails or isn't desired, we could fallback to IPv4.
         // For local development on macOS, localhost often resolves to ::1, so IPv6 support is crucial.

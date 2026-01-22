@@ -297,7 +297,7 @@ impl AppStateSync {
             message_stats: Mutex::new(serde_json::json!({})),
             folder_playback_queue: Mutex::new(None),
             config_base_path: Mutex::new(None),
-            server_port: Mutex::new(8080),
+            server_port: Mutex::new(0), // 0 indicates not yet bound
             triggered_message: Mutex::new(None),
             last_e2e_report: Mutex::new(None),
             state_tx,

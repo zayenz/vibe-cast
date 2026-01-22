@@ -317,23 +317,19 @@ export const VisualizerWindow: React.FC = () => {
   const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
   
   useEffect(() => {
-    // If Desktop Prod (not http/https protocol), find server port
-    const isDesktopProd = 
-      window.location.protocol !== 'http:' && 
-      window.location.protocol !== 'https:';
-      
-    if (isDesktopProd) {
-      addDebugLog('log', 'Detecting server port for desktop production...');
-      invoke<{ port: number }>('get_server_info')
-        .then(info => {
-          const url = `http://127.0.0.1:${info.port}`;
-          addDebugLog('log', `Server found at ${url}`);
-          setApiBase(url);
-        })
-        .catch(err => {
-          addDebugLog('error', 'Failed to get server info', err);
-        });
-    }
+    // Try to get dynamic server port from Tauri backend
+    // This works in Desktop Prod AND Dev (when running in Tauri window)
+    // It fails in Web Remote or Dev (when running in Browser), falling back to default
+    invoke<{ port: number }>('get_server_info')
+      .then(info => {
+        const url = `http://localhost:${info.port}`;
+        addDebugLog('log', `Server found at ${url}`);
+        setApiBase(url);
+      })
+      .catch(err => {
+        // Expected error in browser environment
+        addDebugLog('log', 'Could not get server info (browser env?), using default:', apiBase);
+      });
   }, []);
 
   const sendCommand = useCallback(async (command: string, payload: unknown): Promise<void> => {

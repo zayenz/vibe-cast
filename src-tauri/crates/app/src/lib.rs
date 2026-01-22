@@ -9,13 +9,28 @@ use vibe_cast_models::{
 };
 
 #[tauri::command]
-fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> serde_json::Value {
-    let my_local_ip = local_ip().map(|ip| ip.to_string()).unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = state.server_port.lock().map(|p| *p).unwrap_or(8080);
-    serde_json::json!({
-        "ip": my_local_ip,
-        "port": port
-    })
+async fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<serde_json::Value, String> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    
+    // Poll until port is set (non-zero)
+    loop {
+        if let Ok(port_lock) = state.server_port.lock() {
+            if *port_lock != 0 {
+                let my_local_ip = local_ip().map(|ip| ip.to_string()).unwrap_or_else(|_| "127.0.0.1".to_string());
+                return Ok(serde_json::json!({
+                    "ip": my_local_ip,
+                    "port": *port_lock
+                }));
+            }
+        }
+        
+        if start.elapsed() > timeout {
+            return Err("Timeout waiting for server to bind port".to_string());
+        }
+        
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 #[tauri::command]

@@ -39,24 +39,18 @@ export const ControlPlane: React.FC = () => {
   const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
   
   useEffect(() => {
-    // If Desktop Prod (not http/https protocol), find server port
-    // We check window.location.protocol because in Web Remote (Prod) it is http/https
-    const isDesktopProd = 
-      window.location.protocol !== 'http:' && 
-      window.location.protocol !== 'https:';
-      
-    if (isDesktopProd) {
-      console.log('[ControlPlane] Detecting server port for desktop production...');
-      invoke<{ port: number }>('get_server_info')
-        .then(info => {
-          const url = `http://127.0.0.1:${info.port}`;
-          console.log(`[ControlPlane] Server found at ${url}`);
-          setApiBase(url);
-        })
-        .catch(err => {
-          console.error('[ControlPlane] Failed to get server info:', err);
-        });
-    }
+    // Try to get dynamic server port from Tauri backend
+    // This works in Desktop Prod AND Dev (when running in Tauri window)
+    // It fails in Web Remote or Dev (when running in Browser), falling back to default
+    invoke<{ port: number }>('get_server_info')
+      .then(info => {
+        const url = `http://localhost:${info.port}`;
+        console.log(`[ControlPlane] Server found at ${url}`);
+        setApiBase(url);
+      })
+      .catch(err => {
+        console.log('[ControlPlane] Could not get server info (browser env?), using default:', apiBase);
+      });
   }, []);
   
   // SSE-based state - single source of truth
@@ -323,16 +317,23 @@ export const ControlPlane: React.FC = () => {
     return out;
   };
 
-  const sseMessageTree = state?.messageTree as MessageTreeNode[] | undefined;
-  const sseMessages = state?.messages;
+  // Get store values for fallback
+  const storeMessageTree = useStore(s => s.messageTree);
+  const storeMessages = useStore(s => s.messages);
+
+  // Use SSE state if available, otherwise fallback to store defaults
+  const effectiveMessageTree = (state?.messageTree as MessageTreeNode[] | undefined) ?? storeMessageTree;
+  const effectiveMessages = state?.messages ?? storeMessages;
+
   const [messageTreeLocal, setMessageTreeLocal] = useState<MessageTreeNode[]>([]);
+  
   useEffect(() => {
-    if (sseMessageTree && Array.isArray(sseMessageTree)) {
-      setMessageTreeLocal(sseMessageTree);
+    if (effectiveMessageTree && Array.isArray(effectiveMessageTree) && effectiveMessageTree.length > 0) {
+      setMessageTreeLocal(effectiveMessageTree);
     } else {
-      setMessageTreeLocal(buildFlatTree(sseMessages ?? []));
+      setMessageTreeLocal(buildFlatTree(effectiveMessages ?? []));
     }
-  }, [sseMessageTree, sseMessages]);
+  }, [effectiveMessageTree, effectiveMessages]);
 
   const messages = flattenTree(messageTreeLocal);
 

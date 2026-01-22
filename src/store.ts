@@ -200,12 +200,17 @@ function parseDefaultConfig(): Partial<AppState> {
   const visualizationPresets: VisualizationPreset[] = config.visualizationPresets ?? [];
   const textStylePresets: TextStylePreset[] = config.textStylePresets ?? [];
   
-  // Ensure one preset per visualization exists
+  // Ensure one preset per visualization exists IF it is enabled in config
   // Use the statically imported registry (works in app + Vitest; avoids CJS require issues)
   const existingVizIds = new Set(visualizationPresets.map(p => p.visualizationId));
+  const enabledVizIds = new Set(config.enabledVisualizations ?? ['fireplace', 'techno']); // Default fallback matches AppState interface
+
   if (Array.isArray(visualizationRegistry) && visualizationRegistry.length > 0) {
     visualizationRegistry.forEach((viz) => {
-      if (!existingVizIds.has(viz.id)) {
+      // Only auto-create preset if:
+      // 1. It doesn't exist yet
+      // 2. AND it is explicitly enabled in the config (or defaults)
+      if (!existingVizIds.has(viz.id) && enabledVizIds.has(viz.id)) {
         const defaultSettings =
           config.visualizationSettings?.[viz.id] ||
           getDefaultVisualizationSettings()[viz.id] ||
