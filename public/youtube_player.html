@@ -6,76 +6,544 @@
     <style>
       body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: black; }
       #player { width: 100%; height: 100%; }
+      #loading { 
+        position: absolute; 
+        top: 50%; 
+        left: 50%; 
+        transform: translate(-50%, -50%); 
+        color: white; 
+        font-family: Arial, sans-serif; 
+        text-align: center;
+      }
+      #error { 
+        position: absolute; 
+        top: 50%; 
+        left: 50%; 
+        transform: translate(-50%, -50%); 
+        color: #ff6b6b; 
+        font-family: Arial, sans-serif; 
+        text-align: center;
+        display: none;
+      }
     </style>
   </head>
   <body>
+    <div id="loading">Loading YouTube Player...</div>
+    <div id="error">
+      <h3>YouTube Player Error</h3>
+      <p id="error-message">Failed to load YouTube player</p>
+      <p><small>Check console for details</small></p>
+    </div>
     <div id="player"></div>
-    <script src="https://www.youtube.com/iframe_api"></script>
+    
     <script>
+      // Enhanced YouTube Player with robust loading and error handling
       let player;
+      
+      // Parse URL parameters
       const params = new URLSearchParams(window.location.search);
       const videoId = params.get('videoId');
       const showControls = params.get('controls') === '1' ? 1 : 0;
       const muted = params.get('muted') === '1';
       const volume = parseInt(params.get('volume') || '50', 10);
       
-      function onYouTubeIframeAPIReady() {
-        player = new YT.Player('player', {
-          height: '100%',
-          width: '100%',
-          videoId: videoId,
-          playerVars: {
-            autoplay: 1,
-            controls: showControls,
-            loop: 1,
-            playlist: videoId, // Required for loop
-            modestbranding: 1,
-            rel: 0,
-            fs: 0,
-            playsinline: 1,
-            enablejsapi: 1,
-            origin: window.location.origin, // Explicit origin
-            mute: muted ? 1 : 0
+      // Logging helper
+      function log(message, data = null) {
+        const timestamp = new Date().toISOString();
+        console.log(`[YouTube Player ${timestamp}] ${message}`, data || '');
+      }
+      
+      // Enhanced error reporting to parent with detailed context
+      function reportError(type, message, details = null) {
+        log(`ERROR: ${type} - ${message}`, details);
+        
+        // Show error UI
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').style.display = 'block';
+        document.getElementById('error-message').textContent = message;
+        
+        // Collect comprehensive error context
+        const errorContext = {
+          timestamp: Date.now(),
+          type: type,
+          message: message,
+          details: details,
+          environment: {
+            userAgent: navigator.userAgent,
+            origin: window.location.origin,
+            protocol: window.location.protocol,
+            href: window.location.href,
+            referrer: document.referrer
           },
-          events: {
-            onReady: onPlayerReady,
-            onStateChange: onPlayerStateChange,
-            onError: onPlayerError
+          player: {
+            videoId: videoId,
+            hasYouTubeAPI: !!(window.YT && window.YT.Player),
+            playerExists: !!player
+          },
+          network: {
+            onLine: navigator.onLine,
+            connection: navigator.connection ? {
+              effectiveType: navigator.connection.effectiveType,
+              downlink: navigator.connection.downlink,
+              rtt: navigator.connection.rtt
+            } : null
+          }
+        };
+        
+        // Report to parent frame
+        try {
+          window.parent.postMessage({
+            type: 'youtube-error',
+            errorType: type,
+            message: message,
+            details: details,
+            context: errorContext,
+            timestamp: Date.now()
+          }, '*');
+        } catch (e) {
+          log('Failed to report error to parent', e);
+        }
+      }
+      
+      // Network error detection
+      function detectNetworkError(error) {
+        const message = error.message || error.toString();
+        
+        if (message.includes('timeout') || message.includes('Timeout')) {
+          return 'network_timeout';
+        }
+        if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+          return 'network_unreachable';
+        }
+        if (message.includes('CORS') || message.includes('cross-origin')) {
+          return 'cors_blocked';
+        }
+        if (message.includes('Content Security Policy') || message.includes('CSP')) {
+          return 'csp_blocked';
+        }
+        if (message.includes('blocked') || message.includes('Blocked')) {
+          return 'script_blocked';
+        }
+        
+        return 'unknown_error';
+      }
+      
+      // Enhanced error recovery mechanisms
+      function attemptErrorRecovery(errorType, attempt = 1) {
+        log(`Attempting error recovery for ${errorType} (attempt ${attempt})`);
+        
+        switch (errorType) {
+          case 'network_timeout':
+          case 'network_unreachable':
+            if (attempt <= 2) {
+              log('Retrying after network error');
+              setTimeout(() => initializePlayer(), 3000 * attempt);
+              return true;
+            }
+            break;
+            
+          case 'script_blocked':
+          case 'csp_blocked':
+            log('Script/CSP error detected - cannot recover automatically');
+            reportError('fatal_error', 'YouTube API blocked by security policy', {
+              errorType: errorType,
+              recovery: 'impossible'
+            });
+            return false;
+            
+          case 'cors_blocked':
+            log('CORS error detected - trying alternative origins');
+            // Could implement origin fallback here
+            return false;
+            
+          default:
+            log(`No recovery strategy for error type: ${errorType}`);
+            return false;
+        }
+        
+        return false;
+      }
+      
+      // Get valid origin for YouTube API
+      function getValidOrigin() {
+        const currentOrigin = window.location.origin;
+        log('Current origin:', currentOrigin);
+        
+        // Try different origin strategies
+        const origins = [
+          currentOrigin,
+          // Extract port from URL for localhost fallbacks
+          (() => {
+            const match = window.location.href.match(/localhost:(\d+)/);
+            return match ? `http://localhost:${match[1]}` : null;
+          })(),
+          (() => {
+            const match = window.location.href.match(/localhost:(\d+)/);
+            return match ? `https://localhost:${match[1]}` : null;
+          })(),
+          // Common development origins
+          'http://localhost:1420',
+          'https://localhost:1420',
+          'http://localhost:8080',
+          'https://localhost:8080',
+          // Let YouTube determine origin
+          null
+        ].filter(Boolean);
+        
+        log('Available origins:', origins);
+        
+        // For now, return the first valid origin
+        // In a more sophisticated implementation, we could test each one
+        return origins[0] || null;
+      }
+      
+      // Load YouTube API with timeout and retry
+      function loadYouTubeAPI() {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('YouTube API load timeout (10s)'));
+          }, 10000);
+          
+          // Check if API is already loaded
+          if (window.YT && window.YT.Player) {
+            clearTimeout(timeout);
+            log('YouTube API already loaded');
+            resolve(window.YT);
+            return;
+          }
+          
+          // Set up callback for when API loads
+          window.onYouTubeIframeAPIReady = () => {
+            clearTimeout(timeout);
+            log('YouTube API loaded successfully');
+            resolve(window.YT);
+          };
+          
+          // Load the API script if not already present
+          if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+            log('Loading YouTube iframe API script');
+            const script = document.createElement('script');
+            script.src = 'https://www.youtube.com/iframe_api';
+            script.onerror = () => {
+              clearTimeout(timeout);
+              reject(new Error('Failed to load YouTube API script'));
+            };
+            document.head.appendChild(script);
           }
         });
       }
-
-      function onPlayerReady(event) {
-        if (!muted) {
-          event.target.setVolume(volume);
+      
+      // Enhanced API loading with retry logic
+      async function loadYouTubeAPIWithRetry() {
+        const maxRetries = 3;
+        const retryDelay = 2000; // 2 seconds
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            log(`Loading YouTube API (attempt ${attempt}/${maxRetries})`);
+            const YT = await loadYouTubeAPI();
+            return YT;
+          } catch (error) {
+            log(`YouTube API load failed (attempt ${attempt}/${maxRetries}):`, error.message);
+            
+            if (attempt === maxRetries) {
+              throw error;
+            }
+            
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+          }
         }
-        event.target.playVideo();
       }
-
+      
+      // Initialize YouTube player with error handling
+      async function initializePlayer() {
+        try {
+          log('Initializing YouTube player', { videoId, showControls, muted, volume });
+          
+          if (!videoId) {
+            throw new Error('No video ID provided');
+          }
+          
+          // Load YouTube API with retry
+          const YT = await loadYouTubeAPIWithRetry();
+          
+          // Get valid origin
+          const origin = getValidOrigin();
+          log('Using origin for YouTube API:', origin);
+          
+          // Create player configuration
+          const playerConfig = {
+            height: '100%',
+            width: '100%',
+            videoId: videoId,
+            playerVars: {
+              autoplay: 1,
+              controls: showControls,
+              loop: 1,
+              playlist: videoId, // Required for loop
+              modestbranding: 1,
+              rel: 0,
+              fs: 0,
+              playsinline: 1,
+              enablejsapi: 1,
+              mute: muted ? 1 : 0
+            },
+            events: {
+              onReady: onPlayerReady,
+              onStateChange: onPlayerStateChange,
+              onError: onPlayerError
+            }
+          };
+          
+          // Add origin if we have one
+          if (origin) {
+            playerConfig.playerVars.origin = origin;
+          }
+          
+          log('Creating YouTube player with config:', playerConfig);
+          
+          // Create the player
+          player = new YT.Player('player', playerConfig);
+          
+          // Hide loading indicator
+          document.getElementById('loading').style.display = 'none';
+          
+        } catch (error) {
+          log('Failed to initialize player:', error);
+          
+          const errorType = detectNetworkError(error);
+          const canRecover = attemptErrorRecovery(errorType);
+          
+          if (!canRecover) {
+            reportError('initialization_failed', error.message, {
+              videoId,
+              origin: getValidOrigin(),
+              errorType: errorType,
+              canRecover: false
+            });
+          }
+        }
+      }
+      
+      function onPlayerReady(event) {
+        log('Player ready');
+        
+        try {
+          if (!muted) {
+            event.target.setVolume(volume);
+            log('Set volume to:', volume);
+          }
+          
+          event.target.playVideo();
+          log('Started video playback');
+          
+          // Report success to parent
+          window.parent.postMessage({
+            type: 'youtube-ready',
+            videoId: videoId,
+            timestamp: Date.now()
+          }, '*');
+          
+        } catch (error) {
+          log('Error in onPlayerReady:', error);
+          reportError('player_ready_failed', error.message);
+        }
+      }
+      
       function onPlayerStateChange(event) {
-        if (event.data === YT.PlayerState.ENDED) {
-          event.target.playVideo(); 
+        const states = {
+          '-1': 'unstarted',
+          '0': 'ended',
+          '1': 'playing',
+          '2': 'paused',
+          '3': 'buffering',
+          '5': 'cued'
+        };
+        
+        const stateName = states[event.data] || 'unknown';
+        log('Player state changed:', stateName);
+        
+        try {
+          if (event.data === YT.PlayerState.ENDED) {
+            log('Video ended, restarting for loop');
+            event.target.playVideo();
+          }
+          
+          // Report state change to parent
+          window.parent.postMessage({
+            type: 'youtube-state-change',
+            state: stateName,
+            stateCode: event.data,
+            timestamp: Date.now()
+          }, '*');
+          
+        } catch (error) {
+          log('Error in onPlayerStateChange:', error);
         }
       }
       
       function onPlayerError(event) {
-        console.error('YouTube Player Error:', event.data);
+        const errorCodes = {
+          2: 'Invalid video ID',
+          5: 'HTML5 player error',
+          100: 'Video not found or private',
+          101: 'Embedding not allowed by video owner',
+          150: 'Embedding not allowed by video owner'
+        };
+        
+        const errorMessage = errorCodes[event.data] || `Unknown error (code: ${event.data})`;
+        log('YouTube player error:', { code: event.data, message: errorMessage });
+        
+        // Determine if error is recoverable
+        const isRecoverable = event.data === 5; // HTML5 errors might be recoverable
+        
+        reportError('player_error', errorMessage, {
+          errorCode: event.data,
+          videoId: videoId,
+          isRecoverable: isRecoverable,
+          playerState: player ? 'ready' : 'not_ready'
+        });
+        
+        // Attempt recovery for HTML5 errors
+        if (isRecoverable) {
+          log('Attempting to recover from HTML5 player error');
+          setTimeout(() => {
+            try {
+              if (player && player.loadVideoById) {
+                player.loadVideoById(videoId);
+              }
+            } catch (recoveryError) {
+              log('Recovery attempt failed:', recoveryError);
+            }
+          }, 2000);
+        }
       }
       
-      // Listen for messages from parent
+      // Listen for messages from parent frame
       window.addEventListener('message', (event) => {
-        if (!player || !player.setVolume) return;
-        
-        const data = event.data;
-        if (data.type === 'setVolume') {
-          player.setVolume(data.value);
-        } else if (data.type === 'setMuted') {
-          if (data.value) player.mute();
-          else player.unMute();
-        } else if (data.type === 'loadVideo') {
-          player.loadVideoById(data.value);
+        try {
+          if (!player || !player.setVolume) {
+            log('Received message but player not ready:', event.data);
+            return;
+          }
+          
+          const data = event.data;
+          log('Received message from parent:', data);
+          
+          switch (data.type) {
+            case 'setVolume':
+              player.setVolume(data.value);
+              log('Volume set to:', data.value);
+              break;
+              
+            case 'setMuted':
+              if (data.value) {
+                player.mute();
+                log('Player muted');
+              } else {
+                player.unMute();
+                log('Player unmuted');
+              }
+              break;
+              
+            case 'loadVideo':
+              player.loadVideoById(data.value);
+              log('Loading new video:', data.value);
+              break;
+              
+            case 'playVideo':
+              player.playVideo();
+              log('Play video requested');
+              break;
+              
+            case 'pauseVideo':
+              player.pauseVideo();
+              log('Pause video requested');
+              break;
+              
+            default:
+              log('Unknown message type:', data.type);
+          }
+        } catch (error) {
+          log('Error handling parent message:', error);
         }
       });
+      
+      // Enhanced global error handler with categorization
+      window.addEventListener('error', (event) => {
+        const error = event.error || {};
+        const errorType = detectNetworkError(error);
+        
+        log('Global error:', {
+          message: error.message,
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          type: errorType
+        });
+        
+        reportError('global_error', error.message || 'Unknown global error', {
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          errorType: errorType,
+          stack: error.stack
+        });
+      });
+      
+      // Enhanced unhandled promise rejection handler
+      window.addEventListener('unhandledrejection', (event) => {
+        const reason = event.reason || {};
+        const errorType = detectNetworkError(reason);
+        
+        log('Unhandled promise rejection:', {
+          reason: reason,
+          type: errorType
+        });
+        
+        reportError('promise_rejection', reason.message || 'Unhandled promise rejection', {
+          reason: reason,
+          errorType: errorType,
+          stack: reason.stack
+        });
+      });
+      
+      // Network status monitoring
+      window.addEventListener('online', () => {
+        log('Network connection restored');
+        window.parent.postMessage({
+          type: 'youtube-network-status',
+          status: 'online',
+          timestamp: Date.now()
+        }, '*');
+      });
+      
+      window.addEventListener('offline', () => {
+        log('Network connection lost');
+        reportError('network_offline', 'Network connection lost', {
+          wasOnline: true,
+          timestamp: Date.now()
+        });
+      });
+      
+      // Visibility change monitoring (for debugging)
+      document.addEventListener('visibilitychange', () => {
+        log('Visibility changed:', document.visibilityState);
+        if (document.visibilityState === 'visible' && player) {
+          // Check if player is still functional when page becomes visible
+          try {
+            const state = player.getPlayerState ? player.getPlayerState() : 'unknown';
+            log('Player state on visibility change:', state);
+          } catch (error) {
+            log('Error checking player state:', error);
+          }
+        }
+      });
+      
+      // Start initialization
+      log('Starting YouTube player initialization');
+      initializePlayer();
     </script>
   </body>
 </html>
