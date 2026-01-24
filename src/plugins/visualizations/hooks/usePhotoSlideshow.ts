@@ -84,6 +84,87 @@ export function usePhotoSlideshow(
   // Generate a unique key for this slideshow instance based on source
   const storageKey = `photo-slideshow-${folderPath}`;
   
+  // Network resilience utilities
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  const isRetryableError = (error: unknown): boolean => {
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      // Network errors (connection failed, timeout, etc.)
+      return true;
+    }
+    
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      // Retry on network-related errors
+      if (message.includes('network') || 
+          message.includes('timeout') || 
+          message.includes('connection') ||
+          message.includes('fetch')) {
+        return true;
+      }
+      
+      // Check for HTTP status codes that are retryable
+      const httpMatch = message.match(/http (\d+)/);
+      if (httpMatch) {
+        const status = parseInt(httpMatch[1], 10);
+        // Retry on server errors (5xx) and some client errors
+        return status >= 500 || status === 408 || status === 429;
+      }
+    }
+    
+    return false;
+  };
+  
+  const fetchWithRetry = useCallback(async (
+    url: string, 
+    options: RequestInit = {},
+    maxRetries: number = 3,
+    baseDelayMs: number = 1000
+  ): Promise<Response> => {
+    let lastError: unknown;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Add timeout to fetch request
+        const timeoutMs = 10000; // 10 second timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        const response = await fetch(url, {
+          ...options,
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        // If response is ok, return it
+        if (response.ok) {
+          return response;
+        }
+        
+        // For non-ok responses, throw an error to trigger retry logic or final error
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        
+      } catch (error) {
+        lastError = error;
+        
+        // If this is the last attempt or error is not retryable, throw
+        if (attempt === maxRetries || !isRetryableError(error)) {
+          throw error;
+        }
+        
+        // Calculate exponential backoff delay with jitter
+        const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 1000;
+        console.warn(`[Photo Slideshow] Fetch attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms:`, error);
+        
+        await sleep(delay);
+      }
+    }
+    
+    // This should never be reached, but just in case
+    throw lastError;
+  }, []);
+
   // Preload media: fetch as blob, create URL, decode/preload, and return ready URL
   const preloadMedia = useCallback(async (path: string): Promise<string | null> => {
     // Already have a ready blob URL
@@ -115,7 +196,8 @@ export function usePhotoSlideshow(
         
         // Fetch media as blob
         const fetchPromise = (async () => {
-          const response = await fetch(mediaUrl);
+          const mediaUrl = getMediaUrl(path);
+          const response = await fetchWithRetry(mediaUrl, {}, 2, 500); // Fewer retries for individual images
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
@@ -190,7 +272,7 @@ export function usePhotoSlideshow(
     
     loadingPromises.current.set(path, promise);
     return promise;
-  }, []);
+  }, [fetchWithRetry]);
   
   // Cleanup
   useEffect(() => {
@@ -216,49 +298,367 @@ export function usePhotoSlideshow(
   
   // Load images from source
   const loadImages = useCallback(async () => {
+    let imagePaths: string[] = [];
+    let isExample = false;
+    let fallbackAttempted = false;
+    
     try {
       setLoading(true);
       setError(null);
       
-      let imagePaths: string[] = [];
-      let isExample = false;
-      
       let targetPath = folderPath;
       
-      if (!targetPath) {
-        // Use default example photos via backend resolution
-        // Pass a special prefix that the backend understands to look up the bundled resource
-        targetPath = '$RESOURCES/kittens';
-        isExample = true;
-      }
-      
-      if (targetPath) {
+      // Enhanced fallback logic: try user folder first, then fallback to default
+      const attemptLoadFromPath = async (path: string, isDefaultFallback: boolean = false): Promise<string[]> => {
+        console.log(`[Photo Slideshow] Attempting to load images from: ${path}${isDefaultFallback ? ' (fallback)' : ''}`);
+        
         // Check if we should use HTTP (Axum) or Tauri Invoke
-        // Use HTTP only for Web Remote (Production Web Interface)
-        // Desktop App (Dev & Prod) should use Invoke for performance and asset:// support
         const isWebRemote = window.location.protocol.startsWith('http') && !import.meta.env.DEV;
 
         if (isWebRemote) {
-            const response = await fetch(`/api/images/list?folder=${encodeURIComponent(targetPath)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+          try {
+            const response = await fetchWithRetry(`/api/images/list?folder=${encodeURIComponent(path)}`);
+            return await parseApiResponse(response, path, isDefaultFallback);
+          } catch (fetchError) {
+            // Enhanced error reporting for network failures
+            let errorMessage = 'Failed to connect to the photo slideshow API.';
+            let diagnosticInfo = `Attempted URL: /api/images/list?folder=${encodeURIComponent(path)}`;
+            
+            if (fetchError instanceof TypeError && fetchError.message.includes('fetch')) {
+              errorMessage = 'Network connection failed after multiple retry attempts.';
+              diagnosticInfo += '\nThis could be due to network issues or the server not running properly.';
+            } else if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+              errorMessage = 'Request timed out after multiple retry attempts.';
+              diagnosticInfo += '\nThe server is taking too long to respond.';
+            } else if (fetchError instanceof Error) {
+              // Check if this was a retryable error that exhausted retries
+              if (isRetryableError(fetchError)) {
+                errorMessage = `Server error persisted after multiple retry attempts: ${fetchError.message}`;
+                diagnosticInfo += '\nThe server appears to be experiencing issues.';
+              } else {
+                // Non-retryable error - pass through the original parsing error
+                throw fetchError;
+              }
             }
-            imagePaths = await response.json();
+            
+            throw new Error(
+              `${errorMessage}\n\n` +
+              'Please check your network connection and try again.\n\n' +
+              `Diagnostic Information:\n${diagnosticInfo}\n` +
+              `Network Error: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`
+            );
+          }
         } else {
-            imagePaths = await invoke<string[]>('list_images_in_folder', { folderPath: targetPath });
+          try {
+            const result = await invoke<string[]>('list_images_in_folder', { folderPath: path });
+            return Array.isArray(result) ? result : [];
+          } catch (invokeError) {
+            // Enhanced error handling for Tauri invoke errors
+            const errorMessage = invokeError instanceof Error ? invokeError.message : String(invokeError);
+            let guidance = '';
+            
+            if (errorMessage.includes('not found') || errorMessage.includes('does not exist')) {
+              guidance = isDefaultFallback 
+                ? 'The default photo resources may not be properly bundled with the application.'
+                : 'Please check that the selected folder exists and is accessible.';
+            } else if (errorMessage.includes('permission') || errorMessage.includes('access')) {
+              guidance = 'Please check folder permissions and ensure the application has access to read the directory.';
+            } else if (errorMessage.includes('invalid') || errorMessage.includes('malformed')) {
+              guidance = 'The folder path may be invalid or contain unsupported characters.';
+            } else {
+              guidance = 'Please try selecting a different folder or restart the application if the issue persists.';
+            }
+            
+            throw new Error(
+              `Failed to load images via desktop API: ${errorMessage}\n\n` +
+              `${guidance}\n\n` +
+              'Diagnostic Information:\n' +
+              `Tauri Command: list_images_in_folder\n` +
+              `Folder Path: ${path}\n` +
+              `Environment: Desktop (${import.meta.env.DEV ? 'Development' : 'Production'})`
+            );
+          }
+        }
+      };
+      
+      // Enhanced error detection for API responses
+      const parseApiResponse = async (response: Response, targetPath: string, isDefaultFallback: boolean = false): Promise<string[]> => {
+        // First, check if response is ok
+        if (!response.ok) {
+          let errorMessage = `HTTP ${response.status} ${response.statusText}`;
+          let diagnosticInfo = `Request: GET /api/images/list?folder=${encodeURIComponent(targetPath)}`;
+          
+          try {
+            // Check content type to determine if we got JSON or HTML
+            const contentType = response.headers.get('content-type') || '';
+            
+            if (contentType.includes('application/json')) {
+              // Try to parse JSON error response
+              const errorData = await response.json();
+              if (errorData.error) {
+                errorMessage = errorData.error;
+                if (errorData.details) {
+                  diagnosticInfo += `\nDetails: ${errorData.details}`;
+                }
+                if (errorData.code) {
+                  diagnosticInfo += `\nError Code: ${errorData.code}`;
+                }
+              }
+            } else if (contentType.includes('text/html')) {
+              // Server returned HTML instead of JSON - likely SPA fallback
+              errorMessage = 'Server returned HTML instead of JSON - API endpoint may not be working correctly';
+              diagnosticInfo += `\nReceived Content-Type: ${contentType}`;
+              diagnosticInfo += '\nThis usually indicates the API route is not properly configured or the server fell back to serving the SPA';
+            } else {
+              // Unknown content type - try to read as text
+              const responseText = await response.text();
+              if (responseText && responseText.trim().startsWith('<!DOCTYPE') || responseText && responseText.trim().startsWith('<html')) {
+                errorMessage = 'Server returned HTML instead of JSON - API endpoint configuration issue detected';
+                diagnosticInfo += '\nReceived HTML content when expecting JSON';
+              } else {
+                errorMessage = `Unexpected response format (Content-Type: ${contentType})`;
+                const preview = responseText ? responseText.substring(0, 200) : 'No response content';
+                diagnosticInfo += `\nResponse preview: ${preview}...`;
+              }
+            }
+          } catch (parseError) {
+            // If we can't parse the error response, provide diagnostic info
+            diagnosticInfo += `\nFailed to parse error response: ${parseError instanceof Error ? parseError.message : String(parseError)}`;
+          }
+          
+          // Provide actionable guidance based on error type
+          let guidance = '';
+          if (response.status === 404) {
+            guidance = isDefaultFallback 
+              ? 'The default photo resources may not be properly bundled with the application.'
+              : 'Please check that the selected folder exists and is accessible.';
+          } else if (response.status === 403) {
+            guidance = 'Please check folder permissions and ensure the application has access to read the directory.';
+          } else if (response.status === 400) {
+            guidance = 'The folder path may be invalid or contain unsupported characters.';
+          } else if (response.status >= 500) {
+            guidance = 'This appears to be a server error. Please try again or contact support if the issue persists.';
+          } else if (errorMessage.includes('HTML instead of JSON')) {
+            guidance = 'This is likely a configuration issue with the photo slideshow API. Please restart the application or contact support.';
+          }
+          
+          const fullError = guidance 
+            ? `${errorMessage}\n\n${guidance}\n\nDiagnostic Information:\n${diagnosticInfo}`
+            : `${errorMessage}\n\nDiagnostic Information:\n${diagnosticInfo}`;
+          
+          throw new Error(fullError);
+        }
+        
+        // Response is ok, now validate content type and parse JSON
+        const contentType = response.headers.get('content-type') || '';
+        
+        if (!contentType.includes('application/json')) {
+          // Got successful response but wrong content type
+          let diagnosticInfo = `Expected: application/json, Received: ${contentType}`;
+          
+          if (contentType.includes('text/html')) {
+            try {
+              const responseText = await response.text();
+              if (responseText && (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html'))) {
+                throw new Error(
+                  'Server returned HTML instead of JSON despite successful status code.\n\n' +
+                  'This indicates the API endpoint is not properly configured.\n\n' +
+                  `Diagnostic Information:\n${diagnosticInfo}\n` +
+                  'Response appears to be the SPA fallback page.'
+                );
+              }
+            } catch (_textError) {
+              // If we can't read the text, just use the content type info
+            }
+          }
+          
+          throw new Error(
+            'Server returned unexpected content type for image list.\n\n' +
+            'Expected JSON response but received different format.\n\n' +
+            `Diagnostic Information:\n${diagnosticInfo}`
+          );
+        }
+        
+        try {
+          const data = await response.json();
+          
+          // Validate that we got an array
+          if (!Array.isArray(data)) {
+            const dataStr = JSON.stringify(data);
+            const preview = dataStr ? dataStr.substring(0, 200) : 'Unable to stringify data';
+            throw new Error(
+              'Server returned invalid data format.\n\n' +
+              'Expected an array of image paths but received different data structure.\n\n' +
+              `Diagnostic Information:\nReceived data type: ${typeof data}\n` +
+              `Data preview: ${preview}...`
+            );
+          }
+          
+          return data;
+        } catch (jsonError) {
+          if (jsonError instanceof SyntaxError) {
+            // JSON parsing failed - we need to get a fresh response to read as text
+            // Since we can't re-read the same response, we'll provide a generic error
+            throw new Error(
+              'Server returned malformed JSON response.\n\n' +
+              'The response could not be parsed as valid JSON.\n\n' +
+              'Diagnostic Information:\n' +
+              `JSON Parse Error: ${jsonError.message}\n` +
+              `Content-Type header: ${contentType}\n` +
+              'This suggests the server returned invalid JSON or HTML disguised as JSON.'
+            );
+          } else {
+            // Re-throw validation errors (like array validation)
+            throw jsonError;
+          }
+        }
+      };
+      
+      // First attempt: use specified folder or default to fallback
+      if (!targetPath) {
+        // No folder specified - go directly to fallback
+        targetPath = '$RESOURCES/kittens';
+        isExample = true;
+        fallbackAttempted = true;
+        console.log('[Photo Slideshow] No folder specified, using default fallback');
+      }
+      
+      // Check if we should use HTTP (Axum) or Tauri Invoke
+      const isWebRemote = window.location.protocol.startsWith('http') && !import.meta.env.DEV;
+      
+      try {
+        imagePaths = await attemptLoadFromPath(targetPath, isExample);
+      } catch (primaryError) {
+        console.warn(`[Photo Slideshow] Primary load failed for path: ${targetPath}`, primaryError);
+        
+        // Check if this is an API configuration error that would affect fallback too
+        const isApiConfigError = primaryError instanceof Error && (
+          primaryError.message.includes('Server returned HTML instead of JSON') ||
+          primaryError.message.includes('API endpoint may not be working') ||
+          primaryError.message.includes('API endpoint configuration issue') ||
+          primaryError.message.includes('text/html') ||
+          primaryError.message.includes('<!DOCTYPE') ||
+          primaryError.message.includes('<html')
+        );
+        
+        // If the primary load failed and we haven't tried the fallback yet, try it now
+        // But skip fallback if this looks like an API configuration issue that would affect all requests
+        if (!fallbackAttempted && !isApiConfigError) {
+          console.log('[Photo Slideshow] Attempting fallback to default photos');
+          fallbackAttempted = true;
+          
+          try {
+            imagePaths = await attemptLoadFromPath('$RESOURCES/kittens', true);
+            isExample = true;
+            
+            // Log successful fallback for debugging
+            console.log('[Photo Slideshow] Successfully fell back to default photos');
+            
+            // Enhance error message to indicate fallback was used
+            const originalError = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            const fallbackMessage = `Original folder could not be loaded, using default photos instead.\n\nOriginal error: ${originalError}`;
+            
+            // Don't set this as an error since fallback succeeded, but log it
+            console.warn('[Photo Slideshow] Fallback succeeded after primary failure:', fallbackMessage);
+            
+          } catch (fallbackError) {
+            // Both primary and fallback failed - this is a critical error
+            console.error('[Photo Slideshow] Both primary and fallback loading failed', { primaryError, fallbackError });
+            
+            const primaryErrorMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            
+            // Provide comprehensive error message explaining both failures
+            const criticalError = new Error(
+              'Failed to load images from both the selected folder and default fallback.\n\n' +
+              `Selected folder error: ${primaryErrorMsg}\n\n` +
+              `Default fallback error: ${fallbackErrorMsg}\n\n` +
+              'This indicates a critical issue with the photo slideshow system. ' +
+              'Please restart the application or contact support if the problem persists.\n\n' +
+              'Diagnostic Information:\n' +
+              `Primary path: ${targetPath}\n` +
+              `Fallback path: $RESOURCES/kittens\n` +
+              `Environment: ${isWebRemote ? 'Web Remote' : 'Desktop'} (${import.meta.env.DEV ? 'Development' : 'Production'})`
+            );
+            
+            throw criticalError;
+          }
+        } else {
+          // Either fallback was already attempted and failed, or this is an API config error
+          console.error('[Photo Slideshow] Primary load failed, fallback not attempted', { 
+            fallbackAttempted, 
+            isApiConfigError, 
+            error: primaryError 
+          });
+          
+          if (isApiConfigError) {
+            // API configuration errors should be shown immediately since fallback would likely fail too
+            throw primaryError;
+          } else {
+            // Fallback was already attempted and failed
+            const fallbackErrorMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            
+            const fallbackFailureError = new Error(
+              'Failed to load default photos from the application resources.\n\n' +
+              `Error: ${fallbackErrorMsg}\n\n` +
+              'This indicates the default photo resources may not be properly bundled with the application. ' +
+              'Please restart the application or reinstall if the problem persists.\n\n' +
+              'Diagnostic Information:\n' +
+              `Fallback path: $RESOURCES/kittens\n` +
+              `Environment: ${isWebRemote ? 'Web Remote' : 'Desktop'} (${import.meta.env.DEV ? 'Development' : 'Production'})\n` +
+              'This is a critical system error that should not occur in normal operation.'
+            );
+            
+            throw fallbackFailureError;
+          }
         }
       }
       
+      
       setUsingExamplePhotos(isExample);
+      
+      // Ensure imagePaths is always a valid array
+      if (!Array.isArray(imagePaths)) {
+        imagePaths = [];
+      }
       
       if (imagePaths.length === 0) {
         const errorMsg = isExample 
-          ? 'No default images found.' 
-          : 'No images found. Please select a folder or album with images.';
-        setError(errorMsg);
-        setImages([]);
-        setLoading(false);
-        return;
+          ? 'No default images found in the application resources.' 
+          : 'No images found in the selected folder. Please select a folder containing images, or the system will use default photos.';
+        
+        // If we have no images and haven't tried fallback yet, try it now
+        if (!isExample && !fallbackAttempted) {
+          console.log('[Photo Slideshow] No images found in user folder, attempting fallback');
+          try {
+            imagePaths = await attemptLoadFromPath('$RESOURCES/kittens', true);
+            isExample = true;
+            setUsingExamplePhotos(true);
+            
+            if (imagePaths.length > 0) {
+              console.log('[Photo Slideshow] Successfully loaded default photos after empty folder');
+              // Continue with the default photos - don't set error
+            } else {
+              throw new Error('Default photos folder is empty');
+            }
+          } catch (fallbackError) {
+            const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            setError(
+              'No images found in the selected folder and default photos could not be loaded.\n\n' +
+              `Selected folder: Empty\n` +
+              `Default photos error: ${fallbackErrorMsg}\n\n` +
+              'Please select a folder containing images or restart the application.'
+            );
+            setImages([]);
+            setLoading(false);
+            return;
+          }
+        } else {
+          setError(errorMsg);
+          setImages([]);
+          setLoading(false);
+          return;
+        }
       }
       
       const orderedImages = randomOrder ? shuffleArray(imagePaths) : imagePaths;
@@ -286,7 +686,7 @@ export function usePhotoSlideshow(
       const firstImgUrl = getMediaUrl(firstPath);
       
       try {
-        const response = await fetch(firstImgUrl);
+        const response = await fetchWithRetry(firstImgUrl, {}, 2, 500);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
@@ -322,7 +722,7 @@ export function usePhotoSlideshow(
       setImages([]);
       setLoading(false);
     }
-  }, [folderPath, randomOrder, storageKey, smartCrop]);
+  }, [folderPath, randomOrder, storageKey, smartCrop, fetchWithRetry]);
   
   // Trigger load
   useEffect(() => {

@@ -15,3 +15,8 @@ tauri = { version = "2" }
 vibe-cast-state = { path = "../state" }
 vibe-cast-models = { path = "../models" }
 mime_guess = "2"
+
+[dev-dependencies]
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+tempfile = "3.0"

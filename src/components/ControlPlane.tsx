@@ -120,7 +120,7 @@ export const ControlPlane: React.FC = () => {
     } catch (e) {
       console.error('[ControlPlane] Error serializing messageStats:', e);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [state]); // Sync whenever state changes (ref check handles de-duplication)
 
   // Sync the full SSE state into the store so saves include the live data
@@ -187,7 +187,7 @@ export const ControlPlane: React.FC = () => {
       console.log('[ControlPlane] Syncing folderPlaybackQueue from SSE:', sseQueue);
       useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   }, [state?.folderPlaybackQueue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)

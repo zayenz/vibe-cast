@@ -786,7 +786,7 @@ export const VisualizerWindow: React.FC = () => {
     });
 
     // Listen for state changes from other windows
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const unlistenStatePromise = listen<{ type: string, payload: unknown }>('state-changed', (event) => {
       console.log('Received state-changed:', event.payload);
       const { type, payload } = event.payload;
