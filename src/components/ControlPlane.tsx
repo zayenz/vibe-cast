@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { useAppState, useSendCommand } from '../hooks/useAppState';
+import { useAppState, useSendCommand, DeviceType, PlaybackControlState } from '../hooks/useAppState';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
@@ -57,6 +57,9 @@ export const ControlPlane: React.FC = () => {
   const { state, isConnected } = useAppState({ apiBase });
   console.log('[ControlPlane] useAppState returned - state:', state, 'isConnected:', isConnected);
   
+  // Local override for playback control state from Tauri events (more immediate than SSE)
+  const [playbackControlOverride, setPlaybackControlOverride] = useState<PlaybackControlState | null>(null);
+  
   // Command sender
   const { sendCommand: sendCommandRaw, isPending } = useSendCommand({ apiBase });
   
@@ -89,7 +92,6 @@ export const ControlPlane: React.FC = () => {
   const storeMessageStats = useStore((s) => s.messageStats);
   const messageStats = state?.messageStats ?? storeMessageStats;
   const activeMessages = useStore((s) => s.activeMessages);
-  const clearActiveMessage = useStore((s) => s.clearActiveMessage);
   const resetMessageStats = useStore((s) => s.resetMessageStats);
   const folderPlaybackQueue = useStore((s) => s.folderPlaybackQueue);
   // NOTE: playFolder and cancelFolderPlayback are now handled via HTTP commands to Rust backend
@@ -195,6 +197,8 @@ export const ControlPlane: React.FC = () => {
     const unlistenState = listen<{ type: string; payload: unknown }>('state-changed', (event) => {
       const { type, payload } = event.payload;
       
+      console.log('[ControlPlane] Received state-changed event:', type, payload ? 'with payload' : 'no payload');
+      
       switch (type) {
         case 'CLEAR_MESSAGE': {
           // Message completed in VisualizerWindow - update local store
@@ -222,6 +226,45 @@ export const ControlPlane: React.FC = () => {
 
     return () => {
       unlistenState.then((u) => u());
+    };
+  }, []);
+
+  // Listen for enhanced playback control events from backend
+  useEffect(() => {
+    const unlistenPlaybackControl = listen<{ type: string; playbackControl: PlaybackControlState }>('playback-control-changed', (event) => {
+      const { type, playbackControl } = event.payload;
+      
+      console.log('[ControlPlane] Received playback-control-changed event:', type, {
+        isPlaying: playbackControl.isPlaying,
+        canStop: playbackControl.canStop,
+        canStart: playbackControl.canStart,
+        initiatedBy: playbackControl.initiatedBy,
+        currentMessageId: playbackControl.currentMessage?.id
+      });
+      
+      // Update local playback control override for immediate UI updates
+      setPlaybackControlOverride(playbackControl);
+      
+      // Handle specific event types for additional UI updates
+      switch (type) {
+        case 'PLAYBACK_CONTROL_UPDATE':
+        case 'MESSAGE_STARTED':
+        case 'MESSAGE_STOPPED': {
+          // Log the control state change for debugging
+          console.log('[ControlPlane] Playback control state updated:', {
+            isPlaying: playbackControl.isPlaying,
+            canStop: playbackControl.canStop,
+            canStart: playbackControl.canStart,
+            initiatedBy: playbackControl.initiatedBy,
+            currentMessage: playbackControl.currentMessage
+          });
+          break;
+        }
+      }
+    });
+
+    return () => {
+      unlistenPlaybackControl.then((u) => u());
     };
   }, []);
   
@@ -320,10 +363,14 @@ export const ControlPlane: React.FC = () => {
   // Get store values for fallback
   const storeMessageTree = useStore(s => s.messageTree);
   const storeMessages = useStore(s => s.messages);
+  // Note: activeMessages is already declared earlier in the component (line 94)
 
   // Use SSE state if available, otherwise fallback to store defaults
   const effectiveMessageTree = (state?.messageTree as MessageTreeNode[] | undefined) ?? storeMessageTree;
   const effectiveMessages = state?.messages ?? storeMessages;
+  
+  // Get playback control state from SSE or Tauri event override (Tauri events are more immediate)
+  const playbackControl = playbackControlOverride || state?.playbackControl;
 
   const [messageTreeLocal, setMessageTreeLocal] = useState<MessageTreeNode[]>([]);
   
@@ -698,31 +745,124 @@ export const ControlPlane: React.FC = () => {
     setDropIntoFolderPath(null);
   };
 
-  const handleTriggerMessage = (msg: MessageConfig) => {
-    const activeInstance = activeMessages.find((am) => am.message.id === msg.id);
-    if (activeInstance) {
-      // If already playing, stop instead of retriggering
-      handleClearActiveMessage(msg.id, activeInstance.timestamp);
-      return;
-    }
-    // Optimistically start playing locally, then sync to backend
-    useStore.getState().triggerMessage(msg, false);
-    sendCommand('trigger-message', msg);
-  };
-
-  const handleClearActiveMessage = (messageId: string, timestamp?: number) => {
-    // Find all active instances of this message and clear them
-    const activeInstances = activeMessages.filter(am => am.message.id === messageId);
-    if (timestamp !== undefined) {
-      // Clear specific instance
-      clearActiveMessage(messageId, timestamp, false);
-      sendCommand('clear-active-message', { messageId, timestamp });
-    } else {
-      // Clear all instances
-      activeInstances.forEach(({ timestamp: ts }) => {
-        clearActiveMessage(messageId, ts, false);
-        sendCommand('clear-active-message', { messageId, timestamp: ts });
+  const handleTriggerMessage = async (msg: MessageConfig) => {
+    // Check if this message is currently playing based on playback control state
+    const isCurrentlyPlaying = playbackControl?.isPlaying && 
+                              playbackControl?.currentMessage?.id === msg.id;
+    
+    console.log('[ControlPlane] handleTriggerMessage called:', {
+      messageId: msg.id,
+      messageText: msg.text?.substring(0, 50),
+      isCurrentlyPlaying,
+      playbackControlState: playbackControl
+    });
+    
+    try {
+      if (isCurrentlyPlaying) {
+        // If currently playing, use Tauri command to stop
+        console.log('[ControlPlane] Calling stop_message_playback');
+        const result = await invoke('stop_message_playback');
+        console.log('[ControlPlane] stop_message_playback result:', result);
+      } else {
+        // If not playing, use Tauri command to start
+        // Pass both message_id AND the full message object to avoid lookup failures
+        console.log('[ControlPlane] Calling start_message_playback with message_id:', msg.id, 'message:', msg);
+        try {
+          const result = await invoke('start_message_playback', { 
+            message_id: msg.id,
+            message: msg  // Pass full message to avoid backend lookup issues
+          });
+          console.log('[ControlPlane] start_message_playback result:', result);
+          return; // Success - don't fall back
+        } catch (invokeError) {
+          console.error('[ControlPlane] start_message_playback invoke failed:', invokeError);
+          throw invokeError; // Re-throw to trigger fallback
+        }
+      }
+    } catch (error) {
+      console.error('[ControlPlane] Playback command failed:', error);
+      console.error('[ControlPlane] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
       });
+      
+      // Fallback 1: Try direct Tauri event emission (frontend-to-frontend)
+      // This bypasses the Rust backend entirely
+      console.log('[ControlPlane] Trying direct Tauri event emission as fallback');
+      try {
+        if (!isCurrentlyPlaying) {
+          // Emit triggered-message event directly to all windows
+          await emit('triggered-message', msg);
+          console.log('[ControlPlane] Direct emit succeeded for triggered-message');
+          
+          // Emit synthetic playback-control-changed so Control Plane shows "playing"
+          // and user can click again to stop. Without this, isCurrentlyPlaying stays false.
+          const syntheticPlaybackControl: PlaybackControlState = {
+            sessionId: `local-${msg.id}-${Date.now()}`,
+            currentMessage: { id: msg.id, title: msg.text?.substring(0, 80) || msg.id },
+            isPlaying: true,
+            playbackPosition: 0,
+            canStop: true,
+            canStart: false,
+            initiatedBy: DeviceType.ControlPlane,
+            lastUpdated: Date.now()
+          };
+          // Update local state immediately so UI shows "playing" and Stop is available
+          // (emit may not be delivered to this window in all Tauri setups)
+          setPlaybackControlOverride(syntheticPlaybackControl);
+          await emit('playback-control-changed', {
+            type: 'MESSAGE_STARTED',
+            playbackControl: syntheticPlaybackControl,
+            state: null
+          });
+          console.log('[ControlPlane] Emitted synthetic playback-control-changed MESSAGE_STARTED');
+          
+          // Also emit state-changed for backward compatibility
+          await emit('state-changed', {
+            type: 'TRIGGER_MESSAGE',
+            payload: msg
+          });
+          console.log('[ControlPlane] Direct emit succeeded for state-changed');
+          return; // Success via direct emit
+        } else {
+          // User clicked to stop but invoke failed - emit MESSAGE_STOPPED so Visualizer clears
+          const stoppedPlaybackControl: PlaybackControlState = {
+            sessionId: null,
+            currentMessage: null,
+            isPlaying: false,
+            playbackPosition: 0,
+            canStop: false,
+            canStart: true,
+            initiatedBy: DeviceType.ControlPlane,
+            lastUpdated: Date.now()
+          };
+          await emit('playback-control-changed', {
+            type: 'MESSAGE_STOPPED',
+            playbackControl: stoppedPlaybackControl,
+            state: null
+          });
+          console.log('[ControlPlane] Emitted synthetic playback-control-changed MESSAGE_STOPPED (stop fallback)');
+          setPlaybackControlOverride(stoppedPlaybackControl);
+          return;
+        }
+      } catch (emitError) {
+        console.error('[ControlPlane] Direct emit also failed:', emitError);
+      }
+      
+      // Fallback 2: HTTP command for backward compatibility (mobile remote support)
+      console.log('[ControlPlane] Falling back to HTTP command');
+      if (isCurrentlyPlaying) {
+        sendCommand('stop-message', { 
+          deviceId: 'control-plane',
+          timestamp: Date.now()
+        });
+      } else {
+        sendCommand('start-message', { 
+          messageId: msg.id,
+          deviceId: 'control-plane',
+          timestamp: Date.now()
+        });
+      }
     }
   };
 
@@ -927,6 +1067,22 @@ export const ControlPlane: React.FC = () => {
               <span className="text-[10px] font-bold tracking-[0.3em] text-zinc-500 uppercase">
                 {isConnected ? 'System Active' : 'Reconnecting...'}
               </span>
+              {/* Playback Status Indicator - show count of active messages */}
+              {(activeMessages.length > 0 || playbackControl?.isPlaying) && (
+                <div className="flex items-center gap-2 ml-4">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  <span className="text-[10px] font-bold tracking-[0.3em] text-green-500 uppercase">
+                    {activeMessages.length > 0 
+                      ? `${activeMessages.length} message${activeMessages.length === 1 ? '' : 's'} playing`
+                      : playbackControl?.currentMessage 
+                        ? `Playing: ${playbackControl.currentMessage.title || playbackControl.currentMessage.id}`
+                        : 'Playing'}
+                  </span>
+                  {playbackControl?.initiatedBy === DeviceType.MobileRemote && (
+                    <span className="text-[10px] text-blue-400" title="Started from Mobile Remote">📱</span>
+                  )}
+                </div>
+              )}
             </motion.div>
             <h1 className="text-5xl font-black tracking-tight bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent">
               VIBECAST
@@ -1365,7 +1521,15 @@ export const ControlPlane: React.FC = () => {
                     const msg = entry.node.message;
                     const stats = messageStats[msg.id];
                     const triggerCount = stats?.triggerCount ?? 0;
-                    const isAnimating = activeMessages.some((am) => am.message.id === msg.id);
+                    
+                    // Use playback control state to determine if message is playing
+                    const isCurrentlyPlaying = playbackControl?.isPlaying && 
+                                              playbackControl?.currentMessage?.id === msg.id;
+                    
+                    // Fallback to local state for backward compatibility
+                    const isAnimatingLocal = activeMessages.some((am) => am.message.id === msg.id);
+                    const isAnimating = isCurrentlyPlaying || isAnimatingLocal;
+                    
                     const isInQueue = folderPlaybackQueue?.messageIds.includes(msg.id) ?? false;
                     const queuePosition = isInQueue ? folderPlaybackQueue!.messageIds.indexOf(msg.id) + 1 : null;
                     const queueTotal = folderPlaybackQueue?.messageIds.length ?? null;
@@ -1400,7 +1564,7 @@ export const ControlPlane: React.FC = () => {
                             </button>
                             <button
                               onClick={() => handleTriggerMessage(msg)}
-                              disabled={isPending}
+                              disabled={isPending || (playbackControl?.canStart === false && !isCurrentlyPlaying)}
                               className={`flex-1 text-left text-sm font-medium transition-all disabled:opacity-50 truncate ${
                                 isAnimating
                                   ? 'text-orange-500 hover:text-orange-400'
@@ -1408,6 +1572,13 @@ export const ControlPlane: React.FC = () => {
                                     ? 'text-zinc-200 hover:text-white'
                                     : 'text-zinc-300 hover:text-white'
                               }`}
+                              title={
+                                isCurrentlyPlaying 
+                                  ? `Stop message (started from ${playbackControl?.initiatedBy === DeviceType.MobileRemote ? 'Mobile Remote' : 'Control Plane'})`
+                                  : playbackControl?.canStart === false 
+                                    ? 'Another message is playing'
+                                    : 'Click to play message'
+                              }
                             >
                               <div className="flex items-center gap-2">
                                 <div
@@ -1431,7 +1602,14 @@ export const ControlPlane: React.FC = () => {
                                   })()}
                                 </span>
                                 {isAnimating && (
-                                  <span className="text-xs text-orange-500 font-bold animate-pulse">Playing</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-orange-500 font-bold animate-pulse">Playing</span>
+                                    {isCurrentlyPlaying && playbackControl?.initiatedBy === DeviceType.MobileRemote && (
+                                      <span className="text-xs text-blue-400 font-bold" title="Started from Mobile Remote">
+                                        📱
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                                 {isInQueue && !isAnimating && queuePosition && queueTotal && (
                                   <span className="text-xs text-blue-400 font-bold">
@@ -1440,18 +1618,25 @@ export const ControlPlane: React.FC = () => {
                                 )}
                               </div>
                             </button>
-                            {/* Play/Stop button - unified logic; shows stop while active */}
+                            {/* Play/Stop button - enhanced with playback control state */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleTriggerMessage(msg);
                               }}
-                              className={`p-1.5 rounded transition-colors ${
+                              disabled={isPending}
+                              className={`p-1.5 rounded transition-colors disabled:opacity-50 ${
                                 isAnimating
                                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
                                   : 'text-zinc-500 hover:text-orange-500 hover:bg-zinc-800'
                               }`}
-                              title={isAnimating ? 'Stop message' : 'Play message'}
+                              title={
+                                isCurrentlyPlaying 
+                                  ? `Stop message (started from ${playbackControl?.initiatedBy === DeviceType.MobileRemote ? 'Mobile Remote' : 'Control Plane'})`
+                                  : playbackControl?.canStart === false 
+                                    ? 'Another message is playing'
+                                    : 'Play message'
+                              }
                             >
                               {isAnimating ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                             </button>

@@ -5,7 +5,7 @@ use vibe_cast_audio::AudioState;
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
     MessageConfig, VisualizationPreset, TextStylePreset, 
-    CommonSettings, flatten_message_tree_value
+    CommonSettings, flatten_message_tree_value, PlaybackCommand, DeviceType
 };
 
 #[tauri::command]
@@ -31,6 +31,85 @@ async fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<s
         
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+/// Check if the server is ready (port is bound)
+/// This is used as an alternative to HTTP health checks when webview HTTP is blocked
+#[tauri::command]
+async fn check_server_ready(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<bool, String> {
+    if let Ok(port_lock) = state.server_port.lock() {
+        Ok(*port_lock != 0)
+    } else {
+        Err("Failed to check server state".to_string())
+    }
+}
+
+/// Get the current app state directly via Tauri IPC
+/// This bypasses HTTP/SSE entirely for desktop windows
+#[tauri::command]
+fn get_app_state(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<serde_json::Value, String> {
+    // Build state object similar to what SSE would return
+    let active_visualization = state.active_visualization.lock()
+        .map(|v| v.clone())
+        .unwrap_or_else(|_| "fireplace".to_string());
+    let enabled_visualizations = state.enabled_visualizations.lock()
+        .map(|v| v.clone())
+        .unwrap_or_else(|_| vec![]);
+    let active_visualization_preset: Option<String> = state.active_visualization_preset.lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+    let messages = state.messages.lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| vec![]);
+    let message_tree = state.message_tree.lock()
+        .map(|t| t.clone())
+        .unwrap_or_else(|_| serde_json::Value::Null);
+    let visualization_presets = state.visualization_presets.lock()
+        .map(|p| p.clone())
+        .unwrap_or_else(|_| vec![]);
+    let text_style_presets = state.text_style_presets.lock()
+        .map(|p| p.clone())
+        .unwrap_or_else(|_| vec![]);
+    let default_text_style = state.default_text_style.lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| "scrolling-capitals".to_string());
+    let text_style_settings = state.text_style_settings.lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    let common_settings = state.common_settings.lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| CommonSettings::default());
+    let visualization_settings = state.visualization_settings.lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    let message_stats = state.message_stats.lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    // triggered_message is Mutex<Option<T>>, need to clone the inner Option
+    let triggered_message: Option<MessageConfig> = state.triggered_message.lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+    // playback_control is Mutex<T> (not Option), directly clone it
+    let playback_control = state.playback_control.lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    
+    Ok(serde_json::json!({
+        "activeVisualization": active_visualization,
+        "enabledVisualizations": enabled_visualizations,
+        "activeVisualizationPreset": active_visualization_preset,
+        "messages": messages,
+        "messageTree": message_tree,
+        "visualizationPresets": visualization_presets,
+        "textStylePresets": text_style_presets,
+        "defaultTextStyle": default_text_style,
+        "textStyleSettings": text_style_settings,
+        "commonSettings": common_settings,
+        "visualizationSettings": visualization_settings,
+        "messageStats": message_stats,
+        "triggeredMessage": triggered_message,
+        "playbackControl": playback_control
+    }))
 }
 
 #[tauri::command]
@@ -398,10 +477,161 @@ fn emit_state_change(
     state.broadcast(triggered_message.clone());
     
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
+    // Include complete state information including playback control state for bidirectional control
+    let complete_state = state.get_state();
     let _ = handle.emit("state-changed", serde_json::json!({ 
         "type": event_type,
-        "payload": payload_value
+        "payload": payload_value,
+        "state": complete_state
     }));
+}
+
+/// Process a playback command and emit enhanced Tauri events for Control Plane synchronization
+#[tauri::command]
+fn process_playback_command(
+    handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppStateSync>>,
+    command: PlaybackCommand
+) -> Result<serde_json::Value, String> {
+    // Process the command using the state management logic
+    let result = state.process_playback_command(command);
+    
+    match result {
+        Ok(new_state) => {
+            // Emit enhanced Tauri event with complete control state to all windows
+            // emit() broadcasts globally to all windows in Tauri v2
+            let complete_state = state.get_state();
+            println!("[process_playback_command] Emitting playback-control-changed event to all windows");
+            let _ = handle.emit("playback-control-changed", serde_json::json!({
+                "type": "PLAYBACK_CONTROL_UPDATE",
+                "playbackControl": new_state,
+                "state": complete_state
+            }));
+            
+            // Also emit the general state-changed event to all windows for backward compatibility
+            let _ = handle.emit("state-changed", serde_json::json!({
+                "type": "PLAYBACK_CONTROL_UPDATE",
+                "payload": serde_json::to_value(&new_state).unwrap_or_default(),
+                "state": complete_state
+            }));
+            
+            Ok(serde_json::to_value(new_state).unwrap_or_default())
+        }
+        Err(error) => {
+            Err(format!("Playback command failed: {:?}", error))
+        }
+    }
+}
+
+/// Start message playback from Control Plane with enhanced state synchronization
+/// Requires message object to avoid lookup failures
+#[tauri::command]
+async fn start_message_playback(
+    handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppStateSync>>,
+    message_id: String,
+    message: MessageConfig
+) -> Result<serde_json::Value, String> {
+    let device_type = DeviceType::ControlPlane;
+    
+    println!("[start_message_playback] Called with message_id: {}, message.id: {}", message_id, message.id);
+    
+    // Verify message_id matches message.id
+    if message.id != message_id {
+        return Err(format!("Message ID mismatch: expected {}, got {}", message_id, message.id));
+    }
+    
+    let result = state.start_message_playback(&message_id, device_type.clone());
+
+    if let Err(ref error) = result {
+        if error.contains("Message not found") {
+            println!("[start_message_playback] Message not in state.messages, using passed message");
+            state.start_message_playback_with_message(message.clone(), device_type);
+        } else {
+            return Err(error.clone());
+        }
+    }
+
+    // Get the updated state and emit enhanced events (same path for lookup and with-message)
+    let complete_state = state.get_state();
+    let playback_control = state.get_playback_control();
+
+    println!("[start_message_playback] Emitting triggered-message event to all windows: {}", message.id);
+    let _ = handle.emit("triggered-message", &message);
+
+    println!("[start_message_playback] Emitting playback-control-changed event to all windows");
+    let _ = handle.emit("playback-control-changed", serde_json::json!({
+        "type": "MESSAGE_STARTED",
+        "playbackControl": playback_control,
+        "state": complete_state
+    }));
+
+    let _ = handle.emit("state-changed", serde_json::json!({
+        "type": "MESSAGE_STARTED",
+        "payload": serde_json::json!({ "messageId": message_id }),
+        "state": complete_state
+    }));
+
+    if let Some(duration) = playback_control.current_message.as_ref().and_then(|m| m.duration) {
+        let state_clone = state.inner().clone();
+        let handle_clone = handle.clone();
+        let message_id_clone = message_id.clone();
+        let timeout_duration = duration + std::time::Duration::from_millis(500);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout_duration).await;
+
+            let current_state = state_clone.get_playback_control();
+            if current_state.is_playing &&
+               current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone) {
+                println!("Auto-stopping message '{}' after duration: {:?}", message_id_clone, duration);
+                state_clone.stop_message_playback(DeviceType::System);
+
+                let updated_state = state_clone.get_state();
+                let updated_playback_control = state_clone.get_playback_control();
+
+                let _ = handle_clone.emit("playback-control-changed", serde_json::json!({
+                    "type": "MESSAGE_TIMEOUT",
+                    "playbackControl": updated_playback_control,
+                    "state": updated_state
+                }));
+            }
+        });
+    }
+
+    Ok(serde_json::to_value(playback_control).unwrap_or_default())
+}
+
+/// Stop message playback from Control Plane with enhanced state synchronization
+#[tauri::command]
+fn stop_message_playback(
+    handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppStateSync>>
+) -> Result<serde_json::Value, String> {
+    let device_type = DeviceType::ControlPlane;
+    state.stop_message_playback(device_type);
+    
+    // Get the updated state and emit enhanced events
+    let complete_state = state.get_state();
+    let playback_control = state.get_playback_control();
+    
+    // Emit specific playback control event to all windows
+    // emit() broadcasts globally to all windows in Tauri v2
+    println!("[stop_message_playback] Emitting playback-control-changed event to all windows");
+    let _ = handle.emit("playback-control-changed", serde_json::json!({
+        "type": "MESSAGE_STOPPED",
+        "playbackControl": playback_control,
+        "state": complete_state
+    }));
+    
+    // Also emit general state-changed event to all windows for backward compatibility
+    let _ = handle.emit("state-changed", serde_json::json!({
+        "type": "MESSAGE_STOPPED",
+        "payload": serde_json::Value::Null,
+        "state": complete_state
+    }));
+    
+    Ok(serde_json::to_value(playback_control).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -499,12 +729,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_info,
             get_audio_data,
+            check_server_ready,
+            get_app_state,
             restart_viz_window,
             emit_state_change,
             set_config_base_path,
             get_config_base_path,
             load_message_text_file,
-            list_images_in_folder
+            list_images_in_folder,
+            process_playback_command,
+            start_message_playback,
+            stop_message_playback
         ])
         .setup(|app| {
             let handle = app.handle().clone();

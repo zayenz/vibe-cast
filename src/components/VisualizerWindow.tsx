@@ -7,7 +7,7 @@ import { getTextStyle } from '../plugins/textStyles';
 import { MessageConfig, CommonVisualizationSettings, RemoteCommand, getDefaultsFromSchema } from '../plugins/types';
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
-import { useAppState } from '../hooks/useAppState';
+import { useAppState, PlaybackControlState } from '../hooks/useAppState';
 import { resolveMessageText } from '../utils/messageLoader';
 
 /**
@@ -311,25 +311,92 @@ function addDebugLog(level: string, message: string, data?: unknown) {
 
 export const VisualizerWindow: React.FC = () => {
   // Determine API Base URL
-  // In Dev: localhost:8080 (backend)
+  // In Dev: 127.0.0.1:8080 (backend) - use IP instead of localhost to avoid DNS issues
   // In Web Remote: '' (served by backend)
   // In Desktop Prod: Need to find backend port via invoke
-  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
+  const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://127.0.0.1:8080' : '');
+  const [serverReady, setServerReady] = useState(false);
   
   useEffect(() => {
+    let isMounted = true;
+    let checkInterval: ReturnType<typeof setInterval> | null = null;
+    
+    // Function to check if server is ready using Tauri IPC (bypasses webview HTTP restrictions)
+    const checkServerReadyViaTauri = async (): Promise<boolean> => {
+      try {
+        const isReady = await invoke<boolean>('check_server_ready');
+        addDebugLog('log', `Tauri check_server_ready: ${isReady}`);
+        return isReady;
+      } catch (err) {
+        // Expected to fail in browser environment
+        addDebugLog('log', `Tauri check failed (browser env?): ${err}`);
+        return false;
+      }
+    };
+    
+    // Function to wait for server to be ready
+    const waitForServer = async (url: string) => {
+      addDebugLog('log', `Waiting for server at ${url} to be ready...`);
+      let attempts = 0;
+      const maxAttempts = 30; // 30 seconds max
+      
+      const check = async () => {
+        if (!isMounted) return;
+        attempts++;
+        
+        // Use Tauri IPC instead of HTTP - bypasses webview security restrictions
+        const isReady = await checkServerReadyViaTauri();
+        if (isReady) {
+          addDebugLog('log', `Server is ready after ${attempts} attempts (via Tauri IPC)`);
+          setServerReady(true);
+          if (checkInterval) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+          }
+        } else if (attempts >= maxAttempts) {
+          addDebugLog('warn', `Server health check timed out after ${attempts} attempts, proceeding anyway`);
+          setServerReady(true); // Proceed anyway, let SSE handle retries
+          if (checkInterval) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+          }
+        } else {
+          addDebugLog('log', `Server not ready yet (attempt ${attempts}/${maxAttempts})`);
+        }
+      };
+      
+      // Check immediately, then every second
+      await check();
+      if (!serverReady && isMounted) {
+        checkInterval = setInterval(check, 1000);
+      }
+    };
+    
     // Try to get dynamic server port from Tauri backend
     // This works in Desktop Prod AND Dev (when running in Tauri window)
     // It fails in Web Remote or Dev (when running in Browser), falling back to default
     invoke<{ port: number }>('get_server_info')
       .then(info => {
-        const url = `http://localhost:${info.port}`;
+        // Use 127.0.0.1 instead of localhost to avoid DNS resolution issues
+        const url = `http://127.0.0.1:${info.port}`;
         addDebugLog('log', `Server found at ${url}`);
         setApiBase(url);
+        // Now wait for server to actually be ready
+        waitForServer(url);
       })
       .catch(_err => {
         // Expected error in browser environment
         addDebugLog('log', 'Could not get server info (browser env?), using default:', apiBase);
+        // Still wait for server to be ready with default URL (use 127.0.0.1)
+        waitForServer(apiBase || 'http://127.0.0.1:8080');
       });
+    
+    return () => {
+      isMounted = false;
+      if (checkInterval) {
+        clearInterval(checkInterval);
+      }
+    };
   }, []);
 
   const sendCommand = useCallback(async (command: string, payload: unknown): Promise<void> => {
@@ -552,10 +619,63 @@ export const VisualizerWindow: React.FC = () => {
   // Subscribe to SSE stream for initial configuration load
   // This ensures VisualizerWindow gets the same config as ControlPlane on startup
   // Must use the same API base as ControlPlane to connect to the Axum server
+  // Only connect when server is ready to avoid initial connection failures
   const { state: sseState, isConnected: sseConnected } = useAppState({ 
-    apiBase: apiBase,
-    onCommand: handleRemoteCommandCallback
+    apiBase: serverReady ? apiBase : '', // Empty string prevents connection attempt
+    onCommand: serverReady ? handleRemoteCommandCallback : undefined
   });
+  
+  // Debug log server readiness changes
+  useEffect(() => {
+    addDebugLog('log', `Server ready state changed: ${serverReady}`);
+  }, [serverReady]);
+
+  // When server is ready, try to load initial state via Tauri IPC
+  // This bypasses SSE/HTTP entirely and works even when webview HTTP is blocked
+  useEffect(() => {
+    if (!serverReady) return;
+    
+    const loadStateViaTauri = async () => {
+      try {
+        addDebugLog('log', 'Attempting to load state via Tauri IPC...');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const state = await invoke<any>('get_app_state');
+        addDebugLog('log', 'Got state via Tauri IPC', {
+          activeVisualization: state.activeVisualization,
+          activeVisualizationPreset: state.activeVisualizationPreset,
+          presetsCount: state.visualizationPresets?.length ?? 0,
+          textStylePresetsCount: state.textStylePresets?.length ?? 0,
+        });
+        
+        // Load the state into the store
+        loadConfiguration({
+          version: 1,
+          activeVisualization: state.activeVisualization,
+          activeVisualizationPreset: state.activeVisualizationPreset ?? undefined,
+          enabledVisualizations: state.enabledVisualizations,
+          commonSettings: state.commonSettings,
+          visualizationSettings: state.visualizationSettings ?? {},
+          visualizationPresets: state.visualizationPresets ?? [],
+          messages: state.messages ?? [],
+          messageTree: state.messageTree,
+          defaultTextStyle: state.defaultTextStyle,
+          textStyleSettings: state.textStyleSettings ?? {},
+          textStylePresets: state.textStylePresets ?? [],
+          messageStats: state.messageStats ?? {},
+        }, false);
+        
+        setIsStateLoaded(true);
+        setHasReceivedSSEState(true); // Mark as received even though it came via IPC
+        addDebugLog('log', 'State loaded via Tauri IPC successfully');
+      } catch (err) {
+        addDebugLog('warn', `Failed to load state via Tauri IPC: ${err}`);
+        // Fall through to SSE/timeout fallback
+      }
+    };
+    
+    // Try to load state via Tauri IPC immediately when server is ready
+    loadStateViaTauri();
+  }, [serverReady, loadConfiguration]);
 
   // Track whether initial SSE state has been loaded
   // This is critical for production builds where the window is recreated
@@ -610,6 +730,23 @@ export const VisualizerWindow: React.FC = () => {
       textStylePresets: sseState.textStylePresets ?? [],
       messageStats: sseState.messageStats ?? {},
     }, false); // sync=false to avoid broadcasting back
+    
+    // Fallback: Clear active messages if playback has stopped according to SSE state
+    // This provides a safety net if the playback-control-changed event isn't received
+    const playbackControl = sseState.playbackControl;
+    const triggeredMessage = sseState.triggeredMessage;
+    if (playbackControl && !playbackControl.isPlaying && !triggeredMessage) {
+      const currentActiveMessages = useStore.getState().activeMessages;
+      if (currentActiveMessages.length > 0) {
+        addDebugLog('log', 'SSE state indicates playback stopped, clearing active messages', {
+          playbackControlIsPlaying: playbackControl.isPlaying,
+          triggeredMessage: triggeredMessage ? 'exists' : 'null',
+          activeMessagesCount: currentActiveMessages.length
+        });
+        console.log('[VisualizerWindow] SSE state indicates playback stopped, clearing active messages');
+        useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
+      }
+    }
     
     // Mark state as loaded once we have textStylePresets (even if empty array)
     // This ensures messages can render safely with proper text style plugins
@@ -690,7 +827,12 @@ export const VisualizerWindow: React.FC = () => {
     );
     
     if (!isAlreadyActive) {
-      console.log('[VisualizerWindow] Syncing triggeredMessage from SSE to store:', {
+      addDebugLog('log', 'Syncing triggeredMessage from SSE (fallback when Tauri events fail)', {
+        id: triggeredMsg.id,
+        text: triggeredMsg.text?.substring(0, 50),
+        textStyle: triggeredMsg.textStyle,
+      });
+      console.log('[VisualizerWindow] Syncing triggeredMessage from SSE to store (SSE fallback):', {
         id: triggeredMsg.id,
         text: triggeredMsg.text,
         textStyle: triggeredMsg.textStyle,
@@ -698,7 +840,7 @@ export const VisualizerWindow: React.FC = () => {
       triggerMessage(triggeredMsg, false);
       lastTriggeredMessageRef.current = { id: triggeredMsg.id, timestamp: now };
     } else {
-      addDebugLog('log', 'triggeredMessage already active, skipping', { id: triggeredMsg.id });
+      addDebugLog('log', 'triggeredMessage already active, skipping SSE sync', { id: triggeredMsg.id });
     }
   }, [sseState?.triggeredMessage, triggerMessage]);
 
@@ -772,6 +914,82 @@ export const VisualizerWindow: React.FC = () => {
     // Catch errors for audio listener
     unlistenAudioPromise.catch(err => {
       addDebugLog('warn', 'Failed to listen to audio-data (expected in production if Tauri API is missing)', { err });
+    });
+
+    // Listen for triggered-message events from Tauri commands (Control Plane)
+    // This is the PRIMARY event for message triggering from Control Plane
+    const unlistenTriggeredPromise = listen<MessageConfig>('triggered-message', (event) => {
+      const msg = event.payload;
+      addDebugLog('log', 'Received triggered-message event', { id: msg.id, text: msg.text?.substring(0, 50) });
+      console.log('[VisualizerWindow] Received triggered-message event:', { id: msg.id, text: msg.text?.substring(0, 50) });
+      
+      // Check if message is already active to avoid duplicates
+      const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
+      if (!isActive) {
+        addDebugLog('log', 'Triggering message from triggered-message event', { id: msg.id });
+        console.log('[VisualizerWindow] Triggering message from triggered-message event');
+        triggerMessage(msg, false);
+      } else {
+        addDebugLog('log', 'Message already active, skipping triggered-message event', { id: msg.id });
+        console.log('[VisualizerWindow] Message already active, skipping triggered-message event');
+      }
+    });
+    
+    // Catch errors for triggered-message listener
+    unlistenTriggeredPromise.catch(err => {
+      addDebugLog('warn', 'Failed to listen to triggered-message (expected in production)', { err });
+    });
+
+    // Listen for playback control changes to handle stop events
+    // This is critical for message cancellation - when stop_message_playback is called,
+    // the backend emits playback-control-changed with MESSAGE_STOPPED, and we need to clear active messages
+    const unlistenPlaybackControlPromise = listen<{ 
+      type: string; 
+      playbackControl: PlaybackControlState;
+      state?: unknown;
+    }>('playback-control-changed', (event) => {
+      const { type, playbackControl } = event.payload;
+      addDebugLog('log', 'Received playback-control-changed event', { 
+        type, 
+        isPlaying: playbackControl.isPlaying,
+        currentMessageId: playbackControl.currentMessage?.id 
+      });
+      console.log('[VisualizerWindow] Received playback-control-changed event:', {
+        type,
+        isPlaying: playbackControl.isPlaying,
+        currentMessageId: playbackControl.currentMessage?.id,
+        canStop: playbackControl.canStop
+      });
+      
+      if (type === 'MESSAGE_STOPPED') {
+        // Clear all active messages when playback is stopped
+        const currentActiveMessages = useStore.getState().activeMessages;
+        if (currentActiveMessages.length > 0) {
+          addDebugLog('log', 'Clearing active messages due to MESSAGE_STOPPED event', {
+            count: currentActiveMessages.length,
+            messageIds: currentActiveMessages.map(am => am.message.id)
+          });
+          console.log('[VisualizerWindow] Clearing active messages due to MESSAGE_STOPPED event:', {
+            count: currentActiveMessages.length,
+            messageIds: currentActiveMessages.map(am => am.message.id)
+          });
+          // Clear all active messages
+          useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
+        } else {
+          addDebugLog('log', 'MESSAGE_STOPPED received but no active messages to clear');
+        }
+      } else if (type === 'MESSAGE_STARTED') {
+        // Log when playback starts for debugging
+        addDebugLog('log', 'MESSAGE_STARTED event received', {
+          currentMessageId: playbackControl.currentMessage?.id,
+          isPlaying: playbackControl.isPlaying
+        });
+      }
+    });
+    
+    // Catch errors for playback-control-changed listener
+    unlistenPlaybackControlPromise.catch(err => {
+      addDebugLog('warn', 'Failed to listen to playback-control-changed (expected in production)', { err });
     });
 
     // Listen for remote commands
@@ -894,6 +1112,8 @@ export const VisualizerWindow: React.FC = () => {
     return () => {
       // Clean up using the promise results if they resolved
       unlistenAudioPromise.then((u) => u && u()).catch(() => {});
+      unlistenTriggeredPromise.then((u) => u && u()).catch(() => {});
+      unlistenPlaybackControlPromise.then((u) => u && u()).catch(() => {});
       unlistenRemotePromise.then((u) => u && u()).catch(() => {});
       unlistenStatePromise.then((u) => u && u()).catch(() => {});
       if (audioRafRef.current != null) {
@@ -1016,10 +1236,11 @@ export const VisualizerWindow: React.FC = () => {
           <div>audioData: {Array.isArray(audioData) ? audioData.length : 'n/a'}</div>
           <div>common: {commonSettings ? `intensity=${commonSettings.intensity} dim=${commonSettings.dim}` : 'n/a'}</div>
           <div>recoveryCount: {recoveryCount}</div>
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px' }}>--- Message State ---</div>
-          <div>isStateLoaded: <strong style={{ color: isStateLoaded ? '#4ade80' : '#f87171' }}>{String(isStateLoaded)}</strong></div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', marginTop: '4px', paddingTop: '4px' }}>--- Connection State ---</div>
+          <div>serverReady: <strong style={{ color: serverReady ? '#4ade80' : '#f87171' }}>{String(serverReady)}</strong></div>
           <div>sseConnected: <strong style={{ color: sseConnected ? '#4ade80' : '#f87171' }}>{String(sseConnected)}</strong></div>
           <div>hasReceivedSSEState: <strong style={{ color: hasReceivedSSEState ? '#4ade80' : '#f87171' }}>{String(hasReceivedSSEState)}</strong></div>
+          <div>isStateLoaded: <strong style={{ color: isStateLoaded ? '#4ade80' : '#f87171' }}>{String(isStateLoaded)}</strong></div>
           <div>activeMessages: <strong>{activeMessages.length}</strong></div>
           {activeMessages.length > 0 && (
             <div style={{ fontSize: 10, marginLeft: '8px', color: 'rgba(255,255,255,0.7)' }}>
@@ -1060,9 +1281,33 @@ export const VisualizerWindow: React.FC = () => {
                 borderRadius: 4,
                 fontSize: 9,
                 cursor: 'pointer',
+                marginRight: '4px',
               }}
             >
               {showLogs ? 'Hide' : 'Show'} Logs ({debugLogBuffer.length})
+            </button>
+            <button
+              onClick={() => {
+                // Test message trigger locally
+                const testMsg = {
+                  id: 'test-msg-' + Date.now(),
+                  text: 'Test Message from Debug Overlay',
+                  textStyle: 'scrolling-capitals'
+                };
+                addDebugLog('log', 'Testing local message trigger', { id: testMsg.id });
+                triggerMessage(testMsg as MessageConfig, false);
+              }}
+              style={{
+                background: 'rgba(74, 222, 128, 0.2)',
+                border: '1px solid rgba(74, 222, 128, 0.4)',
+                color: '#4ade80',
+                padding: '2px 6px',
+                borderRadius: 4,
+                fontSize: 9,
+                cursor: 'pointer',
+              }}
+            >
+              Test Msg
             </button>
           </div>
           {showLogs && (

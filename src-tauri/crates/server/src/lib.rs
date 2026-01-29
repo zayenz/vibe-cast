@@ -321,38 +321,43 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
         .route_service("/youtube_player.html", ServeFile::new(dist_path.join("youtube_player.html")))
         .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
         .fallback(get(serve_spa))
-        .layer(CorsLayer::permissive())
+        .layer(CorsLayer::very_permissive())
         .with_state(state);
+    
+    eprintln!("[Server] Router configured with CORS very_permissive");
+    eprintln!("[Server] Available endpoints: /api/status, /api/state, /api/events, /api/command");
 
     // Try a range of ports (helps when a previous instance is still running).
     let mut bound_listener: Option<(tokio::net::TcpListener, SocketAddr)> = None;
     for p in port..=port.saturating_add(20) {
         eprintln!("[Server] Attempting to bind port {}", p);
-        // Try binding to IPv6 [::] (which often covers IPv4 as well on dual-stack systems)
-        // If that fails or isn't desired, we could fallback to IPv4.
-        // For local development on macOS, localhost often resolves to ::1, so IPv6 support is crucial.
-        let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, p));
-        match tokio::net::TcpListener::bind(addr).await {
+        // Try binding to IPv4 0.0.0.0 first (more reliable for localhost connections)
+        // Then fallback to IPv6 if IPv4 fails
+        let addr_v4 = SocketAddr::from(([0, 0, 0, 0], p));
+        match tokio::net::TcpListener::bind(addr_v4).await {
             Ok(listener) => {
-                bound_listener = Some((listener, addr));
+                eprintln!("[Server] Successfully bound to IPv4 0.0.0.0:{}", p);
+                bound_listener = Some((listener, addr_v4));
                 if let Ok(mut sp) = app_state_sync.server_port.lock() {
                     *sp = p;
                 }
                 break;
             }
-            Err(_) => {
-                // Fallback to IPv4 0.0.0.0 if IPv6 fails
-                let addr_v4 = SocketAddr::from(([0, 0, 0, 0], p));
-                match tokio::net::TcpListener::bind(addr_v4).await {
+            Err(ipv4_err) => {
+                eprintln!("[Server] IPv4 bind failed for port {}: {}", p, ipv4_err);
+                // Try IPv6 [::] as fallback
+                let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, p));
+                match tokio::net::TcpListener::bind(addr).await {
                     Ok(listener) => {
-                        bound_listener = Some((listener, addr_v4));
+                        eprintln!("[Server] Successfully bound to IPv6 [::]:{}", p);
+                        bound_listener = Some((listener, addr));
                         if let Ok(mut sp) = app_state_sync.server_port.lock() {
                             *sp = p;
                         }
                         break;
                     }
-                    Err(err) => {
-                        eprintln!("Failed to bind port {}: {}", p, err);
+                    Err(ipv6_err) => {
+                        eprintln!("[Server] IPv6 bind also failed for port {}: {}", p, ipv6_err);
                         continue;
                     }
                 }
@@ -841,6 +846,8 @@ async fn handle_command(
                             "command": "trigger-message",
                             "payload": msg
                         });
+                        println!("[clear-active-message] Emitting remote-command to all windows");
+                        // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
                     }
                 }
@@ -893,11 +900,13 @@ async fn handle_command(
                         println!("[message-complete] Triggering next message: {}", msg.text);
                         triggered_message = Some(msg.clone());
                         
-                        // Emit trigger-message to Tauri windows
+                        // Emit trigger-message to all Tauri windows
                         let trigger_cmd = serde_json::json!({
                             "command": "trigger-message",
                             "payload": msg
                         });
+                        println!("[message-complete] Emitting remote-command to all windows");
+                        // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
                     }
                 }
@@ -930,12 +939,14 @@ async fn handle_command(
                                     let msg_clone = msg.clone();
                                     triggered_message = Some(msg_clone.clone());
                                     
-                                    // Emit trigger-message remote command to Tauri windows
+                                    // Emit trigger-message remote command to all Tauri windows
                                     // This ensures VisualizerWindow receives the command and actually plays the message
                                     let trigger_cmd = serde_json::json!({
                                         "command": "trigger-message",
                                         "payload": msg_clone
                                     });
+                                    println!("[play-folder] Emitting remote-command to all windows");
+                                    // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                                     let _ = state.app_handle.emit("remote-command", trigger_cmd);
                                 }
                             }
@@ -953,11 +964,13 @@ async fn handle_command(
                 *queue = None;
             }
             
-            // Emit clear-message to Tauri windows to stop visualizer
+            // Emit clear-message to all Tauri windows to stop visualizer
             let clear_cmd = serde_json::json!({
                 "command": "clear-message",
                 "payload": null
             });
+            println!("[cancel-folder-playback] Emitting remote-command to all windows");
+            // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
             let _ = state.app_handle.emit("remote-command", clear_cmd);
         }
         "reset-message-stats" => {
@@ -1062,7 +1075,9 @@ async fn handle_command(
     // Also broadcast the command itself (for clients that don't rely on state or need specific signals)
     state.app_state_sync.broadcast_command(payload.clone());
     
-    // Also emit to Tauri windows (for VibeCast which uses Tauri events for audio sync)
+    // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
+    // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
+    println!("[handle_command] Emitting remote-command to all windows: {}", payload.command);
     let _ = state.app_handle.emit("remote-command", &payload);
 
     Json(serde_json::json!({ "status": "ok" }))
@@ -1075,6 +1090,7 @@ async fn get_state(State(state): State<AppState>) -> Json<serde_json::Value> {
 }
 
 async fn get_status() -> Json<serde_json::Value> {
+    println!("[Server] Health check request received");
     Json(serde_json::json!({ "status": "online" }))
 }
 
@@ -1100,13 +1116,16 @@ async fn get_last_e2e_report(State(state): State<AppState>) -> Json<Option<E2ERe
 async fn state_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    println!("[SSE] Client connected");
+    println!("[SSE] ========================================");
+    println!("[SSE] Client connected! New SSE subscription");
+    println!("[SSE] ========================================");
     // Subscribe to the broadcast channels
     let rx_state = state.app_state_sync.state_tx.subscribe();
     let rx_command = state.app_state_sync.command_tx.subscribe();
     
     // Send initial state immediately so clients don't have to wait
     let initial_state = state.app_state_sync.get_state();
+    println!("[SSE] Prepared initial state for client");
     
     // Convert broadcast receiver to a stream, mapping directly to SSE events
     // filter_map skips lagged errors (when client is slower than broadcast rate)
@@ -1118,6 +1137,7 @@ async fn state_events(
             result.ok() 
         })
         .map(|broadcast_state: BroadcastState| -> Result<Event, Infallible> {
+            println!("[SSE] Broadcasting state update to client");
             Ok(Event::default()
                 .event("state")
                 .data(serde_json::to_string(&broadcast_state).unwrap_or_default()))
@@ -1131,6 +1151,7 @@ async fn state_events(
             result.ok() 
         })
         .map(|command: RemoteCommand| -> Result<Event, Infallible> {
+            println!("[SSE] Broadcasting command to client: {}", command.command);
             Ok(Event::default()
                 .event("command")
                 .data(serde_json::to_string(&command).unwrap_or_default()))
@@ -1138,7 +1159,7 @@ async fn state_events(
     
     // Prepend with initial state
     let initial_event = futures::stream::once(async move {
-        println!("[SSE] Sending initial state");
+        println!("[SSE] Sending initial state to newly connected client");
         Ok(Event::default()
             .event("state")
             .data(serde_json::to_string(&initial_state).unwrap_or_default()))
@@ -1147,6 +1168,8 @@ async fn state_events(
     // Merge streams
     let combined_stream = initial_event
         .chain(futures::stream::select(state_stream, command_stream));
+    
+    println!("[SSE] SSE stream configured, starting to send events...");
     
     Sse::new(combined_stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))

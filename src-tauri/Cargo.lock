@@ -5084,6 +5084,8 @@ dependencies = [
 name = "vibe-cast-models"
 version = "0.1.0"
 dependencies = [
+ "quickcheck",
+ "quickcheck_macros",
  "serde",
  "serde_json",
 ]
@@ -5113,6 +5115,8 @@ name = "vibe-cast-state"
 version = "0.1.0"
 dependencies = [
  "local-ip-address",
+ "quickcheck",
+ "quickcheck_macros",
  "serde",
  "serde_json",
  "tokio",

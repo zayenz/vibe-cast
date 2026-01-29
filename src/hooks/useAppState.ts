@@ -12,6 +12,39 @@ import { visualizationRegistry, getDefaultVisualizationSettings } from '../plugi
 import type { MessageTreeNode } from '../plugins/types';
 
 /**
+ * Playback control state for message synchronization
+ */
+export interface PlaybackControlState {
+  sessionId: string | null;
+  currentMessage: MessageInfo | null;
+  isPlaying: boolean;
+  playbackPosition: number; // milliseconds
+  canStop: boolean;
+  canStart: boolean;
+  initiatedBy: DeviceType;
+  lastUpdated: number; // timestamp
+}
+
+/**
+ * Message information for playback control
+ */
+export interface MessageInfo {
+  id: string;
+  title: string;
+  duration?: number;
+  folderPath?: string;
+}
+
+/**
+ * Device type for playback control
+ */
+export enum DeviceType {
+  ControlPlane = 'control_plane',
+  MobileRemote = 'mobile_remote',
+  System = 'system'
+}
+
+/**
  * Folder playback queue state
  */
 export interface FolderPlaybackQueue {
@@ -39,6 +72,9 @@ export interface AppState {
   triggeredMessage?: MessageConfig | null;
   messageStats?: Record<string, MessageStats>;
   folderPlaybackQueue?: FolderPlaybackQueue | null;
+  
+  // Playback control state
+  playbackControl?: PlaybackControlState;
   
   // Text style state
   defaultTextStyle: string;
@@ -75,6 +111,24 @@ function parseSSEState(data: any): AppState {
     }));
   };
 
+  // Parse playback control state if available
+  const parsePlaybackControl = (playbackControl: any): PlaybackControlState | undefined => {
+    if (!playbackControl || typeof playbackControl !== 'object') {
+      return undefined;
+    }
+
+    return {
+      sessionId: playbackControl.sessionId || playbackControl.session_id || null,
+      currentMessage: playbackControl.currentMessage || playbackControl.current_message || null,
+      isPlaying: Boolean(playbackControl.isPlaying ?? playbackControl.is_playing ?? false),
+      playbackPosition: Number(playbackControl.playbackPosition ?? playbackControl.playback_position ?? 0),
+      canStop: Boolean(playbackControl.canStop ?? playbackControl.can_stop ?? false),
+      canStart: Boolean(playbackControl.canStart ?? playbackControl.can_start ?? true),
+      initiatedBy: playbackControl.initiatedBy ?? playbackControl.initiated_by ?? DeviceType.System,
+      lastUpdated: Number(playbackControl.lastUpdated ?? playbackControl.last_updated ?? Date.now()),
+    };
+  };
+
   // Handle new format
   if (data.activeVisualization !== undefined) {
     const basePresets: VisualizationPreset[] = data.visualizationPresets ?? [];
@@ -94,6 +148,7 @@ function parseSSEState(data: any): AppState {
       triggeredMessage: data.triggeredMessage ?? null,
       messageStats: data.messageStats ?? (typeof data.messageStats === 'object' ? data.messageStats : {}),
       folderPlaybackQueue: data.folderPlaybackQueue ?? null,
+      playbackControl: parsePlaybackControl(data.playbackControl),
       defaultTextStyle: data.defaultTextStyle ?? 'scrolling-capitals',
       textStyleSettings: data.textStyleSettings ?? {},
       textStylePresets: data.textStylePresets ?? [],
@@ -124,6 +179,7 @@ function parseSSEState(data: any): AppState {
       : null,
     messageStats: {},
     folderPlaybackQueue: null,
+    playbackControl: undefined, // Legacy format doesn't have playback control
     defaultTextStyle: 'scrolling-capitals',
     textStyleSettings: {},
     textStylePresets: [],
@@ -146,61 +202,109 @@ export function useAppState(options: UseAppStateOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
+    // Don't attempt connection if apiBase is empty (server not ready)
+    if (!apiBase) {
+      console.log('[useAppState] apiBase is empty, skipping SSE connection');
+      return;
+    }
+    
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let isMounted = true;
+    let retryCount = 0;
+    const MAX_RETRIES = 30; // Keep trying for ~60 seconds
+
+    const sseUrl = `${apiBase}/api/events`;
+    console.log(`[useAppState] Initializing SSE connection to: ${sseUrl}`);
 
     const connect = () => {
-      if (!isMounted) return;
+      if (!isMounted) {
+        console.log('[useAppState] Component unmounted, skipping connect');
+        return;
+      }
       
-      eventSource = new EventSource(`${apiBase}/api/events`);
+      retryCount++;
+      console.log(`[useAppState] SSE connect attempt #${retryCount} to: ${sseUrl}`);
+      
+      try {
+        eventSource = new EventSource(sseUrl);
+        console.log('[useAppState] EventSource created, readyState:', eventSource.readyState);
+      } catch (err) {
+        console.error('[useAppState] Failed to create EventSource:', err);
+        if (retryCount < MAX_RETRIES) {
+          reconnectTimer = setTimeout(connect, 2000);
+        }
+        return;
+      }
 
       eventSource.addEventListener('state', (event) => {
         if (!isMounted) return;
+        console.log('[useAppState] Received state event, data length:', event.data?.length);
         try {
           const data = JSON.parse(event.data);
           const parsedState = parseSSEState(data);
           setState(parsedState);
           setError(null);
           setIsConnected(true);
+          retryCount = 0; // Reset retry count on successful state
+          console.log('[useAppState] State parsed and set successfully');
         } catch (e) {
-          console.error('Failed to parse SSE state:', e);
+          console.error('[useAppState] Failed to parse SSE state:', e);
         }
       });
 
       if (onCommand) {
         eventSource.addEventListener('command', (event) => {
           if (!isMounted) return;
+          console.log('[useAppState] Received command event');
           try {
             const command = JSON.parse(event.data);
             onCommand(command);
           } catch (e) {
-            console.error('Failed to parse SSE command:', e);
+            console.error('[useAppState] Failed to parse SSE command:', e);
           }
         });
       }
 
       eventSource.onerror = (e) => {
         if (!isMounted) return;
-        console.error('SSE connection error:', e);
+        console.error('[useAppState] SSE connection error:', {
+          readyState: eventSource?.readyState,
+          retryCount,
+          error: e
+        });
         setIsConnected(false);
         eventSource?.close();
         
-        // Reconnect after 2 seconds
-        reconnectTimer = setTimeout(connect, 2000);
+        // Reconnect with exponential backoff, capped at 5 seconds
+        if (retryCount < MAX_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(1.5, Math.min(retryCount, 5)), 5000);
+          console.log(`[useAppState] Will retry in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          reconnectTimer = setTimeout(connect, delay);
+        } else {
+          console.error('[useAppState] Max retries reached, SSE connection failed permanently');
+          setError('SSE connection failed after maximum retries');
+        }
       };
 
       eventSource.onopen = () => {
         if (!isMounted) return;
+        console.log('[useAppState] SSE connection opened successfully');
         setIsConnected(true);
         setError(null);
       };
     };
 
-    connect();
+    // Small delay before first connect to allow server to fully initialize
+    const initialDelay = setTimeout(() => {
+      console.log('[useAppState] Starting SSE connection after initial delay');
+      connect();
+    }, 500);
 
     return () => {
+      console.log('[useAppState] Cleanup: closing SSE connection');
       isMounted = false;
+      clearTimeout(initialDelay);
       eventSource?.close();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
