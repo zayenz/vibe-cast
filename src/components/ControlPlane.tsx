@@ -372,6 +372,13 @@ export const ControlPlane: React.FC = () => {
   // Get playback control state from SSE or Tauri event override (Tauri events are more immediate)
   const playbackControl = playbackControlOverride || state?.playbackControl;
 
+  // When SSE state shows stopped, sync to override so CP updates when Remote stops (Tauri event may not reach CP from server)
+  useEffect(() => {
+    if (state?.playbackControl && !state.playbackControl.isPlaying) {
+      setPlaybackControlOverride(state.playbackControl);
+    }
+  }, [state?.playbackControl?.isPlaying, state?.playbackControl]);
+
   const [messageTreeLocal, setMessageTreeLocal] = useState<MessageTreeNode[]>([]);
   
   useEffect(() => {

@@ -31,17 +31,19 @@ export const RemoteControl: React.FC = () => {
   const messageTree: MessageTreeNode[] = state?.messageTree ?? [];
   const messageStats = state?.messageStats ?? {};
   const triggeredMessage = state?.triggeredMessage ?? null;
+  const playbackControl = state?.playbackControl ?? null;
   const isPending = fetcher.state !== 'idle';
   
   // Folder playback queue from SSE state
   type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
   const folderPlaybackQueue: FolderQueue | null = state?.folderPlaybackQueue ?? null;
-  // Active message ids: include triggeredMessage and current folder queue item
+  // Active message ids: include triggeredMessage, playbackControl.currentMessage, and current folder queue item
   const queueActiveId =
     folderPlaybackQueue && folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
       ? folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
       : null;
-  const activeMessageIds = triggeredMessage ? [triggeredMessage.id] : queueActiveId ? [queueActiveId] : [];
+  const currentMessageId = playbackControl?.currentMessage?.id ?? triggeredMessage?.id ?? queueActiveId;
+  const activeMessageIds = currentMessageId ? [currentMessageId] : [];
   const queueIsActive = !!(folderPlaybackQueue && queueActiveId && activeMessageIds.includes(queueActiveId));
   
   // Filter to show only active visualization preset
@@ -164,7 +166,7 @@ export const RemoteControl: React.FC = () => {
                     e.stopPropagation();
                     e.preventDefault();
                     if (isPlaying) {
-                      sendCommand('clear-active-message', { messageId: msg.id });
+                      sendCommand('stop-message', {});
                     } else {
                       handleTriggerMessage(msg, isPlaying);
                     }
@@ -196,9 +198,9 @@ export const RemoteControl: React.FC = () => {
   };
 
   const handleTriggerMessage = (msg: MessageConfig, isPlaying?: boolean) => {
-    // If message is already playing, stop it instead of triggering again
-    if (isPlaying || triggeredMessage?.id === msg.id) {
-      sendCommand('clear-active-message', { messageId: msg.id });
+    // If this message is already playing, stop it instead of triggering again
+    if (isPlaying || triggeredMessage?.id === msg.id || playbackControl?.currentMessage?.id === msg.id) {
+      sendCommand('stop-message', {});
       return;
     }
     sendCommand('trigger-message', msg);
@@ -323,7 +325,7 @@ export const RemoteControl: React.FC = () => {
             messages.map((msg) => {
               const stats = messageStats[msg.id];
               const triggerCount = stats?.triggerCount ?? 0;
-              const isPlaying = triggeredMessage?.id === msg.id;
+              const isPlaying = activeMessageIds.includes(msg.id);
               return (
                 <button
                   key={msg.id}

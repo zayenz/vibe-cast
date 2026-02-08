@@ -23,7 +23,7 @@ use tower_http::{cors::CorsLayer, services::{ServeDir, ServeFile}};
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
     BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, 
-    TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand
+    TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand, DeviceType
 };
 
 /// Structured error response for API endpoints
@@ -646,6 +646,22 @@ async fn handle_command(
                 if let Some(msg) = msg {
                     triggered_message = Some(msg.clone());
                     
+                    // Update playback_control so all clients (Control Plane, other remotes) get canStop
+                    state.app_state_sync.start_message_playback_with_message(msg.clone(), DeviceType::MobileRemote);
+                    // Emit to Tauri windows (Control Plane, Visualizer) so they get stop capability immediately
+                    let complete_state = state.app_state_sync.get_state();
+                    let playback_control = state.app_state_sync.get_playback_control();
+                    let _ = state.app_handle.emit("playback-control-changed", serde_json::json!({
+                        "type": "MESSAGE_STARTED",
+                        "playbackControl": playback_control,
+                        "state": complete_state
+                    }));
+                    let _ = state.app_handle.emit("state-changed", serde_json::json!({
+                        "type": "MESSAGE_STARTED",
+                        "payload": serde_json::json!({ "messageId": msg.id }),
+                        "state": complete_state
+                    }));
+                    
                     // Update message stats
                     if let Ok(mut stats) = state.app_state_sync.message_stats.lock() {
                         let timestamp = std::time::SystemTime::now()
@@ -692,6 +708,22 @@ async fn handle_command(
                     }
                 }
             }
+        }
+        "stop-message" => {
+            // Unified stop from Remote or Control Plane fallback — update playback_control and notify all views
+            state.app_state_sync.stop_message_playback(DeviceType::MobileRemote);
+            let complete_state = state.app_state_sync.get_state();
+            let playback_control = state.app_state_sync.get_playback_control();
+            let _ = state.app_handle.emit("playback-control-changed", serde_json::json!({
+                "type": "MESSAGE_STOPPED",
+                "playbackControl": playback_control,
+                "state": complete_state
+            }));
+            let _ = state.app_handle.emit("state-changed", serde_json::json!({
+                "type": "MESSAGE_STOPPED",
+                "payload": serde_json::Value::Null,
+                "state": complete_state
+            }));
         }
         "set-messages" => {
             if let Some(p) = &payload.payload {
@@ -809,11 +841,13 @@ async fn handle_command(
                     // Check if this message is the current queue message
                     let mut should_clear_queue = false;
                     let mut next_message: Option<MessageConfig> = None;
+                    let mut matched_current = false;
                     
                     if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
                         if let Some(ref mut q) = *queue {
                             if let Some(current_id) = q.message_ids.get(q.current_index) {
                                 if current_id == message_id {
+                                    matched_current = true;
                                     // User manually stopped the current queue message
                                     // Advance to next or clear queue
                                     q.current_index += 1;
@@ -849,6 +883,16 @@ async fn handle_command(
                         println!("[clear-active-message] Emitting remote-command to all windows");
                         // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
+                    } else if matched_current {
+                        // Stopped current message with no next — sync playback_control and notify all views
+                        state.app_state_sync.stop_message_playback(DeviceType::MobileRemote);
+                        let complete_state = state.app_state_sync.get_state();
+                        let playback_control = state.app_state_sync.get_playback_control();
+                        let _ = state.app_handle.emit("playback-control-changed", serde_json::json!({
+                            "type": "MESSAGE_STOPPED",
+                            "playbackControl": playback_control,
+                            "state": complete_state
+                        }));
                     }
                 }
             }
@@ -895,7 +939,7 @@ async fn handle_command(
                         }
                     }
                     
-                    // Trigger next message if any
+                    // Trigger next message if any; otherwise clear playback so all views show stopped
                     if let Some(msg) = next_message {
                         println!("[message-complete] Triggering next message: {}", msg.text);
                         triggered_message = Some(msg.clone());
@@ -908,6 +952,16 @@ async fn handle_command(
                         println!("[message-complete] Emitting remote-command to all windows");
                         // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
+                    } else {
+                        // Message completed with no next — clear playback_control and notify all views
+                        state.app_state_sync.stop_message_playback(DeviceType::System);
+                        let complete_state = state.app_state_sync.get_state();
+                        let playback_control = state.app_state_sync.get_playback_control();
+                        let _ = state.app_handle.emit("playback-control-changed", serde_json::json!({
+                            "type": "MESSAGE_STOPPED",
+                            "playbackControl": playback_control,
+                            "state": complete_state
+                        }));
                     }
                 }
             }

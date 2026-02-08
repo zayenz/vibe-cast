@@ -599,6 +599,9 @@ async fn start_message_playback(
         });
     }
 
+    // Force-push state to SSE so Remote (and other SSE clients) see "playing" when CP starts
+    state.broadcast(Some(message));
+
     Ok(serde_json::to_value(playback_control).unwrap_or_default())
 }
 

@@ -21,7 +21,7 @@ function renderRemoteControl() {
   return render(<RouterProvider router={router} />);
 }
 
-// Helper to create mock state with presets
+// Helper to create mock state with presets (include playbackControl/messageTree so RemoteControl has full state shape)
 const createMockState = (overrides: Record<string, unknown> = {}) => ({
   activeVisualization: 'fireplace',
   visualizationPresets: [
@@ -31,6 +31,10 @@ const createMockState = (overrides: Record<string, unknown> = {}) => ({
   activeVisualizationPreset: null,
   commonSettings: { intensity: 1.0, dim: 1.0 },
   messages: [],
+  messageTree: [],
+  triggeredMessage: null,
+  folderPlaybackQueue: null,
+  playbackControl: null,
   ...overrides,
 });
 

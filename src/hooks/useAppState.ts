@@ -202,19 +202,20 @@ export function useAppState(options: UseAppStateOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    // Don't attempt connection if apiBase is empty (server not ready)
-    if (!apiBase) {
-      console.log('[useAppState] apiBase is empty, skipping SSE connection');
+    // When apiBase is empty (e.g. Remote on same origin as server), use current origin so SSE connects
+    const effectiveBase = apiBase || (typeof window !== 'undefined' ? window.location.origin : '');
+    if (!effectiveBase) {
+      console.log('[useAppState] No API base and no window origin, skipping SSE connection');
       return;
     }
-    
+
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let isMounted = true;
     let retryCount = 0;
     const MAX_RETRIES = 30; // Keep trying for ~60 seconds
 
-    const sseUrl = `${apiBase}/api/events`;
+    const sseUrl = `${effectiveBase}/api/events`;
     console.log(`[useAppState] Initializing SSE connection to: ${sseUrl}`);
 
     const connect = () => {
