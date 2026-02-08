@@ -69,7 +69,7 @@ const FireplaceVisualization: React.FC<VisualizationProps> = ({
   commonSettings,
   customSettings,
 }) => {
-  const { intensity, dim } = commonSettings;
+  const { intensity, dim } = commonSettings ?? { intensity: 1.0, dim: 1.0 };
   // Use utility functions to properly handle 0, false, and empty string as valid values
   const emberCount = Math.round(getNumberSetting(customSettings.emberCount, 15, 0, 30));
   const flameCount = Math.round(getNumberSetting(customSettings.flameCount, 12, 0, 20));

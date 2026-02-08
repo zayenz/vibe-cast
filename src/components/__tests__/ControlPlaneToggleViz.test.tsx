@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ControlPlane } from '../ControlPlane';
 import { MockEventSource } from '../../test/mocks/sse';
@@ -47,6 +47,7 @@ function renderControlPlane() {
 
 describe('ControlPlane Toggle Viz', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
     
@@ -63,12 +64,16 @@ describe('ControlPlane Toggle Viz', () => {
     mockVizWindow.isVisible.mockResolvedValue(true);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('hides viz window if it is visible', async () => {
     renderControlPlane();
     
-    // Connect SSE
+    // Connect SSE - advance past the 500ms initial delay
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
     });
@@ -89,9 +94,9 @@ describe('ControlPlane Toggle Viz', () => {
     
     renderControlPlane();
     
-    // Connect SSE
+    // Connect SSE - advance past the 500ms initial delay
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
     });

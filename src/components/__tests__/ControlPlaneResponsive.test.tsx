@@ -1,5 +1,5 @@
 import { render, screen, act, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ControlPlane } from '../ControlPlane';
 import { MockEventSource } from '../../test/mocks/sse';
@@ -23,6 +23,7 @@ function renderControlPlane() {
 
 describe('ControlPlane Responsive Layout', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
     
@@ -34,12 +35,16 @@ describe('ControlPlane Responsive Layout', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('header should wrap on smaller screens', async () => {
     renderControlPlane();
     
-    // Simulate connection
+    // Simulate connection - advance past the 500ms initial delay
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',

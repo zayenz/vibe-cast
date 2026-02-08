@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ControlPlane } from '../ControlPlane';
 import { MockEventSource } from '../../test/mocks/sse';
@@ -23,6 +23,7 @@ function renderControlPlane() {
 
 describe('ControlPlane', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
     
@@ -35,6 +36,10 @@ describe('ControlPlane', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('shows loading state initially', () => {
     renderControlPlane();
     expect(screen.getByText('Connecting to server...')).toBeInTheDocument();
@@ -43,9 +48,10 @@ describe('ControlPlane', () => {
   it('renders correctly after SSE connects', async () => {
     renderControlPlane();
     
-    // Simulate SSE connection and initial state
+    // Advance past 500ms initial delay + onopen
+    await act(async () => { vi.advanceTimersByTime(600); });
+    await act(async () => { vi.advanceTimersByTime(10); });
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         mode: 'fireplace',
@@ -67,7 +73,7 @@ describe('ControlPlane', () => {
     renderControlPlane();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
     });
@@ -82,7 +88,7 @@ describe('ControlPlane', () => {
     
     // Wait for SSE to connect and send initial state
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
     });
@@ -109,7 +115,7 @@ describe('ControlPlane', () => {
     renderControlPlane();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Hello World'] });
     });
@@ -136,7 +142,7 @@ describe('ControlPlane', () => {
     renderControlPlane();
 
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',
@@ -193,7 +199,7 @@ describe('ControlPlane', () => {
     renderControlPlane();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Initial'] });
     });
@@ -223,7 +229,7 @@ describe('ControlPlane', () => {
     
     // Simulate SSE connection with state that has messageStats
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',
@@ -272,7 +278,7 @@ describe('ControlPlane', () => {
     renderControlPlane();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       // State without messageStats
       sse?.simulateEvent('state', {
@@ -298,7 +304,7 @@ describe('ControlPlane', () => {
     
     // Simulate multiple state transitions to ensure hook order consistency
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',

@@ -103,9 +103,14 @@ pub struct E2EReport {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteCommand {
     pub command: String,
     pub payload: Option<serde_json::Value>,
+    /// Optional device type to identify the source of the command.
+    /// Defaults to MobileRemote for backward compatibility.
+    #[serde(default)]
+    pub device_type: Option<DeviceType>,
 }
 
 /// Application state that gets broadcast via SSE

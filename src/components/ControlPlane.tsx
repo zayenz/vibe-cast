@@ -752,7 +752,7 @@ export const ControlPlane: React.FC = () => {
     setDropIntoFolderPath(null);
   };
 
-  const handleTriggerMessage = async (msg: MessageConfig) => {
+  const handleTriggerMessage = (msg: MessageConfig) => {
     // Check if this message is currently playing based on playback control state
     const isCurrentlyPlaying = playbackControl?.isPlaying && 
                               playbackControl?.currentMessage?.id === msg.id;
@@ -761,115 +761,15 @@ export const ControlPlane: React.FC = () => {
       messageId: msg.id,
       messageText: msg.text?.substring(0, 50),
       isCurrentlyPlaying,
-      playbackControlState: playbackControl
     });
     
-    try {
-      if (isCurrentlyPlaying) {
-        // If currently playing, use Tauri command to stop
-        console.log('[ControlPlane] Calling stop_message_playback');
-        const result = await invoke('stop_message_playback');
-        console.log('[ControlPlane] stop_message_playback result:', result);
-      } else {
-        // If not playing, use Tauri command to start
-        // Pass both message_id AND the full message object to avoid lookup failures
-        console.log('[ControlPlane] Calling start_message_playback with message_id:', msg.id, 'message:', msg);
-        try {
-          const result = await invoke('start_message_playback', { 
-            message_id: msg.id,
-            message: msg  // Pass full message to avoid backend lookup issues
-          });
-          console.log('[ControlPlane] start_message_playback result:', result);
-          return; // Success - don't fall back
-        } catch (invokeError) {
-          console.error('[ControlPlane] start_message_playback invoke failed:', invokeError);
-          throw invokeError; // Re-throw to trigger fallback
-        }
-      }
-    } catch (error) {
-      console.error('[ControlPlane] Playback command failed:', error);
-      console.error('[ControlPlane] Error details:', {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
-      
-      // Fallback 1: Try direct Tauri event emission (frontend-to-frontend)
-      // This bypasses the Rust backend entirely
-      console.log('[ControlPlane] Trying direct Tauri event emission as fallback');
-      try {
-        if (!isCurrentlyPlaying) {
-          // Emit triggered-message event directly to all windows
-          await emit('triggered-message', msg);
-          console.log('[ControlPlane] Direct emit succeeded for triggered-message');
-          
-          // Emit synthetic playback-control-changed so Control Plane shows "playing"
-          // and user can click again to stop. Without this, isCurrentlyPlaying stays false.
-          const syntheticPlaybackControl: PlaybackControlState = {
-            sessionId: `local-${msg.id}-${Date.now()}`,
-            currentMessage: { id: msg.id, title: msg.text?.substring(0, 80) || msg.id },
-            isPlaying: true,
-            playbackPosition: 0,
-            canStop: true,
-            canStart: false,
-            initiatedBy: DeviceType.ControlPlane,
-            lastUpdated: Date.now()
-          };
-          // Update local state immediately so UI shows "playing" and Stop is available
-          // (emit may not be delivered to this window in all Tauri setups)
-          setPlaybackControlOverride(syntheticPlaybackControl);
-          await emit('playback-control-changed', {
-            type: 'MESSAGE_STARTED',
-            playbackControl: syntheticPlaybackControl,
-            state: null
-          });
-          console.log('[ControlPlane] Emitted synthetic playback-control-changed MESSAGE_STARTED');
-          
-          // Also emit state-changed for backward compatibility
-          await emit('state-changed', {
-            type: 'TRIGGER_MESSAGE',
-            payload: msg
-          });
-          console.log('[ControlPlane] Direct emit succeeded for state-changed');
-          return; // Success via direct emit
-        } else {
-          // User clicked to stop but invoke failed - emit MESSAGE_STOPPED so Visualizer clears
-          const stoppedPlaybackControl: PlaybackControlState = {
-            sessionId: null,
-            currentMessage: null,
-            isPlaying: false,
-            playbackPosition: 0,
-            canStop: false,
-            canStart: true,
-            initiatedBy: DeviceType.ControlPlane,
-            lastUpdated: Date.now()
-          };
-          await emit('playback-control-changed', {
-            type: 'MESSAGE_STOPPED',
-            playbackControl: stoppedPlaybackControl,
-            state: null
-          });
-          console.log('[ControlPlane] Emitted synthetic playback-control-changed MESSAGE_STOPPED (stop fallback)');
-          setPlaybackControlOverride(stoppedPlaybackControl);
-          return;
-        }
-      } catch (emitError) {
-        console.error('[ControlPlane] Direct emit also failed:', emitError);
-      }
-      
-      // Fallback 2: HTTP command for backward compatibility (mobile remote support)
-      console.log('[ControlPlane] Falling back to HTTP command');
-      if (isCurrentlyPlaying) {
-        sendCommand('stop-message', { 
-          deviceId: 'control-plane',
-          timestamp: Date.now()
-        });
-      } else {
-        sendCommand('start-message', { 
-          messageId: msg.id,
-          deviceId: 'control-plane',
-          timestamp: Date.now()
-        });
-      }
+    // Route all playback through the HTTP API server (same path as Remote and folder playback).
+    // This ensures: stats are updated, SSE broadcasts reach all clients, Tauri events are emitted
+    // by the server handler for the Visualizer window.
+    if (isCurrentlyPlaying) {
+      sendCommand('stop-message', {});
+    } else {
+      sendCommand('trigger-message', msg);
     }
   };
 

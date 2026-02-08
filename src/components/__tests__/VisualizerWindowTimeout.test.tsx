@@ -47,9 +47,9 @@ describe('VisualizerWindow Timeout', () => {
 
     render(<VisualizerWindow />);
 
-    // Fast-forward time by 2.1 seconds
+    // Fast-forward time by 3 seconds (500ms initial delay + 2s SSE timeout + buffer)
     await act(async () => {
-      vi.advanceTimersByTime(2100);
+      vi.advanceTimersByTime(3000);
     });
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(

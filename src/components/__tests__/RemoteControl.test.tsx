@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { RemoteControl } from '../RemoteControl';
 import { MockEventSource } from '../../test/mocks/sse';
@@ -40,6 +40,7 @@ const createMockState = (overrides: Record<string, unknown> = {}) => ({
 
 describe('RemoteControl', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
     
@@ -52,6 +53,10 @@ describe('RemoteControl', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('shows loading state initially', () => {
     renderRemoteControl();
     expect(screen.getByText('Connecting...')).toBeInTheDocument();
@@ -61,7 +66,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState({
         messages: [{ id: '1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
@@ -82,7 +87,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState());
     });
@@ -96,7 +101,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState());
     });
@@ -123,7 +128,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState({
         messages: [{ id: '1', text: 'Hello World', textStyle: 'scrolling-capitals' }],
@@ -152,7 +157,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState({
         messages: [{ id: '1', text: 'Initial', textStyle: 'scrolling-capitals' }],
@@ -184,7 +189,7 @@ describe('RemoteControl', () => {
     renderRemoteControl();
     
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', createMockState());
     });

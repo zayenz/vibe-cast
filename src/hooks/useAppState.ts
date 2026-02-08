@@ -324,13 +324,17 @@ export function useSendCommand(options: UseAppStateOptions = {}) {
   const { apiBase = '' } = options;
   const [isPending, setIsPending] = useState(false);
 
+  // Detect device type: Tauri windows are Control Plane, browser is Mobile Remote
+  const isTauri = typeof window !== 'undefined' && !!(window as Record<string, unknown>).__TAURI_INTERNALS__;
+  const deviceType = isTauri ? 'control_plane' : 'mobile_remote';
+
   const sendCommand = useCallback(async (command: string, payload?: unknown) => {
     setIsPending(true);
     try {
       const response = await fetch(`${apiBase}/api/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command, payload }),
+        body: JSON.stringify({ command, payload, deviceType }),
       });
       
       if (!response.ok) {
@@ -341,7 +345,7 @@ export function useSendCommand(options: UseAppStateOptions = {}) {
     } finally {
       setIsPending(false);
     }
-  }, [apiBase]);
+  }, [apiBase, deviceType]);
 
   return { sendCommand, isPending };
 }

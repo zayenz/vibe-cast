@@ -576,6 +576,9 @@ async fn handle_command(
 ) -> Json<serde_json::Value> {
     println!("Received command: {}", payload.command);
     
+    // Determine device type from the command payload, defaulting to MobileRemote for backward compatibility
+    let device_type = payload.device_type.clone().unwrap_or(DeviceType::MobileRemote);
+    
     let mut triggered_message: Option<MessageConfig> = None;
     
     // Update the canonical state based on command
@@ -647,7 +650,7 @@ async fn handle_command(
                     triggered_message = Some(msg.clone());
                     
                     // Update playback_control so all clients (Control Plane, other remotes) get canStop
-                    state.app_state_sync.start_message_playback_with_message(msg.clone(), DeviceType::MobileRemote);
+                    state.app_state_sync.start_message_playback_with_message(msg.clone(), device_type.clone());
                     // Emit to Tauri windows (Control Plane, Visualizer) so they get stop capability immediately
                     let complete_state = state.app_state_sync.get_state();
                     let playback_control = state.app_state_sync.get_playback_control();
@@ -703,15 +706,46 @@ async fn handle_command(
                         if let Some(obj) = stats.as_object_mut() {
                             obj.insert(msg.id.clone(), new_stats);
                         } else {
-                            *stats = serde_json::json!({ msg.id: new_stats });
+                            *stats = serde_json::json!({ msg.id.clone(): new_stats });
                         }
+                    }
+                    
+                    // Auto-stop safety timer: if the message has a known duration,
+                    // spawn a task that stops it after duration + 500ms buffer.
+                    // This prevents stuck "playing" state if the Visualizer doesn't
+                    // report message-complete (e.g. window closed, error, etc.)
+                    if let Some(duration) = playback_control.current_message.as_ref().and_then(|m| m.duration) {
+                        let state_clone = state.app_state_sync.clone();
+                        let handle_clone = state.app_handle.clone();
+                        let message_id_clone = msg.id.clone();
+                        let timeout_duration = duration + std::time::Duration::from_millis(500);
+                        
+                        tokio::spawn(async move {
+                            tokio::time::sleep(timeout_duration).await;
+                            
+                            let current_state = state_clone.get_playback_control();
+                            if current_state.is_playing &&
+                               current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone) {
+                                println!("[trigger-message] Auto-stopping message '{}' after duration: {:?}", message_id_clone, duration);
+                                state_clone.stop_message_playback(DeviceType::System);
+                                
+                                let updated_state = state_clone.get_state();
+                                let updated_playback_control = state_clone.get_playback_control();
+                                
+                                let _ = handle_clone.emit("playback-control-changed", serde_json::json!({
+                                    "type": "MESSAGE_TIMEOUT",
+                                    "playbackControl": updated_playback_control,
+                                    "state": updated_state
+                                }));
+                            }
+                        });
                     }
                 }
             }
         }
         "stop-message" => {
-            // Unified stop from Remote or Control Plane fallback — update playback_control and notify all views
-            state.app_state_sync.stop_message_playback(DeviceType::MobileRemote);
+            // Unified stop from any device — update playback_control and notify all views
+            state.app_state_sync.stop_message_playback(device_type.clone());
             let complete_state = state.app_state_sync.get_state();
             let playback_control = state.app_state_sync.get_playback_control();
             let _ = state.app_handle.emit("playback-control-changed", serde_json::json!({

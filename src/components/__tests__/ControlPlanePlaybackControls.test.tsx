@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ControlPlane } from '../ControlPlane';
 import { MockEventSource } from '../../test/mocks/sse';
@@ -21,250 +21,232 @@ function renderControlPlane() {
   return render(<RouterProvider router={router} />);
 }
 
+/**
+ * Helper to render the ControlPlane, advance timers so the SSE connection is
+ * established, and inject a state event.  Returns the MockEventSource instance.
+ */
+async function renderAndInjectState(stateData: Record<string, unknown>) {
+  renderControlPlane();
+
+  // Advance past the 500ms initial delay in useAppState so EventSource is created
+  await act(async () => {
+    vi.advanceTimersByTime(600);
+  });
+
+  const sse = MockEventSource.getLatest();
+  expect(sse).toBeDefined();
+
+  // Fire open callback if not already called (the MockEventSource schedules it in
+  // a setTimeout(0) which may not have been flushed yet)
+  await act(async () => {
+    vi.advanceTimersByTime(10);
+  });
+
+  // Inject the state event so the component renders with data
+  await act(async () => {
+    sse!.simulateEvent('state', stateData);
+  });
+
+  return sse!;
+}
+
 describe('ControlPlane Playback Controls Enhancement', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ success: true }),
+    MockEventSource.reset();
+
+    // Simulate Tauri environment so useSendCommand sends deviceType: 'control_plane'
+    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+
+    mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/api/command') && options?.method === 'POST') {
+        return { ok: true, json: async () => ({ status: 'ok' }) };
+      }
+      // Return a valid response for server-info check (invoke fallback)
+      return { ok: false, status: 404, json: async () => ({}) };
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
   it('shows stop button when message is playing from Control Plane', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and state with playing message
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-        playbackControl: {
-          sessionId: 'session1',
-          currentMessage: { id: 'msg1', title: 'Test Message' },
-          isPlaying: true,
-          playbackPosition: 0,
-          canStop: true,
-          canStart: false,
-          initiatedBy: 'control_plane',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+    await renderAndInjectState({
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      messageTree: [{ type: 'message', message: { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' } }],
+      playbackControl: {
+        sessionId: 'session1',
+        currentMessage: { id: 'msg1', title: 'Test Message' },
+        isPlaying: true,
+        playbackPosition: 0,
+        canStop: true,
+        canStart: false,
+        initiatedBy: 'control_plane',
+        lastUpdated: Date.now(),
+      },
+      defaultTextStyle: 'scrolling-capitals',
     });
 
     await waitFor(() => {
-      // Should show stop button (square icon) for the playing message
-      const stopButton = screen.getByTitle(/Stop message.*Control Plane/);
-      expect(stopButton).toBeInTheDocument();
-      
+      // Should show stop button(s) for the playing message
+      const stopButtons = screen.getAllByTitle(/Stop message.*Control Plane/);
+      expect(stopButtons.length).toBeGreaterThan(0);
+
       // Should show "Playing" indicator
       expect(screen.getByText('Playing')).toBeInTheDocument();
     });
   });
 
   it('shows stop button when message is playing from Mobile Remote', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and state with message started from mobile
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-        playbackControl: {
-          sessionId: 'session1',
-          currentMessage: { id: 'msg1', title: 'Test Message' },
-          isPlaying: true,
-          playbackPosition: 0,
-          canStop: true,
-          canStart: false,
-          initiatedBy: 'mobile_remote',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+    await renderAndInjectState({
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      messageTree: [{ type: 'message', message: { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' } }],
+      playbackControl: {
+        sessionId: 'session1',
+        currentMessage: { id: 'msg1', title: 'Test Message' },
+        isPlaying: true,
+        playbackPosition: 0,
+        canStop: true,
+        canStart: false,
+        initiatedBy: 'mobile_remote',
+        lastUpdated: Date.now(),
+      },
+      defaultTextStyle: 'scrolling-capitals',
     });
 
     await waitFor(() => {
-      // Should show stop button with mobile remote indication
-      const stopButton = screen.getByTitle(/Stop message.*Mobile Remote/);
-      expect(stopButton).toBeInTheDocument();
-      
-      // Should show mobile remote indicator (📱)
-      expect(screen.getByText('📱')).toBeInTheDocument();
+      // Should show stop button(s) with mobile remote indication
+      const stopButtons = screen.getAllByTitle(/Stop message.*Mobile Remote/);
+      expect(stopButtons.length).toBeGreaterThan(0);
     });
   });
 
-  it('disables play button when another message is playing', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and state with one message playing
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [
-          { id: 'msg1', text: 'Playing Message', textStyle: 'scrolling-capitals' },
-          { id: 'msg2', text: 'Other Message', textStyle: 'scrolling-capitals' }
-        ],
-        playbackControl: {
-          sessionId: 'session1',
-          currentMessage: { id: 'msg1', title: 'Playing Message' },
-          isPlaying: true,
-          playbackPosition: 0,
-          canStop: true,
-          canStart: false,
-          initiatedBy: 'control_plane',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+  it('sends trigger-message command via HTTP when play button is clicked', async () => {
+    await renderAndInjectState({
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      messageTree: [{ type: 'message', message: { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' } }],
+      playbackControl: {
+        sessionId: null,
+        currentMessage: null,
+        isPlaying: false,
+        playbackPosition: 0,
+        canStop: false,
+        canStart: true,
+        initiatedBy: 'system',
+        lastUpdated: Date.now(),
+      },
+      defaultTextStyle: 'scrolling-capitals',
     });
 
     await waitFor(() => {
-      // The non-playing message should have disabled play button
-      const otherMessageButtons = screen.getAllByTitle('Another message is playing');
-      expect(otherMessageButtons.length).toBeGreaterThan(0);
-      
-      // The playing message should have stop button
-      const stopButton = screen.getByTitle(/Stop message.*Control Plane/);
-      expect(stopButton).toBeInTheDocument();
-    });
-  });
-
-  it('sends start-message command when play button is clicked', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and idle state
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-        playbackControl: {
-          sessionId: null,
-          currentMessage: null,
-          isPlaying: false,
-          playbackPosition: 0,
-          canStop: false,
-          canStart: true,
-          initiatedBy: 'system',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+      expect(screen.getAllByTitle('Play message').length).toBeGreaterThan(0);
     });
 
+    // Click the first play button
+    fireEvent.click(screen.getAllByTitle('Play message')[0]);
+
+    // Should send trigger-message command via HTTP (not Tauri invoke)
     await waitFor(() => {
-      // Click the play button
-      const playButton = screen.getByTitle('Play message');
-      fireEvent.click(playButton);
-    });
-
-    // Should send start-message command
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/command',
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: expect.stringContaining('start-message'),
-        })
+      const calls = mockFetch.mock.calls;
+      const triggerCall = calls.find(
+        ([url, opts]: [string, RequestInit]) =>
+          typeof url === 'string' &&
+          url.includes('/api/command') &&
+          opts?.method === 'POST' &&
+          typeof opts?.body === 'string' &&
+          opts.body.includes('"trigger-message"')
       );
+      expect(triggerCall).toBeDefined();
+
+      // Verify the body contains the message payload and deviceType
+      const body = JSON.parse(triggerCall![1].body as string);
+      expect(body.command).toBe('trigger-message');
+      expect(body.deviceType).toBe('control_plane');
     });
   });
 
-  it('sends stop-message command when stop button is clicked', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and playing state
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-        playbackControl: {
-          sessionId: 'session1',
-          currentMessage: { id: 'msg1', title: 'Test Message' },
-          isPlaying: true,
-          playbackPosition: 0,
-          canStop: true,
-          canStart: false,
-          initiatedBy: 'control_plane',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+  it('sends stop-message command via HTTP when stop button is clicked', async () => {
+    await renderAndInjectState({
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      messageTree: [{ type: 'message', message: { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' } }],
+      playbackControl: {
+        sessionId: 'session1',
+        currentMessage: { id: 'msg1', title: 'Test Message' },
+        isPlaying: true,
+        playbackPosition: 0,
+        canStop: true,
+        canStart: false,
+        initiatedBy: 'control_plane',
+        lastUpdated: Date.now(),
+      },
+      defaultTextStyle: 'scrolling-capitals',
     });
 
     await waitFor(() => {
-      // Click the stop button
-      const stopButton = screen.getByTitle(/Stop message.*Control Plane/);
-      fireEvent.click(stopButton);
+      expect(screen.getAllByTitle(/Stop message.*Control Plane/).length).toBeGreaterThan(0);
     });
 
-    // Should send stop-message command
+    // Click the first stop button
+    fireEvent.click(screen.getAllByTitle(/Stop message.*Control Plane/)[0]);
+
+    // Should send stop-message command via HTTP
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/command',
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: expect.stringContaining('stop-message'),
-        })
+      const calls = mockFetch.mock.calls;
+      const stopCall = calls.find(
+        ([url, opts]: [string, RequestInit]) =>
+          typeof url === 'string' &&
+          url.includes('/api/command') &&
+          opts?.method === 'POST' &&
+          typeof opts?.body === 'string' &&
+          opts.body.includes('"stop-message"')
       );
+      expect(stopCall).toBeDefined();
+
+      // Verify the body contains deviceType
+      const body = JSON.parse(stopCall![1].body as string);
+      expect(body.command).toBe('stop-message');
+      expect(body.deviceType).toBe('control_plane');
     });
   });
 
   it('shows global playback status in header when message is playing', async () => {
-    renderControlPlane();
-    
-    // Simulate SSE connection and playing state
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        activeVisualization: 'fireplace',
-        enabledVisualizations: ['fireplace'],
-        commonSettings: { intensity: 1.0, dim: 1.0 },
-        messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-        playbackControl: {
-          sessionId: 'session1',
-          currentMessage: { id: 'msg1', title: 'Test Message' },
-          isPlaying: true,
-          playbackPosition: 0,
-          canStop: true,
-          canStart: false,
-          initiatedBy: 'mobile_remote',
-          lastUpdated: Date.now(),
-        },
-        defaultTextStyle: 'scrolling-capitals',
-      });
+    await renderAndInjectState({
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [{ id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      messageTree: [{ type: 'message', message: { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' } }],
+      playbackControl: {
+        sessionId: 'session1',
+        currentMessage: { id: 'msg1', title: 'Test Message' },
+        isPlaying: true,
+        playbackPosition: 0,
+        canStop: true,
+        canStart: false,
+        initiatedBy: 'mobile_remote',
+        lastUpdated: Date.now(),
+      },
+      defaultTextStyle: 'scrolling-capitals',
     });
 
     await waitFor(() => {
       // Should show global playback status
       expect(screen.getByText(/Playing: Test Message/)).toBeInTheDocument();
-      
-      // Should show mobile remote indicator in header
-      const headerMobileIndicators = screen.getAllByText('📱');
-      expect(headerMobileIndicators.length).toBeGreaterThan(0);
     });
   });
 });

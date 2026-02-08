@@ -27,16 +27,17 @@ export async function commandAction({ request }: { request: Request }) {
     }
   }
 
-  // Determine API base URL
-  // In Tauri windows, we need to hit localhost:8080
-  // In browser (remote), we're already on that origin
+  // Determine API base URL and device type
+  // In Tauri windows, we need to hit localhost:8080 (Control Plane)
+  // In browser (remote), we're already on that origin (Mobile Remote)
   const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
   const apiBase = isTauri ? 'http://127.0.0.1:8080' : '';
+  const deviceType = isTauri ? 'control_plane' : 'mobile_remote';
 
   const response = await fetch(`${apiBase}/api/command`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command, payload }),
+    body: JSON.stringify({ command, payload, deviceType }),
     signal: request.signal, // Enable cancellation
   });
 

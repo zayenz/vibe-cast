@@ -1,12 +1,17 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useAppState, useSendCommand } from '../useAppState';
 import { MockEventSource } from '../../test/mocks/sse';
 
 describe('useAppState', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('starts in loading state', () => {
@@ -20,14 +25,19 @@ describe('useAppState', () => {
   it('connects to SSE and receives initial state', async () => {
     const { result } = renderHook(() => useAppState());
     
-    // Wait for EventSource to be created
+    // Advance past the 500ms initial delay so EventSource is created
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
+    });
+    // Advance past MockEventSource's setTimeout(0) for onopen
+    await act(async () => {
+      vi.advanceTimersByTime(10);
     });
 
     const sse = MockEventSource.getLatest();
     expect(sse).toBeDefined();
-    expect(sse?.url).toBe('/api/events');
+    // In jsdom, window.location.origin is 'http://localhost:3000', so the SSE URL includes the origin
+    expect(sse?.url).toBe('http://localhost:3000/api/events');
 
     // Simulate receiving state
     await act(async () => {
@@ -54,8 +64,14 @@ describe('useAppState', () => {
   it('updates state when new SSE events arrive', async () => {
     const { result } = renderHook(() => useAppState());
     
+    // Advance past the 500ms initial delay + onopen
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10);
+    });
+    await act(async () => {
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
     });
@@ -79,15 +95,18 @@ describe('useAppState', () => {
   });
 
   it('handles connection errors and attempts reconnect', async () => {
-    vi.useFakeTimers();
-    
     const { result } = renderHook(() => useAppState());
     
+    // Advance past the 500ms initial delay + onopen
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10);
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10);
     });
 
     const initialSse = MockEventSource.getLatest();
+    expect(initialSse).toBeDefined();
     
     // Simulate error
     await act(async () => {
@@ -98,18 +117,21 @@ describe('useAppState', () => {
 
     // Advance time to trigger reconnect
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2100);
+      vi.advanceTimersByTime(2100);
     });
 
     // A new SSE instance should be created
     expect(MockEventSource.instances.length).toBeGreaterThan(0);
-    
-    vi.useRealTimers();
   });
 
   it('uses custom API base when provided', async () => {
     renderHook(() => useAppState({ apiBase: 'http://127.0.0.1:8080' }));
     
+    // Advance past the 500ms initial delay so EventSource is created
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+
     // Verify EventSource was created with correct URL
     const sse = MockEventSource.instances[0];
     expect(sse).toBeDefined();
@@ -119,8 +141,9 @@ describe('useAppState', () => {
   it('cleans up SSE connection on unmount', async () => {
     const { unmount } = renderHook(() => useAppState());
     
+    // Advance past the 500ms initial delay so EventSource is created
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
     });
 
     const sse = MockEventSource.getLatest();
@@ -135,8 +158,14 @@ describe('useAppState', () => {
   it('handles triggeredMessage in state', async () => {
     const { result } = renderHook(() => useAppState());
     
+    // Advance past the 500ms initial delay + onopen
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10);
+    });
+    await act(async () => {
       const sse = MockEventSource.getLatest();
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',
@@ -180,7 +209,7 @@ describe('useSendCommand', () => {
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: 'set-mode', payload: 'techno' }),
+        body: JSON.stringify({ command: 'set-mode', payload: 'techno', deviceType: 'mobile_remote' }),
       })
     );
   });

@@ -19,6 +19,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 describe('VisualizerWindow', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     vi.resetModules();
     MockEventSource.reset();
@@ -34,8 +35,26 @@ describe('VisualizerWindow', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
+
+  /**
+   * Helper to advance through the VisualizerWindow's two-phase initialization:
+   * Phase 1: invoke('get_server_info') resolves → serverReady becomes true → useAppState re-runs
+   * Phase 2: The new useAppState effect's 500ms delay fires → SSE connection created
+   */
+  async function advancePastInitialization() {
+    // Phase 1: advance past first 500ms delay and let invoke promise chain resolve
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    // Phase 2: after serverReady changes, useAppState re-runs with new apiBase.
+    // Advance past the new 500ms delay so the final SSE connection is created.
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+  }
 
   it('renders without crashing and establishes SSE connection', async () => {
     render(<VisualizerWindow />);
@@ -47,14 +66,15 @@ describe('VisualizerWindow', () => {
       expect(mockListen).toHaveBeenCalledWith('state-changed', expect.any(Function));
     });
 
-    // Simulate SSE connection
+    // Advance through two-phase initialization
+    await advancePastInitialization();
+    
+    const sse = MockEventSource.getLatest();
+    // Should have tried to connect
+    expect(sse).toBeDefined();
+    
+    // Send initial state
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      // Should have tried to connect
-      expect(sse).toBeDefined();
-      
-      // Send initial state
       sse?.simulateEvent('state', {
         activeVisualization: 'fireplace',
         messages: [],
@@ -99,20 +119,19 @@ describe('VisualizerWindow', () => {
     vi.resetModules();
     
     // Re-import the component
-    // Note: We need to re-import MockEventSource too if it relies on side effects, 
-    // but here we just need the component to use the new env.
     const { VisualizerWindow: VisualizerWindowProd } = await import('../VisualizerWindow');
 
     render(<VisualizerWindowProd />);
 
-    // Check MockEventSource URL
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-      // In production (DEV=false), API_BASE should be ''
-      // So SSE URL should be '/api/events'
-      expect(sse?.url).toBe('/api/events');
-    });
+    // Advance through two-phase initialization
+    // After invoke resolves, apiBase is set to http://127.0.0.1:8080 and serverReady = true
+    await advancePastInitialization();
+    
+    const sse = MockEventSource.getLatest();
+    expect(sse).toBeDefined();
+    // After invoke resolves with port 8080, the SSE connects to the resolved URL
+    // (invoke always succeeds in test env, overriding the initial empty apiBase)
+    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
   });
 
   it('uses absolute API path in Development mode', async () => {
@@ -126,12 +145,13 @@ describe('VisualizerWindow', () => {
 
     render(<VisualizerWindowDev />);
 
-    // Check MockEventSource URL
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const sse = MockEventSource.getLatest();
-                      // In dev (DEV=true), API_BASE should be 'http://localhost:8080'
-                      // So SSE URL should be 'http://localhost:8080/api/events'
-                      expect(sse?.url).toBe('http://localhost:8080/api/events');    });
+    // Advance through two-phase initialization
+    await advancePastInitialization();
+    
+    const sse = MockEventSource.getLatest();
+    expect(sse).toBeDefined();
+    // In dev (DEV=true), initial apiBase is 'http://127.0.0.1:8080'
+    // After invoke resolves, it's confirmed as 'http://127.0.0.1:8080'
+    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
   });
 });
