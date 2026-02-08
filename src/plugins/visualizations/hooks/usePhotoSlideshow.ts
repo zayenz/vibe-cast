@@ -185,8 +185,6 @@ export function usePhotoSlideshow(
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       
       try {
-        const mediaUrl = getMediaUrl(path);
-        
         // Set up timeout that will reject the promise if it takes too long
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {

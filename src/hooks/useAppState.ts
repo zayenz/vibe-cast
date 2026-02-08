@@ -296,11 +296,17 @@ export function useAppState(options: UseAppStateOptions = {}) {
       };
     };
 
-    // Small delay before first connect to allow server to fully initialize
+    // In Tauri windows (Control Plane, Visualizer), the server starts concurrently with the
+    // frontend, so we add a small delay to let it initialize. In a browser (Remote), the
+    // server is already running since it served the page — connect immediately.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+    const startupDelay = isTauri ? 500 : 0;
+
     const initialDelay = setTimeout(() => {
-      console.log('[useAppState] Starting SSE connection after initial delay');
+      console.log(`[useAppState] Starting SSE connection after ${startupDelay}ms delay`);
       connect();
-    }, 500);
+    }, startupDelay);
 
     return () => {
       console.log('[useAppState] Cleanup: closing SSE connection');
@@ -325,7 +331,8 @@ export function useSendCommand(options: UseAppStateOptions = {}) {
   const [isPending, setIsPending] = useState(false);
 
   // Detect device type: Tauri windows are Control Plane, browser is Mobile Remote
-  const isTauri = typeof window !== 'undefined' && !!(window as Record<string, unknown>).__TAURI_INTERNALS__;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
   const deviceType = isTauri ? 'control_plane' : 'mobile_remote';
 
   const sendCommand = useCallback(async (command: string, payload?: unknown) => {

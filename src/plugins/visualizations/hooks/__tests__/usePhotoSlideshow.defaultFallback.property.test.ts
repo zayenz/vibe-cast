@@ -151,22 +151,22 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
           if (!folderPath || folderPath === '') {
             // Should only call fallback
             expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const fallbackCall = invokeCalls.find(call => call[1].folderPath === '$RESOURCES/kittens');
+            const fallbackCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
             expect(fallbackCall).toBeDefined();
           } else if (primaryShouldSucceed) {
             // Should only call primary
             expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const primaryCall = invokeCalls.find(call => call[1].folderPath === folderPath);
+            const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
             expect(primaryCall).toBeDefined();
           } else {
             // Should call both primary and fallback
             expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const primaryCall = invokeCalls.find(call => call[1].folderPath === folderPath);
+            const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
             expect(primaryCall).toBeDefined();
             
             if (fallbackImages.length > 0) {
               // Only check for fallback call if it would succeed
-              const fallbackCall = invokeCalls.find(call => call[1].folderPath === '$RESOURCES/kittens');
+              const fallbackCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
               expect(fallbackCall).toBeDefined();
             }
           }
@@ -328,11 +328,11 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
           expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
           
           // All calls should be to the fallback path
-          const fallbackCalls = invokeCalls.filter(call => call[1].folderPath === '$RESOURCES/kittens');
+          const fallbackCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
           expect(fallbackCalls.length).toBeGreaterThanOrEqual(1);
           
           // No calls should be to empty path
-          const emptyCalls = invokeCalls.filter(call => call[1].folderPath === '');
+          const emptyCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '');
           expect(emptyCalls.length).toBe(0);
         }
       ),

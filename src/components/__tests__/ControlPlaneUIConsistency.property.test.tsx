@@ -120,7 +120,7 @@ describe('Feature: message-control-sync, Property 1: Bidirectional Control Consi
         fc.record({
           lastDevice: deviceTypeArb,
         }),
-        ({ _lastDevice }) => {
+        ({ lastDevice: _lastDevice }) => {
           // Create idle playback control state
           const playbackControl: PlaybackControlState = {
             sessionId: null,

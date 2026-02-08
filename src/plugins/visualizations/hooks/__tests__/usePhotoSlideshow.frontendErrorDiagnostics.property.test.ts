@@ -162,7 +162,7 @@ describe('Feature: photo-slideshow-production-fix, Property 9: Frontend Error Di
           statusCode: fc.integer({ min: 200, max: 599 })
         }),
         async ({ errorScenario, folderPath, statusCode }) => {
-          const _targetPath = folderPath || '$RESOURCES/kittens';
+          void (folderPath || '$RESOURCES/kittens');
           
           // Set up different error scenarios
           switch (errorScenario) {

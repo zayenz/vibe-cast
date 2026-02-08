@@ -124,7 +124,7 @@ describe('usePhotoSlideshow Error Handling', () => {
       const htmlResponse = '<!DOCTYPE html><html><head><title>VibeCast</title></head><body>...</body></html>';
       
       // Mock fetch to return HTML for any request (simulating SPA fallback)
-      mockFetch.mockImplementation(async (url: string) => {
+      mockFetch.mockImplementation(async (_url: string) => {
         // Always return HTML response to simulate API configuration issue
         return {
           ok: false,

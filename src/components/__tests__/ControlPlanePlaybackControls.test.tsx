@@ -57,7 +57,8 @@ describe('ControlPlane Playback Controls Enhancement', () => {
     MockEventSource.reset();
 
     // Simulate Tauri environment so useSendCommand sends deviceType: 'control_plane'
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__TAURI_INTERNALS__ = {};
 
     mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/command') && options?.method === 'POST') {
@@ -70,7 +71,8 @@ describe('ControlPlane Playback Controls Enhancement', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   it('shows stop button when message is playing from Control Plane', async () => {
@@ -160,13 +162,14 @@ describe('ControlPlane Playback Controls Enhancement', () => {
     // Should send trigger-message command via HTTP (not Tauri invoke)
     await waitFor(() => {
       const calls = mockFetch.mock.calls;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const triggerCall = calls.find(
-        ([url, opts]: [string, RequestInit]) =>
-          typeof url === 'string' &&
-          url.includes('/api/command') &&
-          opts?.method === 'POST' &&
-          typeof opts?.body === 'string' &&
-          opts.body.includes('"trigger-message"')
+        (call: any[]) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('/api/command') &&
+          call[1]?.method === 'POST' &&
+          typeof call[1]?.body === 'string' &&
+          call[1].body.includes('"trigger-message"')
       );
       expect(triggerCall).toBeDefined();
 
@@ -207,13 +210,14 @@ describe('ControlPlane Playback Controls Enhancement', () => {
     // Should send stop-message command via HTTP
     await waitFor(() => {
       const calls = mockFetch.mock.calls;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const stopCall = calls.find(
-        ([url, opts]: [string, RequestInit]) =>
-          typeof url === 'string' &&
-          url.includes('/api/command') &&
-          opts?.method === 'POST' &&
-          typeof opts?.body === 'string' &&
-          opts.body.includes('"stop-message"')
+        (call: any[]) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('/api/command') &&
+          call[1]?.method === 'POST' &&
+          typeof call[1]?.body === 'string' &&
+          call[1].body.includes('"stop-message"')
       );
       expect(stopCall).toBeDefined();
 
