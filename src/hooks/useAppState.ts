@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { 
   CommonVisualizationSettings, 
   MessageConfig,
@@ -200,6 +200,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
   const [state, setState] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const hasReceivedState = useRef(false);
 
   useEffect(() => {
     // When apiBase is empty (e.g. Remote on same origin as server), use current origin so SSE connects
@@ -211,12 +212,50 @@ export function useAppState(options: UseAppStateOptions = {}) {
 
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let bootstrapTimer: ReturnType<typeof setTimeout> | null = null;
+    let bootstrapController: AbortController | null = null;
     let isMounted = true;
     let retryCount = 0;
     const MAX_RETRIES = 30; // Keep trying for ~60 seconds
 
     const sseUrl = `${effectiveBase}/api/events`;
     console.log(`[useAppState] Initializing SSE connection to: ${sseUrl}`);
+
+    const bootstrapState = async () => {
+      if (!isMounted || hasReceivedState.current) {
+        return;
+      }
+
+      bootstrapController = new AbortController();
+      bootstrapTimer = setTimeout(() => {
+        bootstrapController?.abort();
+      }, 1500);
+
+      try {
+        const response = await fetch(`${effectiveBase}/api/state`, { signal: bootstrapController.signal });
+        if (!response.ok || !isMounted || hasReceivedState.current) {
+          return;
+        }
+        const data = await response.json();
+        if (!isMounted || hasReceivedState.current) {
+          return;
+        }
+        const parsedState = parseSSEState(data);
+        setState(parsedState);
+        setError(null);
+        hasReceivedState.current = true;
+        console.log('[useAppState] Bootstrap state fetched successfully');
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') {
+          console.warn('[useAppState] Bootstrap state fetch failed:', e);
+        }
+      } finally {
+        if (bootstrapTimer) {
+          clearTimeout(bootstrapTimer);
+          bootstrapTimer = null;
+        }
+      }
+    };
 
     const connect = () => {
       if (!isMounted) {
@@ -247,6 +286,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
           setState(parsedState);
           setError(null);
           setIsConnected(true);
+          hasReceivedState.current = true;
           retryCount = 0; // Reset retry count on successful state
           console.log('[useAppState] State parsed and set successfully');
         } catch (e) {
@@ -308,10 +348,16 @@ export function useAppState(options: UseAppStateOptions = {}) {
       connect();
     }, startupDelay);
 
+    bootstrapState();
+
     return () => {
       console.log('[useAppState] Cleanup: closing SSE connection');
       isMounted = false;
       clearTimeout(initialDelay);
+      if (bootstrapTimer) {
+        clearTimeout(bootstrapTimer);
+      }
+      bootstrapController?.abort();
       eventSource?.close();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

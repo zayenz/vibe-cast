@@ -4,10 +4,14 @@ import { useAppState, useSendCommand } from '../useAppState';
 import { MockEventSource } from '../../test/mocks/sse';
 
 describe('useAppState', () => {
+  const mockFetch = vi.fn();
+
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
+    global.fetch = mockFetch;
+    mockFetch.mockImplementation(() => new Promise(() => {}));
   });
 
   afterEach(() => {
@@ -183,6 +187,68 @@ describe('useAppState', () => {
       expect(result.current.state?.triggeredMessage?.text).toBe('Hello');
     });
   });
+
+  it('bootstraps state when SSE is slow', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ mode: 'fireplace', messages: ['Hello'] }),
+    });
+
+    const { result } = renderHook(() => useAppState());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.activeVisualization).toBe('fireplace');
+      expect(result.current.state?.messages).toEqual([
+        { id: '0', text: 'Hello', textStyle: 'scrolling-capitals' },
+      ]);
+    });
+  });
+
+  it('does not override SSE state with bootstrap fetch', async () => {
+    mockFetch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({
+              ok: true,
+              json: async () => ({ mode: 'fireplace', messages: ['Bootstrap'] }),
+            });
+          }, 1000);
+        })
+    );
+
+    const { result } = renderHook(() => useAppState());
+
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(10);
+    });
+    await act(async () => {
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'techno', messages: ['SSE'] });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.mode).toBe('techno');
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.mode).toBe('techno');
+      expect(result.current.state?.messages).toEqual([
+        { id: '0', text: 'SSE', textStyle: 'scrolling-capitals' },
+      ]);
+    });
+  });
 });
 
 describe('useSendCommand', () => {
@@ -270,4 +336,3 @@ describe('useSendCommand', () => {
     expect(response).toEqual({ status: 'ok', data: 'test' });
   });
 });
-
