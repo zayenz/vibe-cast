@@ -1,231 +1,133 @@
-# Visualizer Architecture
+# Vibe Cast Architecture
 
-This document describes the system architecture of the Visualizer application, a multi-window macOS app built with Tauri v2 and React.
+This document is the authoritative, LLM-friendly map of how Vibe Cast works today. It is organized for progressive disclosure: start at the top, then dive only as needed.
 
-## System Overview
+## 1) TL;DR (Read This First)
 
-Visualizer is designed to provide immersive visualizations on secondary displays (e.g., Apple TV via AirPlay) while being controlled from a primary monitor or a mobile device.
+- **Single source of truth**: Rust `AppStateSync` in `src-tauri/crates/state`.
+- **Sync channel**: SSE (`/api/events`) for Control Plane + Mobile Remote.
+- **Sync channel**: Tauri events for Visualizer + high-frequency audio (`audio-data`).
+- **All state mutations** go through server handlers or Tauri commands, then **broadcast** to SSE and Tauri.
+- **LAN server** binds `8080..8100`; use `get_server_info` to discover the active port + LAN IP.
 
-### Components
+If you only read one rule: never "fix" a UI state bug by mutating client state directly; make the Rust state correct and broadcast.
 
-1.  **Tauri Core (Rust Backend - Cargo Workspace)**:
-    -   **`vibe-cast-app` (`src-tauri/crates/app`)**: Main Tauri application glue code, window management, and command handlers.
-    -   **`vibe-cast-audio` (`src-tauri/crates/audio`)**: Captures system audio via `cpal`, performs FFT processing, and manages audio state.
-    -   **`vibe-cast-server` (`src-tauri/crates/server`)**: Implements the Axum LAN server for remote control and SSE state broadcasting.
-    -   **`vibe-cast-state` (`src-tauri/crates/state`)**: Contains shared application state logic (`AppStateSync`) and synchronization primitives.
-    -   **`vibe-cast-models` (`src-tauri/crates/models`)**: Defines shared data structures and configuration types (`MessageConfig`, `BroadcastState`, etc.).
-
-2.  **Control Plane (React Window)**:
-    -   The primary management interface.
-    -   Displays a QR code for mobile remote access.
-    -   Controls the visualization mode (`fireplace` vs `techno`).
-    -   Triggers marquee messages on the visualizer window.
-    -   Uses SSE for state synchronization and React Router's `useFetcher` for mutations.
-
-3.  **Visualizer Stage (React Window)**:
-    -   A dedicated, borderless window designed for full-screen display.
-    -   Renders high-performance visualizations using React Three Fiber (Techno) and CSS/SVG (Fireplace).
-    -   Displays rolling marquee messages.
-    -   Uses Tauri events for both audio data (60fps) and state changes (for maximum performance).
-
-4.  **Mobile Remote (React Web App)**:
-    -   Served by the Axum backend.
-    -   Allows remote control of the app's functionality from a smartphone browser.
-    -   Uses SSE for real-time state updates (no polling) and React Router's `useFetcher` for mutations.
-
-## Communication & State Management
-
-### State Synchronization Architecture
-
-The application uses a **hybrid SSE + Tauri events architecture** with the Rust backend as the single source of truth:
+## 2) Runtime Topology
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Axum Server (localhost:8080)                 │
-│                    ══════════════════════════                   │
-│                    Single Source of Truth                       │
-│                                                                 │
-│   POST /api/command     GET /api/events (SSE)                  │
-│   (mutations)           (real-time state stream)                │
-└─────────────────────────────────────────────────────────────────┘
-         ▲                      │
-         │ useFetcher           │ SSE
-         │                      ▼
-┌────────┴──────────────────────────────────────────────────────┐
-│          Control Plane + Mobile Remote                         │
-│          ═════════════════════════════                         │
-│   useAppState() hook → SSE subscription → React state          │
-│   useFetcher() → POST mutations → triggers SSE broadcast       │
-└────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────┐
-│                    Visualizer Window                           │
-│                    ══════════════════                          │
-│            Tauri events for audio (60fps) + state changes      │
-│            (Kept on Tauri IPC for maximum performance)         │
-└────────────────────────────────────────────────────────────────┘
+                          ┌──────────────────────────────────────┐
+                          │          Rust Backend                │
+                          │  AppStateSync + Axum Server          │
+                          │  /api/command + /api/events (SSE)    │
+                          └──────────────────────────────────────┘
+                             ▲            ▲              ▲
+                             │            │              │
+                             │            │              │
+                   SSE (state/command)    │     Tauri events + audio
+                             │            │              │
+                             │            │              │
+                ┌────────────┘            │              └────────────┐
+                │                         │                           │
+        ┌───────────────┐         ┌───────────────┐           ┌────────────────┐
+        │ Control Plane │         │ Mobile Remote │           │ Visualizer     │
+        │ (Tauri main)  │         │ (Browser)     │           │ (Tauri viz)    │
+        └───────────────┘         └───────────────┘           └────────────────┘
 ```
 
-### Data Flow
+## 3) State Ownership and Broadcast
 
-1.  **SSE-Based Sync (Control Plane + Mobile Remote)**:
-    -   Both components subscribe to `GET /api/events` SSE stream on mount.
-    -   The stream sends initial state immediately, then pushes updates on every change.
-    -   Components use the `useAppState()` hook which manages the SSE connection with automatic reconnection.
-    -   Mutations use React Router's `useFetcher` to POST to `/api/command`.
-    -   No polling - updates are pushed in real-time.
+Authoritative state lives in `AppStateSync`.
 
-2.  **Tauri Event Sync (Visualizer Window)**:
-    -   The Visualizer window stays on Tauri events for performance (audio data at 60fps).
-    -   State changes are also broadcast via Tauri events for the Visualizer.
-    -   Uses Zustand for local state management.
+Key locations:
+- `src-tauri/crates/state/src/lib.rs` (state + mutation helpers)
+- `src-tauri/crates/models/src/lib.rs` (`BroadcastState` SSE payload)
+- `state_tx` and `command_tx` are broadcast channels for full state and transient commands
 
-3.  **Audio Data Flow**:
-    -   Audio is captured via `cpal` and processed with `realfft` in Rust.
-    -   FFT data is emitted as `audio-data` events to the Visualizer window only.
-    -   SSE is not used for audio (too high frequency for HTTP).
+Key mechanics:
+- Any mutation updates `AppStateSync` then calls `broadcast(...)`.
+- `broadcast(...)` sends **full state**; clients can replace local state on each event.
+- `broadcast_command(...)` sends transient commands (used by some workflows like E2E).
 
-### SSE Broadcast Mechanism
+## 4) Server API
 
-The Rust backend uses a `tokio::sync::broadcast` channel to fan out state changes:
+Implemented in `src-tauri/crates/server/src/lib.rs`.
 
-```rust
-pub struct AppStateSync {
-    pub mode: Mutex<String>,
-    pub messages: Mutex<Vec<String>>,
-    pub state_tx: broadcast::Sender<BroadcastState>,
-}
-```
+SSE endpoint: `GET /api/events`. It emits `state` (full `BroadcastState`) and `command` (transient `RemoteCommand`).
 
-When state changes (via `/api/command` or Tauri invoke):
-1. The canonical state is updated
-2. The new state is broadcast to all SSE subscribers
-3. A Tauri event is also emitted for the Visualizer window
+Commands endpoint: `POST /api/command` with payload `{ command, payload, deviceType }`.
 
-### Event Types
+Other endpoints:
+- `GET /api/status` (health)
+- `GET /api/state` (legacy, full state)
+- `GET /api/images/list?folder=...` (Photo Slideshow)
+- `GET /api/images/serve?path=...` (Photo Slideshow)
+- `POST /api/e2e/report` and `GET /api/e2e/last-report`
 
-| Event | Direction | Payload | Purpose |
-|-------|-----------|---------|---------|
-| `state-changed` | Backend → All Windows | `{ type, payload }` | Sync mode/messages (Tauri) |
-| `remote-command` | Backend → All Windows | `{ command, payload }` | Forward remote commands (Tauri) |
-| `audio-data` | Backend → Visualizer | `number[]` | FFT frequency data (Tauri) |
+Port binding: server tries `8080..8100` and stores the chosen port in `server_port`.
 
-### API Endpoints
+## 5) Desktop Window Roles
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/events` | GET (SSE) | Real-time state stream |
-| `/api/state` | GET | Get current mode and messages (legacy) |
-| `/api/command` | POST | Send command (set-mode, trigger-message, set-messages) |
-| `/api/status` | GET | Health check |
+Window selection happens in `src/App.tsx`.
 
-## Tech Stack
+- **Control Plane**: Tauri window label `main` (default)
+- **Visualizer**: Tauri window label `viz`
+- **Remote**: any non-Tauri browser load
 
-- **Framework**: Tauri v2
-- **Frontend**: React 19, React Router 7, Vite 7, Tailwind 4
-- **3D/Animation**: React Three Fiber, Three.js, Framer Motion
-- **Backend**: Rust, Axum, Tokio, Cpal, RealFFT, tokio-stream
+### Control Plane
 
-## Key Patterns
+- Uses `useAppState` (SSE) as the canonical state.
+- Uses `useSendCommand` / `useFetcher` to call `/api/command`.
+- Listens to `playback-control-changed` Tauri events for fast UI feedback.
 
-### useAppState Hook
+### Visualizer
 
-The `useAppState` hook manages SSE connection lifecycle:
+- Listens to Tauri events: `audio-data` (FFT), `state-changed`, `playback-control-changed`.
+- Also subscribes to SSE as a fallback for initial configuration.
 
-```typescript
-const { state, isConnected, error } = useAppState({ apiBase: API_BASE });
-```
+### Mobile Remote
 
-- Automatically connects to SSE on mount
-- Reconnects on connection errors (2s backoff)
-- Returns typed state, connection status, and errors
+- Runs in browser; SSE only (`useAppState` with `apiBase = ''`).
+- Mutations go through `/api/command` with `deviceType = mobile_remote`.
 
-### useFetcher for Mutations
+## 6) Audio Pipeline
 
-Commands are sent using React Router's `useFetcher`:
+Location: `src-tauri/crates/audio/src/lib.rs`.
 
-```typescript
-const fetcher = useFetcher();
+- Uses `cpal` for capture and `realfft` for FFT.
+- Emits `audio-data` Tauri events with magnitudes.
+- Keeps stream alive with `mem::forget`.
 
-// Send command
-fetcher.submit(
-  { command: 'set-mode', payload: JSON.stringify('techno') },
-  { method: 'post', action: '/' }
-);
+Important: audio never goes over SSE.
 
-// Check pending state
-const isPending = fetcher.state !== 'idle';
-```
+## 7) Configuration Loading
 
-Benefits:
-- No navigation on submit
-- Built-in pending state tracking
-- Automatic request cancellation on unmount
-- Form-based progressive enhancement possible
+Optional config file is loaded at startup.
 
-## Testing
+- CLI arg: `--app-config <path>` (or `--appconfig`)
+- Env var: `VIBECAST_CONFIG=/path/to/config.json`
+- Relative paths inside config are resolved against the config file directory
 
-### Test Utilities
+## 8) Plugin Architecture
 
-- **MockEventSource**: Simulates SSE connections in tests
-- **renderWithRouter**: Wraps components with a memory router for `useFetcher` support
+Visualizations and text styles are plugins with schemas and defaults.
 
-### Running Tests
+Locations:
+- Visualizations: `src/plugins/visualizations/*` and `src/plugins/visualizations/registry.ts`
+- Text styles: `src/plugins/textStyles/*` and `src/plugins/textStyles/registry.ts`
 
-```bash
-npm test        # Watch mode
-npm test -- --run  # Single run
-```
+To add a plugin: implement a plugin module, export settings schema, register in the registry.
 
-## Performance Considerations
+## 9) Common Change Tasks (Minimal Map)
 
-- **SSE over Polling**: The mobile remote now uses SSE instead of 3-second polling, providing instant updates with lower server load.
-- **Stable Animation Values**: Visualization components use `useMemo` to compute random animation offsets once per component instance.
-- **Audio Stream Lifecycle**: The audio capture stream uses `mem::forget` to keep it alive for the app's lifetime.
-- **Broadcast Channel Buffer**: The SSE broadcast channel has a buffer of 64 messages; slow clients may miss updates (which is acceptable since the next update contains full state).
-- **Visualizer on Tauri Events**: The Visualizer window uses Tauri IPC instead of SSE for audio data to handle 60fps updates efficiently.
-- **Multiple Message Rendering**: Messages are rendered independently, allowing efficient coexistence of different text styles.
+- **Add/modify API command**: `src-tauri/crates/server/src/lib.rs` + `src-tauri/crates/state/src/lib.rs`
+- **Fix state sync bugs**: start in `src-tauri/crates/state` and `src/hooks/useAppState.ts`
+- **Visualizer render issues**: `src/components/VisualizerWindow.tsx`
+- **Control Plane UI**: `src/components/ControlPlane.tsx`
+- **Remote UI**: `src/components/RemoteControl.tsx`
+- **Playback sync**: `docs/MESSAGE_PLAYBACK_SYNC.md`
 
-## Development
+## 10) Testing
 
-### Linting and Code Quality
-
-The project uses modern linting tools to ensure code quality:
-
-- **TypeScript**: ESLint with TypeScript plugin for strict type checking
-- **Rust**: Clippy with `-D warnings` for all code
-- **Run linting**: `npm run lint` (TypeScript) and `cargo clippy` (Rust)
-
-### Adding New Visualizations
-
-1. Create a new plugin file in `src/plugins/visualizations/`
-2. Define a settings schema using `SettingDefinition[]`
-3. Export a `VisualizationPlugin` object
-4. Register in `src/plugins/visualizations/registry.ts`
-
-### Adding New Text Styles
-
-1. Create a new plugin file in `src/plugins/textStyles/`
-2. Define a settings schema using `SettingDefinition[]`
-3. Export a `TextStylePlugin` object
-4. Register in `src/plugins/textStyles/registry.ts`
-
-## E2E Testing Architecture
-
-The application supports a "Loopback Telemetry" pattern for end-to-end testing without requiring browser automation tools (like Selenium).
-
-### Loopback Telemetry Flow
-
-1.  **Test Runner**: A Node.js script (`scripts/e2e_flow_test.mjs`) launches the app binary and connects to the backend API (`http://localhost:8080`).
-2.  **Command Dispatch**: The runner sends a `report-status` command via `POST /api/command`.
-3.  **Broadcasting**: The backend broadcasts this command to all connected clients (including the Visualizer window) via SSE (`command` event).
-    *   *Note*: This bypasses Tauri IPC restrictions for windows loaded from external URLs (localhost).
-4.  **Telemetry Collection**: The Visualizer window receives the command, gathers its internal state (active visualization, message count, etc.), and POSTs it to `POST /api/e2e/report`.
-5.  **Verification**: The backend stores the last report. The test runner polls `GET /api/e2e/last-report` to verify the visualizer state matches expectations.
-
-### API Endpoints for Testing
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/e2e/report` | POST | Used by frontend to submit status reports |
-| `/api/e2e/last-report` | GET | Used by test runner to fetch the latest report |
+- Frontend: `npm test` (Vitest run), `npm run lint`
+- Rust: `cd src-tauri && cargo test` / `cargo clippy` (if needed)
+- E2E: `node scripts/e2e_flow_test.mjs`
