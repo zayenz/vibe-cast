@@ -213,7 +213,7 @@ export class YouTubeEnvironmentResolver {
       ]);
 
       return response.ok;
-    } catch (error) {
+    } catch (_error) {
       // In some environments, HEAD requests might fail even if GET would work
       // So we'll be optimistic and assume availability for certain cases
       if (this.environmentInfo.isDevelopment && url.includes('localhost:1420')) {
@@ -259,7 +259,7 @@ export class YouTubeEnvironmentResolver {
       }
       
       return false;
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
   }
@@ -267,7 +267,7 @@ export class YouTubeEnvironmentResolver {
   /**
    * Get diagnostic information for debugging
    */
-  getDiagnosticInfo(): Record<string, any> {
+  getDiagnosticInfo(): Record<string, unknown> {
     return {
       environment: this.environmentInfo,
       serverInfo: this.serverInfo,

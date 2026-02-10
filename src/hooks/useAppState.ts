@@ -112,20 +112,21 @@ function parseSSEState(data: any): AppState {
   };
 
   // Parse playback control state if available
-  const parsePlaybackControl = (playbackControl: any): PlaybackControlState | undefined => {
+  const parsePlaybackControl = (playbackControl: unknown): PlaybackControlState | undefined => {
     if (!playbackControl || typeof playbackControl !== 'object') {
       return undefined;
     }
+    const control = playbackControl as Record<string, unknown>;
 
     return {
-      sessionId: playbackControl.sessionId || playbackControl.session_id || null,
-      currentMessage: playbackControl.currentMessage || playbackControl.current_message || null,
-      isPlaying: Boolean(playbackControl.isPlaying ?? playbackControl.is_playing ?? false),
-      playbackPosition: Number(playbackControl.playbackPosition ?? playbackControl.playback_position ?? 0),
-      canStop: Boolean(playbackControl.canStop ?? playbackControl.can_stop ?? false),
-      canStart: Boolean(playbackControl.canStart ?? playbackControl.can_start ?? true),
-      initiatedBy: playbackControl.initiatedBy ?? playbackControl.initiated_by ?? DeviceType.System,
-      lastUpdated: Number(playbackControl.lastUpdated ?? playbackControl.last_updated ?? Date.now()),
+      sessionId: (control.sessionId as string | null | undefined) || (control.session_id as string | null | undefined) || null,
+      currentMessage: (control.currentMessage as MessageInfo | null | undefined) || (control.current_message as MessageInfo | null | undefined) || null,
+      isPlaying: Boolean(control.isPlaying ?? control.is_playing ?? false),
+      playbackPosition: Number(control.playbackPosition ?? control.playback_position ?? 0),
+      canStop: Boolean(control.canStop ?? control.can_stop ?? false),
+      canStart: Boolean(control.canStart ?? control.can_start ?? true),
+      initiatedBy: (control.initiatedBy as DeviceType | undefined) ?? (control.initiated_by as DeviceType | undefined) ?? DeviceType.System,
+      lastUpdated: Number(control.lastUpdated ?? control.last_updated ?? Date.now()),
     };
   };
 
@@ -201,6 +202,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const hasReceivedState = useRef(false);
+  const hasReceivedSSEState = useRef(false);
 
   useEffect(() => {
     // When apiBase is empty (e.g. Remote on same origin as server), use current origin so SSE connects
@@ -212,49 +214,124 @@ export function useAppState(options: UseAppStateOptions = {}) {
 
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let bootstrapTimer: ReturnType<typeof setTimeout> | null = null;
-    let bootstrapController: AbortController | null = null;
+    let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackPollStartTimer: ReturnType<typeof setTimeout> | null = null;
+    let requestTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeController: AbortController | null = null;
     let isMounted = true;
     let retryCount = 0;
+    let bootstrapAttempt = 0;
+    let pollInFlight = false;
     const MAX_RETRIES = 30; // Keep trying for ~60 seconds
+    const BOOTSTRAP_RETRY_DELAYS_MS = [0, 500, 1500, 3000, 5000];
+    const BOOTSTRAP_TIMEOUT_MS = 4000;
+    const FALLBACK_POLL_START_MS = 3000;
+    const FALLBACK_POLL_INTERVAL_MS = 3000;
+    const FALLBACK_POLL_TIMEOUT_MS = 3000;
 
     const sseUrl = `${effectiveBase}/api/events`;
     console.log(`[useAppState] Initializing SSE connection to: ${sseUrl}`);
 
-    const bootstrapState = async () => {
-      if (!isMounted || hasReceivedState.current) {
+    const clearRequestTimeout = () => {
+      if (requestTimeoutTimer) {
+        clearTimeout(requestTimeoutTimer);
+        requestTimeoutTimer = null;
+      }
+    };
+
+    const fetchStateSnapshot = async (timeoutMs: number, source: 'bootstrap' | 'fallback-poll') => {
+      if (!isMounted) {
         return;
       }
 
-      bootstrapController = new AbortController();
-      bootstrapTimer = setTimeout(() => {
-        bootstrapController?.abort();
-      }, 1500);
+      activeController?.abort();
+      activeController = new AbortController();
+      requestTimeoutTimer = setTimeout(() => {
+        activeController?.abort();
+      }, timeoutMs);
 
       try {
-        const response = await fetch(`${effectiveBase}/api/state`, { signal: bootstrapController.signal });
-        if (!response.ok || !isMounted || hasReceivedState.current) {
+        const response = await fetch(`${effectiveBase}/api/state`, {
+          signal: activeController.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok || !isMounted) {
           return;
         }
+
         const data = await response.json();
-        if (!isMounted || hasReceivedState.current) {
+        if (!isMounted) {
           return;
         }
+
+        // If we have already received SSE state, prefer SSE to avoid stale overwrite.
+        if (source !== 'bootstrap' && hasReceivedSSEState.current) {
+          return;
+        }
+
+        if (source === 'bootstrap' && hasReceivedState.current) {
+          return;
+        }
+
         const parsedState = parseSSEState(data);
         setState(parsedState);
         setError(null);
         hasReceivedState.current = true;
-        console.log('[useAppState] Bootstrap state fetched successfully');
+        console.log(`[useAppState] State hydrated via ${source}`);
       } catch (e) {
         if ((e as Error).name !== 'AbortError') {
-          console.warn('[useAppState] Bootstrap state fetch failed:', e);
+          console.warn(`[useAppState] ${source} fetch failed:`, e);
         }
       } finally {
-        if (bootstrapTimer) {
-          clearTimeout(bootstrapTimer);
-          bootstrapTimer = null;
-        }
+        clearRequestTimeout();
       }
+    };
+
+    const scheduleFallbackPoll = () => {
+      if (!isMounted || hasReceivedSSEState.current) {
+        return;
+      }
+
+      fallbackPollTimer = setTimeout(async () => {
+        if (!isMounted || hasReceivedSSEState.current) {
+          return;
+        }
+
+        if (pollInFlight) {
+          scheduleFallbackPoll();
+          return;
+        }
+
+        pollInFlight = true;
+        try {
+          await fetchStateSnapshot(FALLBACK_POLL_TIMEOUT_MS, 'fallback-poll');
+        } finally {
+          pollInFlight = false;
+          if (!hasReceivedSSEState.current) {
+            scheduleFallbackPoll();
+          }
+        }
+      }, FALLBACK_POLL_INTERVAL_MS);
+    };
+
+    const bootstrapState = () => {
+      const delay = BOOTSTRAP_RETRY_DELAYS_MS[bootstrapAttempt];
+      if (delay === undefined) {
+        return;
+      }
+
+      bootstrapRetryTimer = setTimeout(async () => {
+        if (!isMounted || hasReceivedState.current) {
+          return;
+        }
+
+        await fetchStateSnapshot(BOOTSTRAP_TIMEOUT_MS, 'bootstrap');
+        if (!hasReceivedState.current) {
+          bootstrapAttempt += 1;
+          bootstrapState();
+        }
+      }, delay);
     };
 
     const connect = () => {
@@ -287,6 +364,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
           setError(null);
           setIsConnected(true);
           hasReceivedState.current = true;
+          hasReceivedSSEState.current = true;
           retryCount = 0; // Reset retry count on successful state
           console.log('[useAppState] State parsed and set successfully');
         } catch (e) {
@@ -349,15 +427,28 @@ export function useAppState(options: UseAppStateOptions = {}) {
     }, startupDelay);
 
     bootstrapState();
+    fallbackPollStartTimer = setTimeout(() => {
+      if (!hasReceivedSSEState.current) {
+        console.log('[useAppState] Starting fallback /api/state polling while SSE is not fully synced');
+        scheduleFallbackPoll();
+      }
+    }, FALLBACK_POLL_START_MS);
 
     return () => {
       console.log('[useAppState] Cleanup: closing SSE connection');
       isMounted = false;
       clearTimeout(initialDelay);
-      if (bootstrapTimer) {
-        clearTimeout(bootstrapTimer);
+      if (bootstrapRetryTimer) {
+        clearTimeout(bootstrapRetryTimer);
       }
-      bootstrapController?.abort();
+      if (fallbackPollStartTimer) {
+        clearTimeout(fallbackPollStartTimer);
+      }
+      if (fallbackPollTimer) {
+        clearTimeout(fallbackPollTimer);
+      }
+      clearRequestTimeout();
+      activeController?.abort();
       eventSource?.close();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

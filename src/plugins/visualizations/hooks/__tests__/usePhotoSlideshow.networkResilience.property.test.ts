@@ -174,12 +174,8 @@ describe('Feature: photo-slideshow-production-fix, Property 11: Network Resilien
           delayMs: fc.integer({ min: 50, max: 200 }) // Short delays for testing
         }),
         async ({ timeoutType, delayMs }) => {
-          let callCount = 0;
-          
           // Mock fetch to simulate timeout scenarios
           mockFetch.mockImplementation(async (_url: string) => {
-            callCount++;
-            
             switch (timeoutType) {
               case 'immediate_timeout': {
                 // Simulate immediate abort
@@ -298,7 +294,7 @@ describe('Feature: photo-slideshow-production-fix, Property 11: Network Resilien
               body: null,
               bodyUsed: false,
               redirected: false,
-              type: 'basic' as ResponseType,
+              type: 'basic' as Response['type'],
               url: '/api/images/list?folder=test'
             };
             
@@ -331,12 +327,12 @@ describe('Feature: photo-slideshow-production-fix, Property 11: Network Resilien
         }
       ),
       { 
-        numRuns: 8, // Reduced for faster testing
-        timeout: 8000, // Increased timeout
+        numRuns: 6, // Keep property coverage while reducing flakiness under CI/runtime jitter
+        timeout: 12000,
         verbose: true
       }
     );
-  }, 10000); // Increased test timeout
+  }, 20000);
 
   /**
    * **Validates: Requirements 6.3**

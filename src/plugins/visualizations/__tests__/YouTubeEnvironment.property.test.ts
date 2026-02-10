@@ -124,16 +124,18 @@ describe('Feature: youtube-player-production-fix, Property 3: Origin Validation 
 
           const resolver = new YouTubeEnvironmentResolver();
           const diagnostics = resolver.getDiagnosticInfo();
+          const environment = diagnostics.environment as { protocol?: string; origin?: string };
+          const timestamp = diagnostics.timestamp as number;
 
           // Should always have required diagnostic fields
           expect(diagnostics).toHaveProperty('environment');
           expect(diagnostics).toHaveProperty('timestamp');
           expect(diagnostics).toHaveProperty('userAgent');
           
-          expect(diagnostics.environment.protocol).toBe(protocol);
-          expect(diagnostics.environment.origin).toBe(origin);
-          expect(typeof diagnostics.timestamp).toBe('number');
-          expect(diagnostics.timestamp).toBeGreaterThan(0);
+          expect(environment.protocol).toBe(protocol);
+          expect(environment.origin).toBe(origin);
+          expect(typeof timestamp).toBe('number');
+          expect(timestamp).toBeGreaterThan(0);
 
           return true;
         }

@@ -43,6 +43,7 @@ export default [
         HTMLSpanElement: 'readonly',
         HTMLImageElement: 'readonly',
         HTMLVideoElement: 'readonly',
+        HTMLIFrameElement: 'readonly',
         HTMLCanvasElement: 'readonly',
         CanvasRenderingContext2D: 'readonly',
         NodeJS: 'readonly',
@@ -55,6 +56,13 @@ export default [
         KeyboardEvent: 'readonly',
         Image: 'readonly',
         localStorage: 'readonly',
+        AbortController: 'readonly',
+        DOMException: 'readonly',
+        ReadableStream: 'readonly',
+        TextEncoder: 'readonly',
+        Headers: 'readonly',
+        FormData: 'readonly',
+        navigator: 'readonly',
       },
     },
     plugins: {
@@ -107,4 +115,3 @@ export default [
     ignores: ['dist/**', 'node_modules/**', 'src-tauri/target/**', 'src-tauri/gen/**'],
   },
 ];
-

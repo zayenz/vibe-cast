@@ -208,6 +208,36 @@ describe('useAppState', () => {
     });
   });
 
+  it('retries bootstrap fetch when early requests fail', async () => {
+    mockFetch.mockRejectedValue(new Error('Temporary network failure'));
+
+    renderHook(() => useAppState());
+
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+      });
+    }
+
+    expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('starts fallback polling when SSE state is unavailable', async () => {
+    mockFetch.mockRejectedValue(new Error('State endpoint temporarily unavailable'));
+
+    renderHook(() => useAppState());
+
+    for (let i = 0; i < 8; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+      });
+    }
+
+    expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
   it('does not override SSE state with bootstrap fetch', async () => {
     mockFetch.mockImplementation(
       () =>
