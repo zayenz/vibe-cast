@@ -5,11 +5,11 @@ use axum::{
         Html, IntoResponse, Response,
     },
     routing::{get, post},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     Json, Router,
 };
-use futures::{stream::Stream, StreamExt};
-use serde::Serialize;
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -275,6 +275,64 @@ struct AppState {
     app_handle: AppHandle,
     app_state_sync: Arc<AppStateSync>,
     dist_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SseQueryParams {
+    client_id: Option<String>,
+    session_start_ms: Option<u64>,
+    compact: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct StateQueryParams {
+    compact: Option<String>,
+}
+
+fn parse_truthy_flag(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|flag| flag.trim().to_ascii_lowercase()),
+        Some(flag) if flag == "1" || flag == "true" || flag == "yes" || flag == "on"
+    )
+}
+
+fn compact_message_stats(message_stats: &serde_json::Value) -> serde_json::Value {
+    let Some(stats_object) = message_stats.as_object() else {
+        return serde_json::json!({});
+    };
+
+    let mut compact_object = serde_json::Map::with_capacity(stats_object.len());
+
+    for (message_id, raw_stats) in stats_object {
+        let trigger_count = raw_stats
+            .get("triggerCount")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let last_triggered = raw_stats
+            .get("lastTriggered")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+
+        compact_object.insert(
+            message_id.clone(),
+            serde_json::json!({
+                "messageId": message_id,
+                "triggerCount": trigger_count,
+                "lastTriggered": last_triggered
+            }),
+        );
+    }
+
+    serde_json::Value::Object(compact_object)
+}
+
+fn compact_broadcast_state(mut state: BroadcastState) -> BroadcastState {
+    state.message_stats = compact_message_stats(&state.message_stats);
+    state.text_style_settings = serde_json::json!({});
+    state.text_style_presets = Vec::new();
+    state
 }
 
 pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSync>, port: u16) {
@@ -556,16 +614,30 @@ async fn serve_spa(State(state): State<AppState>) -> impl IntoResponse {
     match tokio::fs::read_to_string(&index_path).await {
         Ok(content) => {
             eprintln!("[serve_spa] Successfully read index.html ({} bytes)", content.len());
-            Html(content)
+            (
+                [
+                    (header::CACHE_CONTROL, HeaderValue::from_static("no-store, max-age=0")),
+                    (header::PRAGMA, HeaderValue::from_static("no-cache")),
+                    (header::EXPIRES, HeaderValue::from_static("0")),
+                ],
+                Html(content),
+            )
         },
         Err(e) => {
             eprintln!("[serve_spa] ERROR reading index.html: {}", e);
             eprintln!("[serve_spa] Path: {:?}", index_path);
             eprintln!("[serve_spa] Dist path exists: {}", state.dist_path.exists());
-            Html(format!(
-                "<html><body><h1>VibeCast</h1><p>Error: Could not load frontend: {}</p><p>Path: {:?}</p></body></html>",
-                e, index_path
-            ))
+            (
+                [
+                    (header::CACHE_CONTROL, HeaderValue::from_static("no-store, max-age=0")),
+                    (header::PRAGMA, HeaderValue::from_static("no-cache")),
+                    (header::EXPIRES, HeaderValue::from_static("0")),
+                ],
+                Html(format!(
+                    "<html><body><h1>VibeCast</h1><p>Error: Could not load frontend: {}</p><p>Path: {:?}</p></body></html>",
+                    e, index_path
+                )),
+            )
         },
     }
 }
@@ -1171,10 +1243,19 @@ async fn handle_command(
     Json(serde_json::json!({ "status": "ok" }))
 }
 
-async fn get_state(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn get_state(
+    State(state): State<AppState>,
+    Query(query): Query<StateQueryParams>,
+) -> Json<serde_json::Value> {
+    let compact_mode = parse_truthy_flag(query.compact.as_deref());
     let current = state.app_state_sync.get_state();
+    let response_state = if compact_mode {
+        compact_broadcast_state(current)
+    } else {
+        current
+    };
     // Return full state for SSE compatibility
-    Json(serde_json::to_value(&current).unwrap_or(serde_json::json!({})))
+    Json(serde_json::to_value(&response_state).unwrap_or(serde_json::json!({})))
 }
 
 async fn get_status() -> Json<serde_json::Value> {
@@ -1203,17 +1284,33 @@ async fn get_last_e2e_report(State(state): State<AppState>) -> Json<Option<E2ERe
 /// SSE endpoint that streams state updates to clients
 async fn state_events(
     State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    Query(query): Query<SseQueryParams>,
+) -> impl IntoResponse {
+    let compact_mode = parse_truthy_flag(query.compact.as_deref());
     println!("[SSE] ========================================");
-    println!("[SSE] Client connected! New SSE subscription");
+    println!(
+        "[SSE] Client connected! New SSE subscription (clientId={:?}, sessionStartMs={:?}, compact={})",
+        query.client_id,
+        query.session_start_ms,
+        compact_mode
+    );
     println!("[SSE] ========================================");
     // Subscribe to the broadcast channels
     let rx_state = state.app_state_sync.state_tx.subscribe();
     let rx_command = state.app_state_sync.command_tx.subscribe();
     
     // Send initial state immediately so clients don't have to wait
-    let initial_state = state.app_state_sync.get_state();
-    println!("[SSE] Prepared initial state for client");
+    let initial_state = if compact_mode {
+        compact_broadcast_state(state.app_state_sync.get_state())
+    } else {
+        state.app_state_sync.get_state()
+    };
+    let initial_state_payload = serde_json::to_string(&initial_state).unwrap_or_default();
+    println!(
+        "[SSE] Prepared initial state for client (payloadBytes={}, compact={})",
+        initial_state_payload.len(),
+        compact_mode
+    );
     
     // Convert broadcast receiver to a stream, mapping directly to SSE events
     // filter_map skips lagged errors (when client is slower than broadcast rate)
@@ -1224,11 +1321,16 @@ async fn state_events(
             }
             result.ok() 
         })
-        .map(|broadcast_state: BroadcastState| -> Result<Event, Infallible> {
+        .map(move |broadcast_state: BroadcastState| -> Result<Event, Infallible> {
+            let outgoing_state = if compact_mode {
+                compact_broadcast_state(broadcast_state)
+            } else {
+                broadcast_state
+            };
             println!("[SSE] Broadcasting state update to client");
             Ok(Event::default()
                 .event("state")
-                .data(serde_json::to_string(&broadcast_state).unwrap_or_default()))
+                .data(serde_json::to_string(&outgoing_state).unwrap_or_default()))
         });
         
     let command_stream = BroadcastStream::new(rx_command)
@@ -1244,23 +1346,39 @@ async fn state_events(
                 .event("command")
                 .data(serde_json::to_string(&command).unwrap_or_default()))
         });
-    
+
+    // Send an immediate lightweight event to flush headers/chunks early on Safari.
+    let connected_event = futures::stream::once(async move {
+        println!("[SSE] Sending lightweight connected event");
+        Ok(Event::default()
+            .event("connected")
+            .data("{}"))
+    });
+
     // Prepend with initial state
     let initial_event = futures::stream::once(async move {
         println!("[SSE] Sending initial state to newly connected client");
         Ok(Event::default()
             .event("state")
-            .data(serde_json::to_string(&initial_state).unwrap_or_default()))
+            .data(initial_state_payload))
     });
-    
+
     // Merge streams
-    let combined_stream = initial_event
+    let combined_stream = connected_event
+        .chain(initial_event)
         .chain(futures::stream::select(state_stream, command_stream));
-    
+
     println!("[SSE] SSE stream configured, starting to send events...");
-    
-    Sse::new(combined_stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+
+    let sse = Sse::new(combined_stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)).text("ping"));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache, no-transform"));
+    headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+    headers.insert(header::HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no"));
+
+    (headers, sse)
 }
 #[cfg(test)]
 mod tests {
@@ -1308,6 +1426,69 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json_response.0.code, "FOLDER_NOT_FOUND");
         assert!(json_response.0.details.is_some());
+    }
+
+    #[test]
+    fn test_parse_truthy_flag_accepts_common_truthy_values() {
+        assert!(parse_truthy_flag(Some("1")));
+        assert!(parse_truthy_flag(Some("true")));
+        assert!(parse_truthy_flag(Some("YES")));
+        assert!(parse_truthy_flag(Some(" on ")));
+        assert!(!parse_truthy_flag(Some("0")));
+        assert!(!parse_truthy_flag(Some("false")));
+        assert!(!parse_truthy_flag(None));
+    }
+
+    #[test]
+    fn test_compact_broadcast_state_strips_history_and_text_style_payloads() {
+        let app_state = AppStateSync::new();
+
+        if let Ok(mut text_style_settings) = app_state.text_style_settings.lock() {
+            *text_style_settings = serde_json::json!({
+                "credits": { "fontSize": 4, "color": "#fff" }
+            });
+        }
+
+        if let Ok(mut text_style_presets) = app_state.text_style_presets.lock() {
+            *text_style_presets = vec![TextStylePreset {
+                id: "credits-default".to_string(),
+                name: "Credits Default".to_string(),
+                text_style_id: "credits".to_string(),
+                settings: serde_json::json!({ "fontSize": 4 }),
+            }];
+        }
+
+        if let Ok(mut message_stats) = app_state.message_stats.lock() {
+            *message_stats = serde_json::json!({
+                "msg-1": {
+                    "messageId": "msg-1",
+                    "triggerCount": 7,
+                    "lastTriggered": 123456,
+                    "history": [
+                        { "timestamp": 123450 },
+                        { "timestamp": 123456 }
+                    ]
+                }
+            });
+        }
+
+        let full_state = app_state.get_state();
+        let compact_state = compact_broadcast_state(full_state.clone());
+
+        assert_eq!(compact_state.text_style_settings, serde_json::json!({}));
+        assert!(compact_state.text_style_presets.is_empty());
+        assert_eq!(compact_state.message_stats["msg-1"]["triggerCount"], 7);
+        assert_eq!(compact_state.message_stats["msg-1"]["lastTriggered"], 123456);
+        assert!(compact_state.message_stats["msg-1"].get("history").is_none());
+
+        let full_size = serde_json::to_vec(&full_state).unwrap().len();
+        let compact_size = serde_json::to_vec(&compact_state).unwrap().len();
+        assert!(
+            compact_size < full_size,
+            "compact state should serialize smaller than full state (full={}, compact={})",
+            full_size,
+            compact_size
+        );
     }
 
     // Property-based test generators

@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import { useFetcher } from 'react-router-dom';
 import { Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
-import { useAppState } from '../hooks/useAppState';
-import { CommonSettings } from './settings/SettingsRenderer';
+import { useAppState, useSendCommand } from '../hooks/useAppState';
 import { MessageConfig, VisualizationPreset, MessageTreeNode } from '../plugins/types';
 import { getIcon } from '../utils/iconSet';
 
@@ -11,7 +9,8 @@ const API_BASE = '';
 
 export const RemoteControl: React.FC = () => {
   // SSE-based state - single source of truth for everything
-  const { state, isConnected, error } = useAppState({ apiBase: API_BASE });
+  const { state, isConnected, error, connectionPhase } = useAppState({ apiBase: API_BASE });
+  const { sendCommand: sendCommandRequest, isPending } = useSendCommand({ apiBase: API_BASE });
   
   // Get presets from SSE state (not local store - remote runs in browser without Tauri)
   const allVisualizationPresets: VisualizationPreset[] = state?.visualizationPresets ?? [];
@@ -19,11 +18,12 @@ export const RemoteControl: React.FC = () => {
   const visualizationPresets = allVisualizationPresets.filter(p => p.enabled !== false);
   const activeVisualizationPreset: string | null = state?.activeVisualizationPreset ?? null;
   
-  // Fetcher for form submissions
-  const fetcher = useFetcher();
-  
   // Local UI state
   const [showSettings, setShowSettings] = useState(false);
+  const [pendingPresetSelection, setPendingPresetSelection] = useState<{
+    id: string | null;
+    baseServerPreset: string | null;
+  } | null>(null);
   
   // Derive values with defaults
   const commonSettings = state?.commonSettings ?? { intensity: 1.0, dim: 1.0 };
@@ -32,7 +32,10 @@ export const RemoteControl: React.FC = () => {
   const messageStats = state?.messageStats ?? {};
   const triggeredMessage = state?.triggeredMessage ?? null;
   const playbackControl = state?.playbackControl ?? null;
-  const isPending = fetcher.state !== 'idle';
+  const effectiveActiveVisualizationPreset =
+    pendingPresetSelection && pendingPresetSelection.baseServerPreset === activeVisualizationPreset
+      ? pendingPresetSelection.id
+      : activeVisualizationPreset;
   
   // Folder playback queue from SSE state
   type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
@@ -45,7 +48,7 @@ export const RemoteControl: React.FC = () => {
   const currentMessageId = playbackControl?.currentMessage?.id ?? triggeredMessage?.id ?? queueActiveId;
   const activeMessageIds = currentMessageId ? [currentMessageId] : [];
   const queueIsActive = !!(folderPlaybackQueue && queueActiveId && activeMessageIds.includes(queueActiveId));
-  
+
   // Filter to show only active visualization preset
   // Helper to render message tree with folders
   const renderMessageTree = (nodes: MessageTreeNode[], depth = 0): React.ReactNode => {
@@ -189,12 +192,11 @@ export const RemoteControl: React.FC = () => {
     });
   };
 
-  // Helper to send commands via fetcher
+  // Helper to send commands directly to the API.
   const sendCommand = (command: string, payload: unknown) => {
-    fetcher.submit(
-      { command, payload: JSON.stringify(payload) },
-      { method: 'post', action: '/' }
-    );
+    void sendCommandRequest(command, payload).catch((commandError) => {
+      console.error(`[RemoteControl] Command failed (${command}):`, commandError);
+    });
   };
 
   const handleTriggerMessage = (msg: MessageConfig, isPlaying?: boolean) => {
@@ -206,8 +208,8 @@ export const RemoteControl: React.FC = () => {
     sendCommand('trigger-message', msg);
   };
 
-  // Show loading state while waiting for first SSE event
-  if (!state && !error) {
+  // Show blocking loading state only during the initial connection phase.
+  if (!state && !error && connectionPhase === 'connecting') {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -237,9 +239,18 @@ export const RemoteControl: React.FC = () => {
   }
 
   const handleSetActivePreset = (id: string | null) => {
-    // Only send command - SSE will update the state
-    sendCommand('set-active-visualization-preset', id);
+    const optimisticSelection = {
+      id,
+      baseServerPreset: activeVisualizationPreset,
+    };
+    setPendingPresetSelection(optimisticSelection);
+    void sendCommandRequest('set-active-visualization-preset', id).catch((commandError) => {
+      console.error('[RemoteControl] Command failed (set-active-visualization-preset):', commandError);
+      setPendingPresetSelection((current) => (current === optimisticSelection ? null : current));
+    });
   };
+
+  const isLiveConnection = connectionPhase === 'live' && isConnected;
 
   return (
     <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-y-auto">
@@ -253,14 +264,19 @@ export const RemoteControl: React.FC = () => {
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`} />
+              <div className={`w-2 h-2 rounded-full ${isLiveConnection ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`} />
               <span className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">
-                {isConnected ? 'Live' : 'Reconnecting...'}
+                {isLiveConnection ? 'Live' : 'Reconnecting...'}
               </span>
             </div>
             <h1 className="text-4xl font-black uppercase tracking-tighter italic bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent">
               Remote
             </h1>
+            {!state && (
+              <p className="mt-2 text-[11px] text-zinc-500 uppercase tracking-[0.18em]">
+                Waiting for live state
+              </p>
+            )}
           </div>
           <button
             onClick={() => setShowSettings(!showSettings)}
@@ -296,7 +312,7 @@ export const RemoteControl: React.FC = () => {
         <div className="grid gap-4 grid-cols-2">
           {visualizationPresets.length > 0 ? (
             visualizationPresets.map((preset) => {
-              const active = activeVisualizationPreset === preset.id;
+              const active = effectiveActiveVisualizationPreset === preset.id;
               return (
                 <RemoteVizCard 
                   key={preset.id}
@@ -367,6 +383,81 @@ export const RemoteControl: React.FC = () => {
       <footer className="relative text-center pb-4">
         <p className="text-zinc-800 text-[9px] font-black uppercase tracking-[0.5em]">Viz Controller v3.0</p>
       </footer>
+    </div>
+  );
+};
+
+interface CommonSettingsProps {
+  intensity: number;
+  dim: number;
+  onIntensityChange: (value: number) => void;
+  onDimChange: (value: number) => void;
+}
+
+const CommonSettings: React.FC<CommonSettingsProps> = ({
+  intensity,
+  dim,
+  onIntensityChange,
+  onDimChange,
+}) => {
+  return (
+    <div className="space-y-4">
+      <RemoteRangeSetting
+        label="Intensity"
+        min={0}
+        max={1}
+        step={0.05}
+        value={intensity}
+        onChange={onIntensityChange}
+      />
+      <RemoteRangeSetting
+        label="Dim"
+        min={0}
+        max={1}
+        step={0.05}
+        value={dim}
+        onChange={onDimChange}
+      />
+    </div>
+  );
+};
+
+interface RemoteRangeSettingProps {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (value: number) => void;
+}
+
+const RemoteRangeSetting: React.FC<RemoteRangeSettingProps> = ({
+  label,
+  min,
+  max,
+  step,
+  value,
+  onChange,
+}) => {
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-center">
+        <label className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
+          {label}
+        </label>
+        <span className="text-xs font-mono text-zinc-500">
+          {value.toFixed(2)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(parseFloat(event.target.value))}
+        className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
+      />
     </div>
   );
 };

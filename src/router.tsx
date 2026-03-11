@@ -10,6 +10,24 @@
  * and consistent data patterns between Control Plane and Remote Control.
  */
 
+let tauriApiBasePromise: Promise<string> | null = null;
+
+async function resolveCommandApiBase(): Promise<string> {
+  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+  if (!isTauri) {
+    return '';
+  }
+
+  tauriApiBasePromise ??= import('@tauri-apps/api/core')
+    .then(async ({ invoke }) => {
+      const info = await invoke<{ port: number }>('get_server_info');
+      return `http://127.0.0.1:${info.port}`;
+    })
+    .catch(() => 'http://127.0.0.1:8080');
+
+  return tauriApiBasePromise;
+}
+
 // Command action - shared between Control Plane and Remote Control
 export async function commandAction({ request }: { request: Request }) {
   const formData = await request.formData();
@@ -28,10 +46,10 @@ export async function commandAction({ request }: { request: Request }) {
   }
 
   // Determine API base URL and device type
-  // In Tauri windows, we need to hit localhost:8080 (Control Plane)
-  // In browser (remote), we're already on that origin (Mobile Remote)
+  // In Tauri windows, resolve the active backend port dynamically because the
+  // server may bind anywhere in the configured port range.
   const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
-  const apiBase = isTauri ? 'http://127.0.0.1:8080' : '';
+  const apiBase = await resolveCommandApiBase();
   const deviceType = isTauri ? 'control_plane' : 'mobile_remote';
 
   const response = await fetch(`${apiBase}/api/command`, {
@@ -50,4 +68,3 @@ export async function commandAction({ request }: { request: Request }) {
 
 // Router is created dynamically in App.tsx based on window context
 // This file exports the shared action handler
-

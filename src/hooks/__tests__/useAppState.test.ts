@@ -16,6 +16,7 @@ describe('useAppState', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   it('starts in loading state', () => {
@@ -24,6 +25,8 @@ describe('useAppState', () => {
     expect(result.current.state).toBeNull();
     expect(result.current.isConnected).toBe(false);
     expect(result.current.error).toBeNull();
+    expect(result.current.connectionPhase).toBe('connecting');
+    expect(result.current.hydrationSource).toBeNull();
   });
 
   it('connects to SSE and receives initial state', async () => {
@@ -41,7 +44,9 @@ describe('useAppState', () => {
     const sse = MockEventSource.getLatest();
     expect(sse).toBeDefined();
     // In jsdom, window.location.origin is 'http://localhost:3000', so the SSE URL includes the origin
-    expect(sse?.url).toBe('http://localhost:3000/api/events');
+    expect(sse?.url).toContain('http://localhost:3000/api/events?');
+    expect(sse?.url).toContain('clientId=');
+    expect(sse?.url).toContain('sessionStartMs=');
 
     // Simulate receiving state
     await act(async () => {
@@ -62,6 +67,8 @@ describe('useAppState', () => {
         ],
       }));
       expect(result.current.isConnected).toBe(true);
+      expect(result.current.connectionPhase).toBe('live');
+      expect(result.current.hydrationSource).toBe('sse');
     });
   });
 
@@ -95,6 +102,45 @@ describe('useAppState', () => {
       expect(result.current.state?.messages).toEqual([
         { id: '0', text: 'New', textStyle: 'scrolling-capitals' },
       ]);
+    });
+  });
+
+  it('applies active preset updates from command events before full state broadcast', async () => {
+    const { result } = renderHook(() => useAppState());
+
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+      vi.advanceTimersByTime(10);
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', {
+        activeVisualization: 'fireplace',
+        visualizationPresets: [
+          { id: 'preset-1', name: 'Fireplace Default', visualizationId: 'fireplace', settings: {}, enabled: true },
+          { id: 'preset-2', name: 'Techno Default', visualizationId: 'techno', settings: {}, enabled: true },
+        ],
+        activeVisualizationPreset: 'preset-1',
+        messages: [],
+        commonSettings: { intensity: 1.0, dim: 1.0 },
+        textStyleSettings: {},
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.activeVisualizationPreset).toBe('preset-1');
+      expect(result.current.state?.activeVisualization).toBe('fireplace');
+    });
+
+    await act(async () => {
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('command', {
+        command: 'set-active-visualization-preset',
+        payload: 'preset-2',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state?.activeVisualizationPreset).toBe('preset-2');
+      expect(result.current.state?.activeVisualization).toBe('techno');
     });
   });
 
@@ -139,7 +185,57 @@ describe('useAppState', () => {
     // Verify EventSource was created with correct URL
     const sse = MockEventSource.instances[0];
     expect(sse).toBeDefined();
-    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
+    expect(sse?.url).toContain('http://127.0.0.1:8080/api/events?');
+  });
+
+  it('requests compact browser snapshots while waiting for SSE state', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ mode: 'fireplace', messages: ['Compact'] }),
+    });
+
+    renderHook(() => useAppState());
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:3000/api/state?compact=1',
+      expect.objectContaining({
+        cache: 'no-store',
+      }),
+    );
+  });
+
+  it('omits compact query parameters for Tauri windows', async () => {
+    (window as any).__TAURI_INTERNALS__ = {};
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ mode: 'fireplace', messages: ['Desktop'] }),
+    });
+
+    renderHook(() => useAppState({ apiBase: 'http://127.0.0.1:8091' }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+
+    const sse = MockEventSource.getLatest();
+    expect(sse?.url).toContain('http://127.0.0.1:8091/api/events?');
+    expect(sse?.url).not.toContain('compact=1');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8091/api/state',
+      expect.objectContaining({
+        cache: 'no-store',
+      }),
+    );
   });
 
   it('cleans up SSE connection on unmount', async () => {
@@ -204,6 +300,44 @@ describe('useAppState', () => {
       expect(result.current.state?.activeVisualization).toBe('fireplace');
       expect(result.current.state?.messages).toEqual([
         { id: '0', text: 'Hello', textStyle: 'scrolling-capitals' },
+      ]);
+      expect(result.current.connectionPhase).toBe('degraded');
+      expect(result.current.hydrationSource).toBe('bootstrap');
+    });
+  });
+
+  it('enters degraded phase after 2 seconds without state', async () => {
+    const { result } = renderHook(() => useAppState());
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionPhase).toBe('degraded');
+      expect(result.current.state).toBeNull();
+    });
+  });
+
+  it('transitions from degraded to live when first SSE state arrives', async () => {
+    const { result } = renderHook(() => useAppState());
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+
+    expect(result.current.connectionPhase).toBe('degraded');
+
+    await act(async () => {
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', { mode: 'techno', messages: ['Recovered'] });
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionPhase).toBe('live');
+      expect(result.current.hydrationSource).toBe('sse');
+      expect(result.current.state?.messages).toEqual([
+        { id: '0', text: 'Recovered', textStyle: 'scrolling-capitals' },
       ]);
     });
   });

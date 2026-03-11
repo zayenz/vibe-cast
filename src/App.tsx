@@ -1,33 +1,11 @@
 import { useEffect, useState, lazy, Suspense } from "react";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { commandAction } from "./router";
 import "./App.css";
 
 // Lazy load components to ensure Tauri-specific code is only loaded when needed.
-const ControlPlane = lazy(() => import("./components/ControlPlane").then(module => ({ default: module.ControlPlane })));
+const ControlPlaneRouter = lazy(() => import("./components/ControlPlaneRouter").then(module => ({ default: module.ControlPlaneRouter })));
 const VisualizerWindow = lazy(() => import("./components/VisualizerWindow").then(module => ({ default: module.VisualizerWindow })));
 const RemoteControl = lazy(() => import("./components/RemoteControl").then(module => ({ default: module.RemoteControl })));
-
-/**
- * Create router with the appropriate component based on context.
- * The router provides useFetcher infrastructure even for single-page views.
- */
-function createAppRouter(component: React.ReactNode) {
-  return createBrowserRouter([
-    {
-      path: "/",
-      element: component,
-      action: commandAction,
-    },
-    {
-      // Catch-all for any other paths
-      path: "*",
-      element: component,
-      action: commandAction,
-    },
-  ]);
-}
 
 function App() {
   const [view, setView] = useState<"loading" | "viz" | "control" | "remote">("loading");
@@ -84,16 +62,23 @@ function App() {
     );
   }
 
-  // Both Control Plane and Remote Control use the router.
-  const router = createAppRouter(
+  if (view === "remote") {
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={LoadingScreen}>
+          <RemoteControl />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  return (
     <ErrorBoundary>
       <Suspense fallback={LoadingScreen}>
-        {view === "control" ? <ControlPlane /> : <RemoteControl />}
+        <ControlPlaneRouter />
       </Suspense>
     </ErrorBoundary>
   );
-
-  return <RouterProvider router={router} />;
 }
 
 export default App;

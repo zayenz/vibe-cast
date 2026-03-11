@@ -1,24 +1,14 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { RemoteControl } from '../RemoteControl';
 import { MockEventSource } from '../../test/mocks/sse';
-import { commandAction } from '../../router';
 
 // Mock fetch for command submissions
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 function renderRemoteControl() {
-  const router = createMemoryRouter([
-    {
-      path: '/',
-      element: <RemoteControl />,
-      action: commandAction,
-    },
-  ]);
-
-  return render(<RouterProvider router={router} />);
+  return render(<RemoteControl />);
 }
 
 // Helper to create mock state with presets (include playbackControl/messageTree so RemoteControl has full state shape)
@@ -60,6 +50,20 @@ describe('RemoteControl', () => {
   it('shows loading state initially', () => {
     renderRemoteControl();
     expect(screen.getByText('Connecting...')).toBeInTheDocument();
+  });
+
+  it('exits blocking loader after 2 seconds even without state', async () => {
+    renderRemoteControl();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Remote')).toBeInTheDocument();
+      expect(screen.queryByText('Connecting...')).not.toBeInTheDocument();
+      expect(screen.getByText('Reconnecting...')).toBeInTheDocument();
+    });
   });
 
   it('renders correctly after SSE connects', async () => {
@@ -121,6 +125,40 @@ describe('RemoteControl', () => {
           body: expect.stringContaining('set-active-visualization-preset'),
         })
       );
+    });
+  });
+
+  it('keeps optimistic highlight while waiting for SSE confirmation', async () => {
+    renderRemoteControl();
+
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+      const sse = MockEventSource.getLatest();
+      sse?.simulateEvent('state', createMockState({ activeVisualizationPreset: 'preset-1' }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Techno Default')).toBeInTheDocument();
+    });
+
+    const fireplaceButton = screen.getByText('Fireplace Default').closest('button');
+    const technoButton = screen.getByText('Techno Default').closest('button');
+    expect(fireplaceButton?.className).toContain('bg-orange-500');
+    expect(technoButton?.className).not.toContain('bg-orange-500');
+
+    fireEvent.click(technoButton!);
+
+    // Optimistic highlight should apply immediately.
+    expect(technoButton?.className).toContain('bg-orange-500');
+
+    // Without SSE confirmation, optimistic highlight should remain.
+    await act(async () => {
+      vi.advanceTimersByTime(1600);
+    });
+
+    await waitFor(() => {
+      expect(technoButton?.className).toContain('bg-orange-500');
+      expect(fireplaceButton?.className).not.toContain('bg-orange-500');
     });
   });
 
