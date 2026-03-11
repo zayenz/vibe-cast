@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Marquee } from '../Marquee';
 import { useStore } from '../../store';
 
@@ -17,6 +17,14 @@ vi.mock('framer-motion', () => ({
 }));
 
 describe('Marquee', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders nothing when there is no active message', () => {
     (useStore as any).mockImplementation((selector: any) => 
       selector({ activeMessage: null, messageTimestamp: 0 })
@@ -30,11 +38,12 @@ describe('Marquee', () => {
       selector({ activeMessage: 'Hello!', messageTimestamp: Date.now() })
     );
     render(<Marquee />);
-    
-    // Wait for the component to show the message after internal delay
-    await waitFor(() => {
-      expect(screen.getByText('Hello!')).toBeInTheDocument();
-    }, { timeout: 200 });
+
+    await act(async () => {
+      vi.advanceTimersByTime(60);
+    });
+
+    expect(screen.getByText('Hello!')).toBeInTheDocument();
   });
 
   it('initially shows nothing even with active message due to internal delay', () => {

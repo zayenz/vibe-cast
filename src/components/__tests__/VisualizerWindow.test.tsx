@@ -23,6 +23,7 @@ describe('VisualizerWindow', () => {
     vi.clearAllMocks();
     vi.resetModules();
     MockEventSource.reset();
+    (window as any).__TAURI_INTERNALS__ = {};
     
     // Default fetch mock
     mockFetch.mockResolvedValue({
@@ -37,6 +38,7 @@ describe('VisualizerWindow', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   /**
@@ -131,7 +133,8 @@ describe('VisualizerWindow', () => {
     expect(sse).toBeDefined();
     // After invoke resolves with port 8080, the SSE connects to the resolved URL
     // (invoke always succeeds in test env, overriding the initial empty apiBase)
-    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
+    expect(sse?.url).toContain('http://127.0.0.1:8080/api/events?');
+    expect(sse?.url).not.toContain('compact=1');
   });
 
   it('uses absolute API path in Development mode', async () => {
@@ -152,6 +155,7 @@ describe('VisualizerWindow', () => {
     expect(sse).toBeDefined();
     // In dev (DEV=true), initial apiBase is 'http://127.0.0.1:8080'
     // After invoke resolves, it's confirmed as 'http://127.0.0.1:8080'
-    expect(sse?.url).toBe('http://127.0.0.1:8080/api/events');
+    expect(sse?.url).toContain('http://127.0.0.1:8080/api/events?');
+    expect(sse?.url).not.toContain('compact=1');
   });
 });

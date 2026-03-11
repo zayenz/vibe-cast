@@ -9,6 +9,28 @@ import { commandAction } from '../../router';
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+const createMockState = (overrides: Record<string, unknown> = {}) => ({
+  activeVisualization: 'fireplace',
+  enabledVisualizations: ['fireplace', 'techno'],
+  commonSettings: { intensity: 1.0, dim: 1.0 },
+  visualizationSettings: {},
+  visualizationPresets: [
+    { id: 'preset-1', name: 'Fireplace Default', visualizationId: 'fireplace', settings: {}, enabled: true },
+    { id: 'preset-2', name: 'Techno Default', visualizationId: 'techno', settings: {}, enabled: true },
+  ],
+  activeVisualizationPreset: 'preset-1',
+  messages: [],
+  messageTree: [],
+  triggeredMessage: null,
+  messageStats: {},
+  folderPlaybackQueue: null,
+  playbackControl: null,
+  defaultTextStyle: 'scrolling-capitals',
+  textStyleSettings: {},
+  textStylePresets: [],
+  ...overrides,
+});
+
 function renderControlPlane() {
   const router = createMemoryRouter([
     {
@@ -26,6 +48,7 @@ describe('ControlPlane', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
+    (window as any).__TAURI_INTERNALS__ = {};
     
     // Default mock for fetch
     mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
@@ -38,6 +61,7 @@ describe('ControlPlane', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   it('shows loading state initially', () => {
@@ -53,10 +77,9 @@ describe('ControlPlane', () => {
     await act(async () => { vi.advanceTimersByTime(10); });
     await act(async () => {
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', {
-        mode: 'fireplace',
-        messages: ['Test Message'],
-      });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: 'msg-1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -75,7 +98,7 @@ describe('ControlPlane', () => {
     await act(async () => {
       vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+      sse?.simulateEvent('state', createMockState());
     });
 
     await waitFor(() => {
@@ -90,7 +113,7 @@ describe('ControlPlane', () => {
     await act(async () => {
       vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: [] });
+      sse?.simulateEvent('state', createMockState());
     });
 
     await waitFor(() => {
@@ -117,7 +140,9 @@ describe('ControlPlane', () => {
     await act(async () => {
       vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Hello World'] });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: 'msg-1', text: 'Hello World', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -201,7 +226,9 @@ describe('ControlPlane', () => {
     await act(async () => {
       vi.advanceTimersByTime(600);
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'fireplace', messages: ['Initial'] });
+      sse?.simulateEvent('state', createMockState({
+        messages: [{ id: 'msg-1', text: 'Initial', textStyle: 'scrolling-capitals' }],
+      }));
     });
 
     await waitFor(() => {
@@ -211,7 +238,14 @@ describe('ControlPlane', () => {
     // Simulate mode change from SSE
     await act(async () => {
       const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', { mode: 'techno', messages: ['Initial', 'New Message'] });
+      sse?.simulateEvent('state', createMockState({
+        activeVisualization: 'techno',
+        activeVisualizationPreset: 'preset-2',
+        messages: [
+          { id: 'msg-1', text: 'Initial', textStyle: 'scrolling-capitals' },
+          { id: 'msg-2', text: 'New Message', textStyle: 'scrolling-capitals' },
+        ],
+      }));
     });
 
     await waitFor(() => {

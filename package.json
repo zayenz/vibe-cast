@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --ext .ts,.tsx",
-    "lint:fix": "eslint . --ext .ts,.tsx --fix"
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "perf:remote-bundle-report": "node scripts/remote_bundle_report.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
