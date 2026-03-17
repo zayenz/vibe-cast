@@ -6,7 +6,8 @@ use tokio::sync::broadcast;
 use vibe_cast_models::{
     MessageConfig, VisualizationPreset, TextStylePreset, 
     CommonSettings, FolderPlaybackQueue, BroadcastState, E2EReport, RemoteCommand,
-    PlaybackControlState, DeviceType, MessageInfo, PlaybackCommand
+    PlaybackControlState, DeviceType, MessageInfo, PlaybackCommand,
+    RemoteMessageStats, RemoteStateV2, RemoteVisualizationPreset,
 };
 
 fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
@@ -45,8 +46,54 @@ fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
     out
 }
 
+fn build_flat_message_tree_value(messages: &[MessageConfig]) -> serde_json::Value {
+    serde_json::Value::Array(
+        messages
+            .iter()
+            .map(|message| serde_json::json!({
+                "type": "message",
+                "id": message.id,
+                "message": message,
+            }))
+            .collect(),
+    )
+}
+
+fn compact_message_stats_map(
+    message_stats: &serde_json::Value,
+) -> std::collections::HashMap<String, RemoteMessageStats> {
+    let Some(stats_object) = message_stats.as_object() else {
+        return std::collections::HashMap::new();
+    };
+
+    stats_object
+        .iter()
+        .map(|(message_id, raw_stats)| {
+            let trigger_count = raw_stats
+                .get("triggerCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0) as u32;
+            let last_triggered = raw_stats
+                .get("lastTriggered")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+
+            (
+                message_id.clone(),
+                RemoteMessageStats {
+                    message_id: message_id.clone(),
+                    trigger_count,
+                    last_triggered,
+                },
+            )
+        })
+        .collect()
+}
+
 /// Shared application state for syncing between windows and the remote
 pub struct AppStateSync {
+    pub config_revision: Mutex<u64>,
+    pub runtime_revision: Mutex<u64>,
     pub active_visualization: Mutex<String>,
     pub enabled_visualizations: Mutex<Vec<String>>,
     pub common_settings: Mutex<CommonSettings>,
@@ -70,6 +117,8 @@ pub struct AppStateSync {
     pub playback_control: Mutex<PlaybackControlState>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
+    /// Broadcast channel for the lightweight remote contract.
+    pub remote_state_tx: broadcast::Sender<RemoteStateV2>,
     /// Broadcast channel for commands - sends transient commands (like report-status)
     pub command_tx: broadcast::Sender<RemoteCommand>,
 }
@@ -83,6 +132,7 @@ impl Default for AppStateSync {
 impl AppStateSync {
     pub fn new() -> Self {
         let (state_tx, _) = broadcast::channel(64);
+        let (remote_state_tx, _) = broadcast::channel(64);
         let (command_tx, _) = broadcast::channel(64);
         
         // Default messages
@@ -287,6 +337,8 @@ impl AppStateSync {
         ];
         
         Self {
+            config_revision: Mutex::new(0),
+            runtime_revision: Mutex::new(0),
             active_visualization: Mutex::new("fireplace".to_string()),
             enabled_visualizations: Mutex::new(vec!["fireplace".to_string(), "techno".to_string()]),
             common_settings: Mutex::new(CommonSettings::default()),
@@ -306,12 +358,43 @@ impl AppStateSync {
             last_e2e_report: Mutex::new(None),
             playback_control: Mutex::new(PlaybackControlState::default()),
             state_tx,
+            remote_state_tx,
             command_tx,
         }
     }
 
+    fn set_triggered_message_value(&self, message: Option<MessageConfig>) {
+        if let Ok(mut triggered_message) = self.triggered_message.lock() {
+            *triggered_message = message;
+        }
+    }
+
+    fn bump_revision(revision: &Mutex<u64>) -> u64 {
+        revision
+            .lock()
+            .map(|mut current| {
+                *current += 1;
+                *current
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn mark_config_changed(&self) -> u64 {
+        Self::bump_revision(&self.config_revision)
+    }
+
+    pub fn mark_runtime_changed(&self) -> u64 {
+        Self::bump_revision(&self.runtime_revision)
+    }
+
     /// Get current state snapshot
     pub fn get_state(&self) -> BroadcastState {
+        let config_revision = self.config_revision.lock()
+            .map(|revision| *revision)
+            .unwrap_or(0);
+        let runtime_revision = self.runtime_revision.lock()
+            .map(|revision| *revision)
+            .unwrap_or(0);
         let active_visualization = self.active_visualization.lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| "fireplace".to_string());
@@ -362,6 +445,8 @@ impl AppStateSync {
         let mode = active_visualization.clone();
         
         BroadcastState {
+            config_revision,
+            runtime_revision,
             active_visualization,
             enabled_visualizations,
             common_settings,
@@ -381,15 +466,92 @@ impl AppStateSync {
         }
     }
 
+    /// Get the compact remote-only state snapshot without cloning desktop-only fields.
+    pub fn get_remote_state(&self) -> RemoteStateV2 {
+        let config_revision = self.config_revision.lock()
+            .map(|revision| *revision)
+            .unwrap_or(0);
+        let runtime_revision = self.runtime_revision.lock()
+            .map(|revision| *revision)
+            .unwrap_or(0);
+        let active_visualization = self.active_visualization.lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| "fireplace".to_string());
+        let active_visualization_preset = self.active_visualization_preset.lock()
+            .map(|value| value.clone())
+            .unwrap_or(None);
+        let common_settings = self.common_settings.lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let visualization_presets = self.visualization_presets.lock()
+            .map(|presets| {
+                presets
+                    .iter()
+                    .map(|preset| RemoteVisualizationPreset {
+                        id: preset.id.clone(),
+                        name: preset.name.clone(),
+                        visualization_id: preset.visualization_id.clone(),
+                        enabled: preset.enabled,
+                        icon: preset.icon.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let message_tree = {
+            let message_tree = self.message_tree.lock()
+                .map(|value| value.clone())
+                .unwrap_or_else(|_| serde_json::json!([]));
+            let has_tree_entries = matches!(&message_tree, serde_json::Value::Array(nodes) if !nodes.is_empty());
+            if has_tree_entries {
+                message_tree
+            } else {
+                let messages = self.messages.lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default();
+                build_flat_message_tree_value(&messages)
+            }
+        };
+        let message_stats = self.message_stats.lock()
+            .map(|value| compact_message_stats_map(&value))
+            .unwrap_or_default();
+        let triggered_message = self.triggered_message.lock()
+            .map(|value| value.clone())
+            .unwrap_or(None);
+        let playback_control = self.playback_control.lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let folder_playback_queue = self.folder_playback_queue.lock()
+            .map(|value| value.clone())
+            .unwrap_or(None);
+
+        RemoteStateV2 {
+            schema_version: 2,
+            config_revision,
+            runtime_revision,
+            active_visualization,
+            active_visualization_preset,
+            common_settings,
+            visualization_presets,
+            message_tree,
+            message_stats,
+            triggered_message,
+            playback_control,
+            folder_playback_queue,
+        }
+    }
+
     /// Broadcast current state to all SSE subscribers
     pub fn broadcast(&self, triggered_message: Option<MessageConfig>) {
-        // Store triggered_message in state so it persists across broadcasts
-        if let Ok(mut tm) = self.triggered_message.lock() {
-            *tm = triggered_message.clone();
-        }
+        self.set_triggered_message_value(triggered_message);
+        self.broadcast_current_state();
+    }
+
+    /// Broadcast the current desktop and remote snapshots.
+    pub fn broadcast_current_state(&self) {
         let state = self.get_state();
-        // Ignore send errors (no subscribers)
+        let remote_state = self.get_remote_state();
         let _ = self.state_tx.send(state);
+        let _ = self.remote_state_tx.send(remote_state);
     }
     
     /// Broadcast a transient command to all SSE subscribers
@@ -399,12 +561,8 @@ impl AppStateSync {
     
     /// Clear the triggered message (called when message completes)
     pub fn clear_triggered_message(&self) {
-        if let Ok(mut tm) = self.triggered_message.lock() {
-            *tm = None;
-        }
-        // Broadcast the cleared state
-        let state = self.get_state();
-        let _ = self.state_tx.send(state);
+        self.set_triggered_message_value(None);
+        self.mark_runtime_changed();
     }
 
     /// Load configuration from a JSON file
@@ -523,24 +681,20 @@ impl AppStateSync {
             }
         }
         
-        // Broadcast the updated state
-        self.broadcast(None);
+        self.mark_config_changed();
+        self.broadcast_current_state();
         
         Ok(())
     }
 
-    /// Update playback control state and broadcast changes
+    /// Update playback control state without broadcasting.
     pub fn update_playback_control(&self, new_state: PlaybackControlState) {
-        // Update the state first, then release the lock before broadcasting
         {
             if let Ok(mut state) = self.playback_control.lock() {
                 *state = new_state;
             }
-        } // Lock is released here
-        
-        // Broadcast the updated state (this will re-acquire the lock in get_state)
-        let state = self.get_state();
-        let _ = self.state_tx.send(state);
+        }
+        self.mark_runtime_changed();
     }
 
     /// Get current playback control state
@@ -589,9 +743,7 @@ impl AppStateSync {
         };
 
         self.update_playback_control(new_state);
-
-        // Also update the triggered message for backward compatibility
-        self.broadcast(Some(message));
+        self.set_triggered_message_value(Some(message));
 
         Ok(())
     }
@@ -623,7 +775,7 @@ impl AppStateSync {
         };
 
         self.update_playback_control(new_state);
-        self.broadcast(Some(message));
+        self.set_triggered_message_value(Some(message));
     }
 
     /// Stop message playback and update control state
@@ -640,9 +792,7 @@ impl AppStateSync {
         };
 
         self.update_playback_control(new_state);
-
-        // Also clear the triggered message for backward compatibility
-        self.clear_triggered_message();
+        self.set_triggered_message_value(None);
     }
 
     /// Process a playback command with validation and error handling
@@ -715,11 +865,10 @@ impl AppStateSync {
             last_updated: timestamp,
         };
 
-        // Update state and broadcast
+        // Update state and broadcast once after all mutations are applied.
         self.update_playback_control(new_state.clone());
-        
-        // Also update the triggered message for backward compatibility
-        self.broadcast(Some(message));
+        self.set_triggered_message_value(Some(message));
+        self.broadcast_current_state();
 
         Ok(new_state)
     }
@@ -749,11 +898,10 @@ impl AppStateSync {
             last_updated: timestamp,
         };
 
-        // Update state and broadcast
+        // Update state and broadcast once after all mutations are applied.
         self.update_playback_control(new_state.clone());
-        
-        // Also clear the triggered message for backward compatibility
-        self.clear_triggered_message();
+        self.set_triggered_message_value(None);
+        self.broadcast_current_state();
 
         Ok(new_state)
     }
@@ -783,8 +931,9 @@ impl AppStateSync {
             last_updated: timestamp,
         };
 
-        // Update state and broadcast
+        // Update state and broadcast once after all mutations are applied.
         self.update_playback_control(new_state.clone());
+        self.broadcast_current_state();
 
         Ok(new_state)
     }
@@ -831,13 +980,13 @@ impl AppStateSync {
             last_updated: timestamp,
         };
 
-        // Update state and broadcast
+        // Update state and broadcast once after all mutations are applied.
         self.update_playback_control(new_state.clone());
 
-        // Re-trigger the message for backward compatibility (using pre-fetched message)
         if let Some(message) = message_to_broadcast {
-            self.broadcast(Some(message));
+            self.set_triggered_message_value(Some(message));
         }
+        self.broadcast_current_state();
 
         Ok(new_state)
     }
@@ -974,6 +1123,65 @@ pub enum PlaybackError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod remote_state_tests {
+    use super::*;
+
+    #[test]
+    fn test_remote_state_uses_compact_contract() {
+        let app_state = AppStateSync::new();
+
+        if let Ok(mut message_tree) = app_state.message_tree.lock() {
+            *message_tree = serde_json::json!([]);
+        }
+
+        if let Ok(mut message_stats) = app_state.message_stats.lock() {
+            *message_stats = serde_json::json!({
+                "msg-1": {
+                    "messageId": "msg-1",
+                    "triggerCount": 3,
+                    "lastTriggered": 12345,
+                    "history": [{ "timestamp": 12000 }]
+                }
+            });
+        }
+
+        let remote_state = app_state.get_remote_state();
+        let remote_json = serde_json::to_value(&remote_state).unwrap();
+
+        assert_eq!(remote_state.schema_version, 2);
+        assert!(remote_json.get("messages").is_none());
+        assert!(remote_json.get("visualizationSettings").is_none());
+        assert!(remote_json.get("textStyleSettings").is_none());
+        assert!(remote_json["messageTree"].as_array().is_some());
+        assert_eq!(remote_json["messageStats"]["msg-1"]["triggerCount"], 3);
+        assert!(remote_json["messageStats"]["msg-1"].get("history").is_none());
+        assert!(
+            remote_json["visualizationPresets"][0].get("settings").is_none(),
+            "remote presets should only include summary metadata"
+        );
+    }
+
+    #[test]
+    fn test_revision_counters_advance_by_scope() {
+        let app_state = AppStateSync::new();
+
+        let initial_state = app_state.get_state();
+        assert_eq!(initial_state.config_revision, 0);
+        assert_eq!(initial_state.runtime_revision, 0);
+
+        app_state.mark_config_changed();
+        let after_config = app_state.get_state();
+        assert_eq!(after_config.config_revision, 1);
+        assert_eq!(after_config.runtime_revision, 0);
+
+        app_state.mark_runtime_changed();
+        let after_runtime = app_state.get_state();
+        assert_eq!(after_runtime.config_revision, 1);
+        assert_eq!(after_runtime.runtime_revision, 1);
+    }
+}
 
 #[cfg(test)]
 mod legacy_tests {

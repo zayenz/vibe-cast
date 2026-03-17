@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime},
+};
 
 /// Message configuration matching the frontend MessageConfig type
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -117,6 +120,8 @@ pub struct RemoteCommand {
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BroadcastState {
+    pub config_revision: u64,
+    pub runtime_revision: u64,
     pub active_visualization: String,
     pub enabled_visualizations: Vec<String>,
     pub common_settings: CommonSettings,
@@ -139,6 +144,70 @@ pub struct BroadcastState {
     pub playback_control: PlaybackControlState,
     // Legacy compatibility
     pub mode: String,
+}
+
+/// Remote-safe visualization preset metadata.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteVisualizationPreset {
+    pub id: String,
+    pub name: String,
+    pub visualization_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+/// Compact message stats for remote hydration and SSE updates.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMessageStats {
+    pub message_id: String,
+    pub trigger_count: u32,
+    pub last_triggered: u64,
+}
+
+/// Remote-only state contract optimized for fast phone hydration.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStateV2 {
+    pub schema_version: u32,
+    pub config_revision: u64,
+    pub runtime_revision: u64,
+    pub active_visualization: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_visualization_preset: Option<String>,
+    pub common_settings: CommonSettings,
+    pub visualization_presets: Vec<RemoteVisualizationPreset>,
+    pub message_tree: serde_json::Value,
+    pub message_stats: HashMap<String, RemoteMessageStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triggered_message: Option<MessageConfig>,
+    pub playback_control: PlaybackControlState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_playback_queue: Option<FolderPlaybackQueue>,
+}
+
+/// Optional client-reported remote startup timings for local diagnostics.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStartupPerfReport {
+    pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serialize_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bootstrap_latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sse_open_latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_usable_render_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bootstrap_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
 }
 
 /// Device type for tracking control command sources

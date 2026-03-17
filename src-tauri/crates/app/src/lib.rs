@@ -243,6 +243,8 @@ fn emit_state_change(
     payload: String  // JSON string from frontend
 ) {
     let mut triggered_message: Option<MessageConfig> = None;
+    let mut config_changed = false;
+    let mut runtime_changed = false;
     
     // Parse the payload
     let payload_value: serde_json::Value = serde_json::from_str(&payload)
@@ -255,6 +257,7 @@ fn emit_state_change(
                 if let Ok(mut m) = state.active_visualization.lock() {
                     *m = viz.to_string();
                 }
+                config_changed = true;
             }
         }
         "SET_ENABLED_VISUALIZATIONS" => {
@@ -264,6 +267,7 @@ fn emit_state_change(
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                 }
+                config_changed = true;
             }
         }
         "SET_COMMON_SETTINGS" => {
@@ -271,18 +275,21 @@ fn emit_state_change(
                 if let Ok(mut m) = state.common_settings.lock() {
                     *m = settings;
                 }
+                config_changed = true;
             }
         }
         "SET_VISUALIZATION_SETTINGS" => {
             if let Ok(mut m) = state.visualization_settings.lock() {
                 *m = payload_value.clone();
             }
+            config_changed = true;
         }
         "SET_MESSAGES" => {
             if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(payload_value.clone()) {
                 if let Ok(mut m) = state.messages.lock() {
                     *m = messages;
                 }
+                config_changed = true;
             }
         }
         "SET_MESSAGE_TREE" => {
@@ -294,15 +301,18 @@ fn emit_state_change(
             if let Ok(mut m) = state.messages.lock() {
                 *m = flat;
             }
+            config_changed = true;
         }
         "RESET_MESSAGE_STATS" => {
             if let Ok(mut m) = state.message_stats.lock() {
                 *m = serde_json::json!({});
             }
+            runtime_changed = true;
         }
         "TRIGGER_MESSAGE" => {
             if let Ok(msg) = serde_json::from_value::<MessageConfig>(payload_value.clone()) {
                 triggered_message = Some(msg);
+                runtime_changed = true;
             }
         }
         "SET_DEFAULT_TEXT_STYLE" => {
@@ -310,12 +320,14 @@ fn emit_state_change(
                 if let Ok(mut m) = state.default_text_style.lock() {
                     *m = style.to_string();
                 }
+                config_changed = true;
             }
         }
         "SET_TEXT_STYLE_SETTINGS" => {
             if let Ok(mut m) = state.text_style_settings.lock() {
                 *m = payload_value.clone();
             }
+            config_changed = true;
         }
         "SET_CONFIG_BASE_PATH" => {
             let path_opt = if payload_value.is_null() {
@@ -334,6 +346,7 @@ fn emit_state_change(
                 if let Ok(mut m) = state.visualization_presets.lock() {
                     *m = presets;
                 }
+                config_changed = true;
             }
         }
         "SET_ACTIVE_VISUALIZATION_PRESET" => {
@@ -341,6 +354,7 @@ fn emit_state_change(
                 if let Ok(mut m) = state.active_visualization_preset.lock() {
                     *m = None;
                 }
+                config_changed = true;
             } else if let Some(preset_id) = payload_value.as_str() {
                 if let Ok(mut m) = state.active_visualization_preset.lock() {
                     *m = Some(preset_id.to_string());
@@ -353,6 +367,7 @@ fn emit_state_change(
                         }
                     }
                 }
+                config_changed = true;
             }
         }
         "SET_TEXT_STYLE_PRESETS" => {
@@ -360,6 +375,7 @@ fn emit_state_change(
                 if let Ok(mut m) = state.text_style_presets.lock() {
                     *m = presets;
                 }
+                config_changed = true;
             }
         }
         "CLEAR_ACTIVE_MESSAGE" => {
@@ -460,6 +476,7 @@ fn emit_state_change(
                         *m = stats.clone();
                     }
                 }
+                config_changed = true;
             }
         }
         // Legacy support for old event types
@@ -468,13 +485,24 @@ fn emit_state_change(
                 if let Ok(mut m) = state.active_visualization.lock() {
                     *m = mode.to_string();
                 }
+                config_changed = true;
             }
         }
         _ => {}
     }
-    
-    // Broadcast state change to all SSE subscribers
-    state.broadcast(triggered_message.clone());
+
+    if config_changed {
+        state.mark_config_changed();
+    }
+    if runtime_changed {
+        state.mark_runtime_changed();
+    }
+
+    if let Some(message) = triggered_message {
+        state.broadcast(Some(message));
+    } else {
+        state.broadcast_current_state();
+    }
     
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
     // Include complete state information including playback control state for bidirectional control
@@ -501,7 +529,6 @@ fn process_playback_command(
             // Emit enhanced Tauri event with complete control state to all windows
             // emit() broadcasts globally to all windows in Tauri v2
             let complete_state = state.get_state();
-            println!("[process_playback_command] Emitting playback-control-changed event to all windows");
             let _ = handle.emit("playback-control-changed", serde_json::json!({
                 "type": "PLAYBACK_CONTROL_UPDATE",
                 "playbackControl": new_state,
@@ -533,9 +560,7 @@ async fn start_message_playback(
     message: MessageConfig
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
-    
-    println!("[start_message_playback] Called with message_id: {}, message.id: {}", message_id, message.id);
-    
+
     // Verify message_id matches message.id
     if message.id != message_id {
         return Err(format!("Message ID mismatch: expected {}, got {}", message_id, message.id));
@@ -545,21 +570,20 @@ async fn start_message_playback(
 
     if let Err(ref error) = result {
         if error.contains("Message not found") {
-            println!("[start_message_playback] Message not in state.messages, using passed message");
             state.start_message_playback_with_message(message.clone(), device_type);
         } else {
             return Err(error.clone());
         }
     }
 
+    state.broadcast_current_state();
+
     // Get the updated state and emit enhanced events (same path for lookup and with-message)
     let complete_state = state.get_state();
     let playback_control = state.get_playback_control();
 
-    println!("[start_message_playback] Emitting triggered-message event to all windows: {}", message.id);
     let _ = handle.emit("triggered-message", &message);
 
-    println!("[start_message_playback] Emitting playback-control-changed event to all windows");
     let _ = handle.emit("playback-control-changed", serde_json::json!({
         "type": "MESSAGE_STARTED",
         "playbackControl": playback_control,
@@ -584,8 +608,8 @@ async fn start_message_playback(
             let current_state = state_clone.get_playback_control();
             if current_state.is_playing &&
                current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone) {
-                println!("Auto-stopping message '{}' after duration: {:?}", message_id_clone, duration);
                 state_clone.stop_message_playback(DeviceType::System);
+                state_clone.broadcast_current_state();
 
                 let updated_state = state_clone.get_state();
                 let updated_playback_control = state_clone.get_playback_control();
@@ -599,9 +623,6 @@ async fn start_message_playback(
         });
     }
 
-    // Force-push state to SSE so Remote (and other SSE clients) see "playing" when CP starts
-    state.broadcast(Some(message));
-
     Ok(serde_json::to_value(playback_control).unwrap_or_default())
 }
 
@@ -613,6 +634,7 @@ fn stop_message_playback(
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
     state.stop_message_playback(device_type);
+    state.broadcast_current_state();
     
     // Get the updated state and emit enhanced events
     let complete_state = state.get_state();
@@ -620,7 +642,6 @@ fn stop_message_playback(
     
     // Emit specific playback control event to all windows
     // emit() broadcasts globally to all windows in Tauri v2
-    println!("[stop_message_playback] Emitting playback-control-changed event to all windows");
     let _ = handle.emit("playback-control-changed", serde_json::json!({
         "type": "MESSAGE_STOPPED",
         "playbackControl": playback_control,

@@ -57,6 +57,8 @@ export interface FolderPlaybackQueue {
  * Updated to match the new plugin-based architecture
  */
 export interface AppState {
+  configRevision: number;
+  runtimeRevision: number;
   // Visualization state
   activeVisualization: string;
   enabledVisualizations: string[];
@@ -164,6 +166,8 @@ function parseSSEState(data: any): AppState {
       : buildFallbackPresets(data.visualizationSettings ?? {});
 
     return {
+      configRevision: Number(data.configRevision ?? 0),
+      runtimeRevision: Number(data.runtimeRevision ?? 0),
       activeVisualization: data.activeVisualization,
       enabledVisualizations: data.enabledVisualizations ?? ['fireplace', 'techno'],
       commonSettings: data.commonSettings ?? DEFAULT_COMMON_SETTINGS,
@@ -187,6 +191,8 @@ function parseSSEState(data: any): AppState {
   // Handle legacy format
   const legacyPresets = buildFallbackPresets();
   return {
+    configRevision: 0,
+    runtimeRevision: 0,
     activeVisualization: data.mode ?? 'fireplace',
     enabledVisualizations: ['fireplace', 'techno'],
     commonSettings: DEFAULT_COMMON_SETTINGS,

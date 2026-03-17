@@ -32,9 +32,21 @@ const iconMap: Record<string, React.ReactNode> = {
   'Flower': <Flower size={32} />,
 };
 
+type FolderQueueState = { folderId: string; messageIds: string[]; currentIndex: number } | null;
+
+function queuesEqual(left: FolderQueueState, right: FolderQueueState): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.folderId !== right.folderId || left.currentIndex !== right.currentIndex) {
+    return false;
+  }
+  if (left.messageIds.length !== right.messageIds.length) {
+    return false;
+  }
+  return left.messageIds.every((messageId, index) => messageId === right.messageIds[index]);
+}
+
 export const ControlPlane: React.FC = () => {
-  console.log('[ControlPlane] Component rendering');
-  
   // Determine API Base URL (dynamic for Desktop Prod)
   const [apiBase, setApiBase] = useState(import.meta.env.DEV ? 'http://localhost:8080' : '');
   
@@ -45,17 +57,13 @@ export const ControlPlane: React.FC = () => {
     invoke<{ port: number }>('get_server_info')
       .then(info => {
         const url = `http://localhost:${info.port}`;
-        console.log(`[ControlPlane] Server found at ${url}`);
         setApiBase(url);
       })
-      .catch(_err => {
-        console.log('[ControlPlane] Could not get server info (browser env?), using default:', apiBase);
-      });
+      .catch(() => {});
   }, []);
   
   // SSE-based state - single source of truth
   const { state, isConnected } = useAppState({ apiBase });
-  console.log('[ControlPlane] useAppState returned - state:', state, 'isConnected:', isConnected);
   
   // Local override for playback control state from Tauri events (more immediate than SSE)
   const [playbackControlOverride, setPlaybackControlOverride] = useState<PlaybackControlState | null>(null);
@@ -96,59 +104,31 @@ export const ControlPlane: React.FC = () => {
   const folderPlaybackQueue = useStore((s) => s.folderPlaybackQueue);
   // NOTE: playFolder and cancelFolderPlayback are now handled via HTTP commands to Rust backend
   
-  // Sync messageStats from SSE to store
-  // CRITICAL: Use a ref to track the last synced value and only sync when state changes
-  // Use a stable boolean dependency instead of computing a string key during render
-  const messageStatsSyncedRef = useRef<string>('');
-  
-  // Sync messageStats in useEffect with stable boolean dependency
-  // CRITICAL: Only depend on hasMessageStats (always a boolean, never undefined)
-  // Access state?.messageStats inside the effect via closure, not in dependency array
+  const lastConfigRevisionRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!state?.messageStats) {
-      if (messageStatsSyncedRef.current !== '') {
-        messageStatsSyncedRef.current = '';
-      }
+    if (!state) {
       return;
     }
-    
-    try {
-      const messageStatsKey = JSON.stringify(state.messageStats);
-      if (messageStatsSyncedRef.current !== messageStatsKey) {
-        console.log('[ControlPlane] Syncing messageStats to store');
-        messageStatsSyncedRef.current = messageStatsKey;
-        useStore.setState({ messageStats: state.messageStats });
-      }
-    } catch (e) {
-      console.error('[ControlPlane] Error serializing messageStats:', e);
-    }
-     
-  }, [state]); // Sync whenever state changes (ref check handles de-duplication)
 
-  // Sync the full SSE state into the store so saves include the live data
-  const stateSyncRef = useRef<string>('');
+    useStore.setState({ messageStats: state.messageStats ?? {} });
+
+    const sseQueue = state.folderPlaybackQueue ?? null;
+    const currentQueue = useStore.getState().folderPlaybackQueue;
+    if (!queuesEqual(sseQueue, currentQueue)) {
+      useStore.setState({ folderPlaybackQueue: sseQueue });
+    }
+  }, [state?.runtimeRevision, state]);
+
+  // Sync the full SSE config into the store only when the config revision changes.
   useEffect(() => {
     if (!state) return;
 
-    // Build a stable snapshot key to avoid unnecessary loads
-    const snapshot = {
-      activeVisualization: state.activeVisualization,
-      activeVisualizationPreset: state.activeVisualizationPreset ?? null,
-      enabledVisualizations: state.enabledVisualizations,
-      commonSettings: state.commonSettings,
-      visualizationSettings: state.visualizationSettings ?? {},
-      visualizationPresets: state.visualizationPresets ?? [],
-      messages: state.messages ?? [],
-      messageTree: state.messageTree ?? [],
-      defaultTextStyle: state.defaultTextStyle,
-      textStyleSettings: state.textStyleSettings ?? {},
-      textStylePresets: state.textStylePresets ?? [],
-      messageStats: state.messageStats ?? {},
-    };
-
-    const snapshotKey = JSON.stringify(snapshot);
-    if (stateSyncRef.current === snapshotKey) return;
-    stateSyncRef.current = snapshotKey;
+    const configRevision = state.configRevision ?? 0;
+    if (lastConfigRevisionRef.current === configRevision) {
+      return;
+    }
+    lastConfigRevisionRef.current = configRevision;
 
     // Normalize message tree if SSE didn't send one
     const normalizedMessageTree: MessageTreeNode[] = (state.messageTree as MessageTreeNode[] | undefined)
@@ -175,22 +155,6 @@ export const ControlPlane: React.FC = () => {
       messageStats: state.messageStats ?? {},
     }, false);
   }, [state]);
-
-  // Sync folderPlaybackQueue from SSE state to zustand store
-  // This is runtime state (not persisted config), synced separately
-  useEffect(() => {
-    if (!state) return;
-    
-    const sseQueue = state.folderPlaybackQueue;
-    const currentQueue = useStore.getState().folderPlaybackQueue;
-    
-    // Only update if different to avoid unnecessary re-renders
-    if (JSON.stringify(sseQueue) !== JSON.stringify(currentQueue)) {
-      console.log('[ControlPlane] Syncing folderPlaybackQueue from SSE:', sseQueue);
-      useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
-    }
-     
-  }, [state?.folderPlaybackQueue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)
   useEffect(() => {

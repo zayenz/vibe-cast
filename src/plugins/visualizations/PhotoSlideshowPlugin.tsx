@@ -10,7 +10,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { VisualizationPlugin, VisualizationProps, SettingDefinition } from '../types';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../utils/settings';
-import { FacePosition } from './faceDetection';
+import type { FacePosition } from './faceDetection';
 import { 
   TransitionType, 
   getAvailableTransitions, 
@@ -372,6 +372,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                   }}
                   key={`current-video-${currentIndex}`}
                   src={currentBlobUrl}
+                  preload="metadata"
                   autoPlay
                   playsInline
                   muted={!videoSound}
@@ -414,6 +415,7 @@ const PhotoSlideshowVisualization: React.FC<VisualizationProps> = ({
                     }}
                     key={`next-video-${nextIndex}`}
                     src={nextBlobUrl}
+                    preload="metadata"
                     autoPlay
                     playsInline
                     muted={!videoSound}

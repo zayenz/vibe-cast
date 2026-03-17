@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Signal, ChevronRight, Loader2, WifiOff, Sliders, Settings2, Play, Square, X } from 'lucide-react';
-import { useAppState, useSendCommand } from '../hooks/useAppState';
+import { useSendCommand } from '../hooks/useAppState';
+import { useRemoteAppState } from '../hooks/useRemoteAppState';
 import { MessageConfig, VisualizationPreset, MessageTreeNode } from '../plugins/types';
 import { getIcon } from '../utils/iconSet';
 
@@ -9,7 +10,7 @@ const API_BASE = '';
 
 export const RemoteControl: React.FC = () => {
   // SSE-based state - single source of truth for everything
-  const { state, isConnected, error, connectionPhase } = useAppState({ apiBase: API_BASE });
+  const { state, isConnected, error, connectionPhase } = useRemoteAppState({ apiBase: API_BASE });
   const { sendCommand: sendCommandRequest, isPending } = useSendCommand({ apiBase: API_BASE });
   
   // Get presets from SSE state (not local store - remote runs in browser without Tauri)

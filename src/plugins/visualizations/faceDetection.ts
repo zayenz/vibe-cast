@@ -10,6 +10,7 @@ import * as faceapi from 'face-api.js';
 // Track model loading state
 let modelsLoaded = false;
 let modelsLoading: Promise<void> | null = null;
+const MAX_FACE_CACHE_ENTRIES = 500;
 
 // Cache for face positions (path -> position)
 const facePositionCache = new Map<string, FacePosition>();
@@ -43,15 +44,12 @@ export async function loadFaceDetectionModels(): Promise<void> {
   
   modelsLoading = (async () => {
     try {
-      console.log('[FaceDetection] Loading TinyFaceDetector model...');
-      
       // Load from jsDelivr CDN (face-api.js models)
       const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
       
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       
       modelsLoaded = true;
-      console.log('[FaceDetection] Model loaded successfully');
     } catch (error) {
       console.error('[FaceDetection] Failed to load model:', error);
       modelsLoading = null;
@@ -84,16 +82,33 @@ async function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+function cacheFacePosition(cacheKey: string, value: FacePosition): FacePosition {
+  if (facePositionCache.has(cacheKey)) {
+    facePositionCache.delete(cacheKey);
+  }
+
+  facePositionCache.set(cacheKey, value);
+  while (facePositionCache.size > MAX_FACE_CACHE_ENTRIES) {
+    const oldestKey = facePositionCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    facePositionCache.delete(oldestKey);
+  }
+
+  return value;
+}
+
 /**
  * Detect faces in an image and calculate optimal crop position.
  * 
  * @param imageSrc - The image URL (can be asset:// protocol)
  * @returns FacePosition with x, y percentages for object-position
  */
-export async function detectFacePosition(imageSrc: string): Promise<FacePosition> {
+export async function detectFacePosition(imageSrc: string, cacheKey: string = imageSrc): Promise<FacePosition> {
   // Check cache first
-  if (facePositionCache.has(imageSrc)) {
-    return facePositionCache.get(imageSrc)!;
+  if (facePositionCache.has(cacheKey)) {
+    return facePositionCache.get(cacheKey)!;
   }
   
   // Default position (center, full image)
@@ -128,8 +143,6 @@ export async function detectFacePosition(imageSrc: string): Promise<FacePosition
       })
     );
     
-    console.log(`[FaceDetection] Found ${detections.length} faces in image (${img.width}x${img.height})`);
-    
     if (detections.length === 0) {
       // No faces detected - show upper portion for portraits (where faces usually are)
       const result: FacePosition = {
@@ -141,8 +154,7 @@ export async function detectFacePosition(imageSrc: string): Promise<FacePosition
           ? { x: 0, y: 0, width: 100, height: 60 }  // Upper 60% for portraits
           : { x: 0, y: 0, width: 100, height: 100 } // Full image for landscape
       };
-      facePositionCache.set(imageSrc, result);
-      return result;
+      return cacheFacePosition(cacheKey, result);
     }
     
     // Calculate the bounding box that contains all faces (with padding)
@@ -174,8 +186,6 @@ export async function detectFacePosition(imageSrc: string): Promise<FacePosition
       height: ((maxY - minY) / img.height) * 100
     };
     
-    console.log(`[FaceDetection] Face region: ${faceRegion.width.toFixed(1)}% x ${faceRegion.height.toFixed(1)}% at (${faceRegion.x.toFixed(1)}%, ${faceRegion.y.toFixed(1)}%)`);
-    
     // Calculate center of all faces
     const faceCenterX = (minX + maxX) / 2;
     const faceCenterY = (minY + maxY) / 2;
@@ -191,18 +201,12 @@ export async function detectFacePosition(imageSrc: string): Promise<FacePosition
       isPortrait,
       faceRegion
     };
-    
-    console.log(`[FaceDetection] Result: center=${result.x.toFixed(1)}%,${result.y.toFixed(1)}%`);
-    
-    console.log(`[FaceDetection] Face position: ${result.x.toFixed(1)}% x ${result.y.toFixed(1)}%`);
-    
-    facePositionCache.set(imageSrc, result);
-    return result;
+
+    return cacheFacePosition(cacheKey, result);
     
   } catch (error) {
     console.error('[FaceDetection] Error detecting faces:', error);
-    facePositionCache.set(imageSrc, defaultPosition);
-    return defaultPosition;
+    return cacheFacePosition(cacheKey, defaultPosition);
   }
 }
 
@@ -243,4 +247,3 @@ export function clearFacePositionCache(): void {
 export function getCachedFacePosition(imageSrc: string): FacePosition | undefined {
   return facePositionCache.get(imageSrc);
 }
-

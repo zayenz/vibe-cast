@@ -1,6 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use realfft::RealFftPlanner;
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 use tauri::{AppHandle, Emitter};
 
 pub struct AudioState {
@@ -31,11 +37,36 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
     let mut planner = RealFftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(fft_size);
 
-    let mut buffer = Vec::with_capacity(fft_size);
-    let app_handle_clone = app_handle.clone();
-    
     let fft_data = Arc::new(Mutex::new(vec![0.0; fft_size / 2]));
-    let fft_data_clone = fft_data.clone();
+    let fft_data_forwarder = fft_data.clone();
+    let latest_frame = Arc::new(Mutex::new(vec![0.0; fft_size / 2]));
+    let latest_frame_callback = latest_frame.clone();
+    let has_pending_frame = Arc::new(AtomicBool::new(false));
+    let has_pending_frame_callback = has_pending_frame.clone();
+    let app_handle_forwarder = app_handle.clone();
+
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(33));
+        if !has_pending_frame.swap(false, Ordering::AcqRel) {
+            continue;
+        }
+
+        let snapshot = match latest_frame.lock() {
+            Ok(frame) => frame.clone(),
+            Err(_) => continue,
+        };
+
+        if let Ok(mut shared) = fft_data_forwarder.lock() {
+            shared.clone_from(&snapshot);
+        }
+
+        let _ = app_handle_forwarder.emit("audio-data", snapshot);
+    });
+
+    let mut buffer = Vec::with_capacity(fft_size);
+    let mut fft_input = vec![0.0_f32; fft_size];
+    let mut fft_output = fft.make_output_vec();
+    let mut magnitudes = vec![0.0_f32; fft_size / 2];
 
     let stream = device.build_input_stream(
         &config,
@@ -43,24 +74,18 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
             for &sample in data {
                 buffer.push(sample);
                 if buffer.len() >= fft_size {
-                    // Process FFT
-                    let mut indata = buffer.clone();
-                    let mut outdata = fft.make_output_vec();
-                    if fft.process(&mut indata, &mut outdata).is_ok() {
-                        // Calculate magnitudes and normalize
-                        let magnitudes: Vec<f32> = outdata
-                            .iter()
-                            .take(fft_size / 2)
-                            .map(|c| (c.re * c.re + c.im * c.im).sqrt() / (fft_size as f32).sqrt())
-                            .collect();
-
-                        // Update shared state
-                        if let Ok(mut shared) = fft_data_clone.lock() {
-                            *shared = magnitudes.clone();
+                    fft_input.copy_from_slice(&buffer[..fft_size]);
+                    if fft.process(&mut fft_input, &mut fft_output).is_ok() {
+                        for (index, value) in fft_output.iter().take(fft_size / 2).enumerate() {
+                            magnitudes[index] =
+                                (value.re * value.re + value.im * value.im).sqrt()
+                                    / (fft_size as f32).sqrt();
                         }
 
-                        // Emit to the frontend
-                        let _ = app_handle_clone.emit("audio-data", magnitudes);
+                        if let Ok(mut latest) = latest_frame_callback.try_lock() {
+                            latest.copy_from_slice(&magnitudes);
+                            has_pending_frame_callback.store(true, Ordering::Release);
+                        }
                     }
                     buffer.clear();
                 }
@@ -81,5 +106,4 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
         fft_data,
     }
 }
-
 

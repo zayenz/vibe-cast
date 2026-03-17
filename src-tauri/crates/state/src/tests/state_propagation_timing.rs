@@ -533,6 +533,7 @@ mod unit_tests {
         // Trigger a state change
         let start_time = Instant::now();
         let _ = app_state.start_message_playback("msg-1", DeviceType::MobileRemote);
+        app_state.broadcast_current_state();
         
         // Device should receive the update
         let result = mock_device.try_receive_state_update(Duration::from_millis(100)).await;

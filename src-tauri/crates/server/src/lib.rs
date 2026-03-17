@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Query, State},
+    body::Body,
+    extract::{Path as AxumPath, Query, Request, State},
     response::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
@@ -13,17 +14,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, path::BaseDirectory};
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::{cors::CorsLayer, services::{ServeDir, ServeFile}};
+use tower::ServiceExt;
+use tower_http::{
+    compression::CompressionLayer,
+    cors::CorsLayer,
+    set_header::SetResponseHeaderLayer,
+    services::ServeFile,
+};
 
 use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
     BroadcastState, MessageConfig, CommonSettings, VisualizationPreset, 
-    TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand, DeviceType
+    TextStylePreset, FolderPlaybackQueue, E2EReport, RemoteCommand, DeviceType,
+    RemoteStartupPerfReport,
 };
 
 /// Structured error response for API endpoints
@@ -291,6 +299,63 @@ struct StateQueryParams {
     compact: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct PerfQueryParams {
+    perf: Option<String>,
+}
+
+fn immutable_assets_cache_header() -> HeaderValue {
+    HeaderValue::from_static("public, max-age=31536000, immutable")
+}
+
+fn build_json_response(
+    payload: Vec<u8>,
+    extra_headers: Vec<(header::HeaderName, HeaderValue)>,
+) -> Response {
+    let mut response = Response::new(Body::from(payload));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    for (name, value) in extra_headers {
+        response.headers_mut().insert(name, value);
+    }
+
+    response
+}
+
+fn contains_forbidden_path_segments(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
+
+async fn serve_file_response(
+    file_path: impl Into<std::path::PathBuf>,
+    request: Request,
+    extra_headers: Vec<(header::HeaderName, HeaderValue)>,
+) -> Response {
+    let service = ServeFile::new(file_path.into());
+    match service.oneshot(request).await {
+        Ok(mut response) => {
+            for (name, value) in extra_headers {
+                response.headers_mut().insert(name, value);
+            }
+            response.map(Body::new)
+        }
+        Err(error) => {
+            eprintln!("Failed to serve file: {}", error);
+            (StatusCode::NOT_FOUND, "File not found").into_response()
+        }
+    }
+}
+
 fn parse_truthy_flag(value: Option<&str>) -> bool {
     matches!(
         value.map(|flag| flag.trim().to_ascii_lowercase()),
@@ -357,44 +422,44 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     };
     let app_state_sync = state.app_state_sync.clone();
 
-    // Log the dist path for debugging
-    eprintln!("[Server] Serving static files from: {:?}", dist_path);
-    eprintln!("[Server] Path exists: {}", dist_path.exists());
-    if dist_path.exists() {
-        if let Ok(entries) = std::fs::read_dir(&dist_path) {
-            let count = entries.count();
-            eprintln!("[Server] Directory contains {} entries", count);
-        }
-    }
-
-    let app = Router::new()
-        .route("/api/command", post(handle_command))
+    let compressed_api = Router::new()
         .route("/api/state", get(get_state))
+        .route("/api/remote/state", get(get_remote_state))
         .route("/api/status", get(get_status))
-        .route("/api/events", get(state_events))
         .route("/api/e2e/report", post(handle_e2e_report))
         .route("/api/e2e/last-report", get(get_last_e2e_report))
         .route("/api/images/list", get(list_images))
+        .route("/api/perf/remote-startup", post(handle_remote_startup_perf))
+        .layer(CompressionLayer::new());
+
+    let static_assets = Router::new()
+        .route("/assets/*path", get(serve_asset))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            immutable_assets_cache_header(),
+        ))
+        .layer(CompressionLayer::new());
+
+    let app = Router::new()
+        .merge(compressed_api)
+        .merge(static_assets)
+        .route("/api/command", post(handle_command))
+        .route("/api/events", get(state_events))
+        .route("/api/remote/events", get(remote_state_events))
         .route("/api/images/serve", get(serve_image))
-        .route_service("/youtube_player.html", ServeFile::new(dist_path.join("youtube_player.html")))
-        .nest_service("/assets", ServeDir::new(dist_path.join("assets")))
+        .route("/youtube_player.html", get(serve_youtube_player))
         .fallback(get(serve_spa))
         .layer(CorsLayer::very_permissive())
         .with_state(state);
-    
-    eprintln!("[Server] Router configured with CORS very_permissive");
-    eprintln!("[Server] Available endpoints: /api/status, /api/state, /api/events, /api/command");
 
     // Try a range of ports (helps when a previous instance is still running).
     let mut bound_listener: Option<(tokio::net::TcpListener, SocketAddr)> = None;
     for p in port..=port.saturating_add(20) {
-        eprintln!("[Server] Attempting to bind port {}", p);
         // Try binding to IPv4 0.0.0.0 first (more reliable for localhost connections)
         // Then fallback to IPv6 if IPv4 fails
         let addr_v4 = SocketAddr::from(([0, 0, 0, 0], p));
         match tokio::net::TcpListener::bind(addr_v4).await {
             Ok(listener) => {
-                eprintln!("[Server] Successfully bound to IPv4 0.0.0.0:{}", p);
                 bound_listener = Some((listener, addr_v4));
                 if let Ok(mut sp) = app_state_sync.server_port.lock() {
                     *sp = p;
@@ -402,12 +467,10 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
                 break;
             }
             Err(ipv4_err) => {
-                eprintln!("[Server] IPv4 bind failed for port {}: {}", p, ipv4_err);
                 // Try IPv6 [::] as fallback
                 let addr = SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, p));
                 match tokio::net::TcpListener::bind(addr).await {
                     Ok(listener) => {
-                        eprintln!("[Server] Successfully bound to IPv6 [::]:{}", p);
                         bound_listener = Some((listener, addr));
                         if let Ok(mut sp) = app_state_sync.server_port.lock() {
                             *sp = p;
@@ -415,7 +478,7 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
                         break;
                     }
                     Err(ipv6_err) => {
-                        eprintln!("[Server] IPv6 bind also failed for port {}: {}", p, ipv6_err);
+                        let _ = (ipv4_err, ipv6_err);
                         continue;
                     }
                 }
@@ -582,38 +645,46 @@ async fn list_images(
 
 async fn serve_image(
     Query(params): Query<HashMap<String, String>>,
+    request: Request,
 ) -> Response {
     let path_str = match params.get("path") {
         Some(p) => p,
         None => return (StatusCode::BAD_REQUEST, "Missing path parameter").into_response(),
     };
-    
-    // Basic validation/security check?
-    // Since this is a local app intended for "vibe coding", we'll be permissive,
-    // but in a real app we'd want to verify the path is within allowed directories.
-    
-    match tokio::fs::read(path_str).await {
-        Ok(bytes) => {
-            let mime_type = mime_guess::from_path(path_str).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime_type.as_ref())], bytes).into_response()
-        },
-        Err(e) => {
-            eprintln!("[Server] Failed to read file '{}': {}", path_str, e);
-            (StatusCode::NOT_FOUND, "File not found").into_response()
-        }
+
+    serve_file_response(path_str, request, Vec::new()).await
+}
+
+async fn serve_asset(
+    State(state): State<AppState>,
+    AxumPath(path): AxumPath<String>,
+    request: Request,
+) -> Response {
+    if contains_forbidden_path_segments(&path) {
+        return (StatusCode::BAD_REQUEST, "Invalid asset path").into_response();
     }
+
+    let asset_path = state.dist_path.join("assets").join(path);
+    serve_file_response(
+        asset_path,
+        request,
+        vec![(header::CACHE_CONTROL, immutable_assets_cache_header())],
+    )
+    .await
+}
+
+async fn serve_youtube_player(
+    State(state): State<AppState>,
+    request: Request,
+) -> Response {
+    serve_file_response(state.dist_path.join("youtube_player.html"), request, Vec::new()).await
 }
 
 async fn serve_spa(State(state): State<AppState>) -> impl IntoResponse {
     let index_path = state.dist_path.join("index.html");
-
-    eprintln!("[serve_spa] Attempting to read index.html from: {:?}", index_path);
-    eprintln!("[serve_spa] Path exists: {}", index_path.exists());
-    eprintln!("[serve_spa] Dist path: {:?}", state.dist_path);
     
     match tokio::fs::read_to_string(&index_path).await {
         Ok(content) => {
-            eprintln!("[serve_spa] Successfully read index.html ({} bytes)", content.len());
             (
                 [
                     (header::CACHE_CONTROL, HeaderValue::from_static("no-store, max-age=0")),
@@ -624,9 +695,6 @@ async fn serve_spa(State(state): State<AppState>) -> impl IntoResponse {
             )
         },
         Err(e) => {
-            eprintln!("[serve_spa] ERROR reading index.html: {}", e);
-            eprintln!("[serve_spa] Path: {:?}", index_path);
-            eprintln!("[serve_spa] Dist path exists: {}", state.dist_path.exists());
             (
                 [
                     (header::CACHE_CONTROL, HeaderValue::from_static("no-store, max-age=0")),
@@ -646,12 +714,8 @@ async fn handle_command(
     State(state): State<AppState>,
     Json(payload): Json<RemoteCommand>,
 ) -> Json<serde_json::Value> {
-    println!("Received command: {}", payload.command);
-    
     // Determine device type from the command payload, defaulting to MobileRemote for backward compatibility
     let device_type = payload.device_type.clone().unwrap_or(DeviceType::MobileRemote);
-    
-    let mut triggered_message: Option<MessageConfig> = None;
     
     // Update the canonical state based on command
     match payload.command.as_str() {
@@ -661,6 +725,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.active_visualization.lock() {
                     *m = mode.to_string();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         // New visualization commands
@@ -669,6 +734,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.active_visualization.lock() {
                     *m = viz.to_string();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         "set-enabled-visualizations" => {
@@ -678,6 +744,7 @@ async fn handle_command(
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         "set-common-settings" => {
@@ -686,6 +753,7 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.common_settings.lock() {
                         *m = settings;
                     }
+                    state.app_state_sync.mark_config_changed();
                 }
             }
         }
@@ -694,6 +762,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.visualization_settings.lock() {
                     *m = p.clone();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         // Message commands
@@ -719,8 +788,6 @@ async fn handle_command(
                 };
                 
                 if let Some(msg) = msg {
-                    triggered_message = Some(msg.clone());
-                    
                     // Update playback_control so all clients (Control Plane, other remotes) get canStop
                     state.app_state_sync.start_message_playback_with_message(msg.clone(), device_type.clone());
                     // Emit to Tauri windows (Control Plane, Visualizer) so they get stop capability immediately
@@ -798,8 +865,8 @@ async fn handle_command(
                             let current_state = state_clone.get_playback_control();
                             if current_state.is_playing &&
                                current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone) {
-                                println!("[trigger-message] Auto-stopping message '{}' after duration: {:?}", message_id_clone, duration);
                                 state_clone.stop_message_playback(DeviceType::System);
+                                state_clone.broadcast_current_state();
                                 
                                 let updated_state = state_clone.get_state();
                                 let updated_playback_control = state_clone.get_playback_control();
@@ -844,6 +911,7 @@ async fn handle_command(
                             *t = build_flat_message_tree(m.as_slice());
                         }
                     }
+                    state.app_state_sync.mark_config_changed();
                 } else if let Some(arr) = p.as_array() {
                     // Legacy format - array of strings
                     let messages: Vec<MessageConfig> = arr.iter()
@@ -872,6 +940,7 @@ async fn handle_command(
                             *t = build_flat_message_tree(m.as_slice());
                         }
                     }
+                    state.app_state_sync.mark_config_changed();
                 }
             }
         }
@@ -885,6 +954,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.messages.lock() {
                     *m = flat;
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         "set-default-text-style" => {
@@ -892,6 +962,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.default_text_style.lock() {
                     *m = style.to_string();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         "set-text-style-settings" => {
@@ -899,6 +970,7 @@ async fn handle_command(
                 if let Ok(mut m) = state.app_state_sync.text_style_settings.lock() {
                     *m = p.clone();
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         "set-visualization-presets" => {
@@ -907,6 +979,7 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.visualization_presets.lock() {
                         *m = presets;
                     }
+                    state.app_state_sync.mark_config_changed();
                 }
             }
         }
@@ -916,6 +989,7 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
                         *m = None;
                     }
+                    state.app_state_sync.mark_config_changed();
                 } else if let Some(preset_id) = p.as_str() {
                     if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
                         *m = Some(preset_id.to_string());
@@ -928,6 +1002,7 @@ async fn handle_command(
                             }
                         }
                     }
+                    state.app_state_sync.mark_config_changed();
                 }
             }
         }
@@ -937,6 +1012,7 @@ async fn handle_command(
                     if let Ok(mut m) = state.app_state_sync.text_style_presets.lock() {
                         *m = presets;
                     }
+                    state.app_state_sync.mark_config_changed();
                 }
             }
         }
@@ -981,12 +1057,14 @@ async fn handle_command(
                     
                     // Trigger next message if any
                     if let Some(msg) = next_message {
-                        triggered_message = Some(msg.clone());
+                        state.app_state_sync.start_message_playback_with_message(
+                            msg.clone(),
+                            DeviceType::System,
+                        );
                         let trigger_cmd = serde_json::json!({
                             "command": "trigger-message",
                             "payload": msg
                         });
-                        println!("[clear-active-message] Emitting remote-command to all windows");
                         // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
                     } else if matched_current {
@@ -1008,8 +1086,6 @@ async fn handle_command(
             // This is the single source of truth for queue advancement
             if let Some(p) = &payload.payload {
                 if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    println!("[message-complete] Message {} completed", message_id);
-                    
                     let mut should_clear_queue = false;
                     let mut next_message: Option<MessageConfig> = None;
                     
@@ -1018,20 +1094,17 @@ async fn handle_command(
                         if let Some(ref mut q) = *queue {
                             if let Some(current_id) = q.message_ids.get(q.current_index) {
                                 if current_id == message_id {
-                                    println!("[message-complete] Advancing queue from index {} to {}", q.current_index, q.current_index + 1);
                                     q.current_index += 1;
                                     
                                     if q.current_index < q.message_ids.len() {
                                         // Get next message
                                         if let Some(next_id) = q.message_ids.get(q.current_index) {
-                                            println!("[message-complete] Next message ID: {}", next_id);
                                             if let Ok(messages) = state.app_state_sync.messages.lock() {
                                                 next_message = messages.iter().find(|m| &m.id == next_id).cloned();
                                             }
                                         }
                                     } else {
                                         // Queue complete
-                                        println!("[message-complete] Queue complete");
                                         should_clear_queue = true;
                                     }
                                 }
@@ -1047,15 +1120,16 @@ async fn handle_command(
                     
                     // Trigger next message if any; otherwise clear playback so all views show stopped
                     if let Some(msg) = next_message {
-                        println!("[message-complete] Triggering next message: {}", msg.text);
-                        triggered_message = Some(msg.clone());
+                        state.app_state_sync.start_message_playback_with_message(
+                            msg.clone(),
+                            DeviceType::System,
+                        );
                         
                         // Emit trigger-message to all Tauri windows
                         let trigger_cmd = serde_json::json!({
                             "command": "trigger-message",
                             "payload": msg
                         });
-                        println!("[message-complete] Emitting remote-command to all windows");
                         // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                         let _ = state.app_handle.emit("remote-command", trigger_cmd);
                     } else {
@@ -1097,7 +1171,10 @@ async fn handle_command(
                             if let Ok(messages) = state.app_state_sync.messages.lock() {
                                 if let Some(msg) = messages.iter().find(|m| &m.id == first_id) {
                                     let msg_clone = msg.clone();
-                                    triggered_message = Some(msg_clone.clone());
+                                    state.app_state_sync.start_message_playback_with_message(
+                                        msg_clone.clone(),
+                                        device_type.clone(),
+                                    );
                                     
                                     // Emit trigger-message remote command to all Tauri windows
                                     // This ensures VisualizerWindow receives the command and actually plays the message
@@ -1105,7 +1182,6 @@ async fn handle_command(
                                         "command": "trigger-message",
                                         "payload": msg_clone
                                     });
-                                    println!("[play-folder] Emitting remote-command to all windows");
                                     // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
                                     let _ = state.app_handle.emit("remote-command", trigger_cmd);
                                 }
@@ -1117,19 +1193,17 @@ async fn handle_command(
         }
         "cancel-folder-playback" => {
             // Clear the folder playback queue and stop current message
-            println!("[cancel-folder-playback] Cancelling folder playback");
-            
             // Clear the queue
             if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
                 *queue = None;
             }
+            state.app_state_sync.stop_message_playback(device_type.clone());
             
             // Emit clear-message to all Tauri windows to stop visualizer
             let clear_cmd = serde_json::json!({
                 "command": "clear-message",
                 "payload": null
             });
-            println!("[cancel-folder-playback] Emitting remote-command to all windows");
             // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
             let _ = state.app_handle.emit("remote-command", clear_cmd);
         }
@@ -1137,6 +1211,7 @@ async fn handle_command(
             if let Ok(mut m) = state.app_state_sync.message_stats.lock() {
                 *m = serde_json::json!({});
             }
+            state.app_state_sync.mark_runtime_changed();
         }
         "load-configuration" => {
             if let Some(obj) = payload.payload.as_ref().and_then(|p| p.as_object()) {
@@ -1224,20 +1299,20 @@ async fn handle_command(
                         *m = stats.clone();
                     }
                 }
+                state.app_state_sync.mark_config_changed();
             }
         }
         _ => {}
     }
     
-    // Broadcast state update to all SSE subscribers
-    state.app_state_sync.broadcast(triggered_message.clone());
+    // Broadcast the resulting state exactly once after all mutations are applied.
+    state.app_state_sync.broadcast_current_state();
 
     // Also broadcast the command itself (for clients that don't rely on state or need specific signals)
     state.app_state_sync.broadcast_command(payload.clone());
     
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
     // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
-    println!("[handle_command] Emitting remote-command to all windows: {}", payload.command);
     let _ = state.app_handle.emit("remote-command", &payload);
 
     Json(serde_json::json!({ "status": "ok" }))
@@ -1258,8 +1333,40 @@ async fn get_state(
     Json(serde_json::to_value(&response_state).unwrap_or(serde_json::json!({})))
 }
 
+async fn get_remote_state(
+    State(state): State<AppState>,
+    Query(query): Query<PerfQueryParams>,
+) -> Response {
+    let include_perf_headers = parse_truthy_flag(query.perf.as_deref());
+    let remote_state = state.app_state_sync.get_remote_state();
+    let serialization_started_at = Instant::now();
+    let payload = serde_json::to_vec(&remote_state).unwrap_or_else(|_| b"{}".to_vec());
+    let serialize_ms = serialization_started_at.elapsed().as_secs_f64() * 1000.0;
+
+    let mut headers = vec![(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    )];
+
+    if include_perf_headers {
+        if let Ok(payload_header) = HeaderValue::from_str(&payload.len().to_string()) {
+            headers.push((
+                header::HeaderName::from_static("x-vibecast-payload-bytes"),
+                payload_header,
+            ));
+        }
+        if let Ok(serialize_header) = HeaderValue::from_str(&format!("{serialize_ms:.3}")) {
+            headers.push((
+                header::HeaderName::from_static("x-vibecast-serialize-ms"),
+                serialize_header,
+            ));
+        }
+    }
+
+    build_json_response(payload, headers)
+}
+
 async fn get_status() -> Json<serde_json::Value> {
-    println!("[Server] Health check request received");
     Json(serde_json::json!({ "status": "online" }))
 }
 
@@ -1267,10 +1374,26 @@ async fn handle_e2e_report(
     State(state): State<AppState>,
     Json(report): Json<E2EReport>,
 ) -> Json<serde_json::Value> {
-    println!("[E2E] Received report: {:?}", report);
     if let Ok(mut m) = state.app_state_sync.last_e2e_report.lock() {
         *m = Some(report);
     }
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn handle_remote_startup_perf(
+    Json(report): Json<RemoteStartupPerfReport>,
+) -> Json<serde_json::Value> {
+    println!(
+        "[remote-startup] client={} payloadBytes={:?} serializeMs={:?} bootstrapMs={:?} sseOpenMs={:?} firstUsableRenderMs={:?} source={:?}",
+        report.client_id,
+        report.payload_bytes,
+        report.serialize_ms,
+        report.bootstrap_latency_ms,
+        report.sse_open_latency_ms,
+        report.first_usable_render_ms,
+        report.bootstrap_source
+    );
+
     Json(serde_json::json!({ "status": "ok" }))
 }
 
@@ -1287,14 +1410,6 @@ async fn state_events(
     Query(query): Query<SseQueryParams>,
 ) -> impl IntoResponse {
     let compact_mode = parse_truthy_flag(query.compact.as_deref());
-    println!("[SSE] ========================================");
-    println!(
-        "[SSE] Client connected! New SSE subscription (clientId={:?}, sessionStartMs={:?}, compact={})",
-        query.client_id,
-        query.session_start_ms,
-        compact_mode
-    );
-    println!("[SSE] ========================================");
     // Subscribe to the broadcast channels
     let rx_state = state.app_state_sync.state_tx.subscribe();
     let rx_command = state.app_state_sync.command_tx.subscribe();
@@ -1306,42 +1421,25 @@ async fn state_events(
         state.app_state_sync.get_state()
     };
     let initial_state_payload = serde_json::to_string(&initial_state).unwrap_or_default();
-    println!(
-        "[SSE] Prepared initial state for client (payloadBytes={}, compact={})",
-        initial_state_payload.len(),
-        compact_mode
-    );
     
     // Convert broadcast receiver to a stream, mapping directly to SSE events
     // filter_map skips lagged errors (when client is slower than broadcast rate)
     let state_stream = BroadcastStream::new(rx_state)
-        .filter_map(|result| async move { 
-            if result.is_err() {
-                eprintln!("[SSE] State stream lagged");
-            }
-            result.ok() 
-        })
+        .filter_map(|result| async move { result.ok() })
         .map(move |broadcast_state: BroadcastState| -> Result<Event, Infallible> {
             let outgoing_state = if compact_mode {
                 compact_broadcast_state(broadcast_state)
             } else {
                 broadcast_state
             };
-            println!("[SSE] Broadcasting state update to client");
             Ok(Event::default()
                 .event("state")
                 .data(serde_json::to_string(&outgoing_state).unwrap_or_default()))
         });
         
     let command_stream = BroadcastStream::new(rx_command)
-        .filter_map(|result| async move { 
-            if result.is_err() {
-                eprintln!("[SSE] Command stream lagged");
-            }
-            result.ok() 
-        })
+        .filter_map(|result| async move { result.ok() })
         .map(|command: RemoteCommand| -> Result<Event, Infallible> {
-            println!("[SSE] Broadcasting command to client: {}", command.command);
             Ok(Event::default()
                 .event("command")
                 .data(serde_json::to_string(&command).unwrap_or_default()))
@@ -1349,7 +1447,6 @@ async fn state_events(
 
     // Send an immediate lightweight event to flush headers/chunks early on Safari.
     let connected_event = futures::stream::once(async move {
-        println!("[SSE] Sending lightweight connected event");
         Ok(Event::default()
             .event("connected")
             .data("{}"))
@@ -1357,7 +1454,6 @@ async fn state_events(
 
     // Prepend with initial state
     let initial_event = futures::stream::once(async move {
-        println!("[SSE] Sending initial state to newly connected client");
         Ok(Event::default()
             .event("state")
             .data(initial_state_payload))
@@ -1368,8 +1464,6 @@ async fn state_events(
         .chain(initial_event)
         .chain(futures::stream::select(state_stream, command_stream));
 
-    println!("[SSE] SSE stream configured, starting to send events...");
-
     let sse = Sse::new(combined_stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)).text("ping"));
 
@@ -1377,6 +1471,47 @@ async fn state_events(
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache, no-transform"));
     headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
     headers.insert(header::HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no"));
+
+    (headers, sse)
+}
+
+/// Dedicated SSE endpoint for the lightweight phone/remote state contract.
+async fn remote_state_events(
+    State(state): State<AppState>,
+    Query(_query): Query<SseQueryParams>,
+) -> impl IntoResponse {
+    let rx_state = state.app_state_sync.remote_state_tx.subscribe();
+    let initial_state_payload =
+        serde_json::to_string(&state.app_state_sync.get_remote_state()).unwrap_or_default();
+
+    let state_stream = BroadcastStream::new(rx_state)
+        .filter_map(|result| async move { result.ok() })
+        .map(|remote_state| -> Result<Event, Infallible> {
+            Ok(Event::default()
+                .event("state")
+                .data(serde_json::to_string(&remote_state).unwrap_or_default()))
+        });
+
+    let connected_event = futures::stream::once(async move {
+        Ok(Event::default().event("connected").data("{}"))
+    });
+
+    let initial_event = futures::stream::once(async move {
+        Ok(Event::default()
+            .event("state")
+            .data(initial_state_payload))
+    });
+
+    let sse = Sse::new(connected_event.chain(initial_event).chain(state_stream))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)).text("ping"));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache, no-transform"));
+    headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+    headers.insert(
+        header::HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
 
     (headers, sse)
 }

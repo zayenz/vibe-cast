@@ -676,6 +676,7 @@ mod unit_tests {
         
         // Trigger a state change
         let _ = app_state.start_message_playback("msg-1", DeviceType::MobileRemote);
+        app_state.broadcast_current_state();
         
         // Device should receive the update
         let updates = mock_device.try_receive_updates(Duration::from_millis(100)).await;

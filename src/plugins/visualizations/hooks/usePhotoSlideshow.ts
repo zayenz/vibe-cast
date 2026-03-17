@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getStringSetting, getBooleanSetting, getNumberSetting } from '../../utils/settings';
-import { 
-  loadFaceDetectionModels, 
-  detectFacePosition, 
-  FacePosition
-} from '../faceDetection';
+import type { FacePosition } from '../faceDetection';
+
+type FaceDetectionModule = typeof import('../faceDetection');
+
+let faceDetectionModulePromise: Promise<FaceDetectionModule> | null = null;
+
+async function loadFaceDetectionModule(): Promise<FaceDetectionModule> {
+  if (!faceDetectionModulePromise) {
+    faceDetectionModulePromise = import('../faceDetection');
+  }
+
+  return faceDetectionModulePromise;
+}
 
 // Helper to convert file paths to displayable URLs
 function getMediaUrl(filePath: string): string {
@@ -64,15 +72,16 @@ export function usePhotoSlideshow(
   const [loading, setLoading] = useState(true);
   const [faceModelsLoaded, setFaceModelsLoaded] = useState(false);
   const [facePositions, setFacePositions] = useState<Map<string, FacePosition>>(new Map());
-  // Map from image path to ready-to-display blob URL
+  // Map from media path to ready-to-display URL (blob for images, direct URL for videos)
   const [readyImages, setReadyImages] = useState<Map<string, string>>(new Map());
   // Track whether images are portrait (height > width)
   const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
   const [usingExamplePhotos, setUsingExamplePhotos] = useState(false);
   
   const timerRef = useRef<number | null>(null);
-  // Store blob URLs for cleanup
+  // Store image blob URLs for cleanup
   const blobUrls = useRef<Map<string, string>>(new Map());
+  const mediaUrls = useRef<Map<string, string>>(new Map());
   // Track in-progress loading to avoid duplicates
   const loadingPromises = useRef<Map<string, Promise<string | null>>>(new Map());
   // Track current video element to listen for 'ended' event
@@ -165,11 +174,11 @@ export function usePhotoSlideshow(
     throw lastError;
   }, []);
 
-  // Preload media: fetch as blob, create URL, decode/preload, and return ready URL
+  // Preload media: images are decoded into blob URLs, videos use direct streamed URLs.
   const preloadMedia = useCallback(async (path: string): Promise<string | null> => {
-    // Already have a ready blob URL
-    if (blobUrls.current.has(path)) {
-      return blobUrls.current.get(path)!;
+    const existingUrl = mediaUrls.current.get(path);
+    if (existingUrl) {
+      return existingUrl;
     }
     
     // Already loading - wait for it
@@ -192,60 +201,45 @@ export function usePhotoSlideshow(
           }, timeoutMs);
         });
         
-        // Fetch media as blob
         const fetchPromise = (async () => {
           const mediaUrl = getMediaUrl(path);
+          if (isVideo) {
+            mediaUrls.current.set(path, mediaUrl);
+            setReadyImages(prev => new Map(prev).set(path, mediaUrl));
+            return mediaUrl;
+          }
+
           const response = await fetchWithRetry(mediaUrl, {}, 2, 500); // Fewer retries for individual images
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
           const blob = await response.blob();
           const blobUrl = URL.createObjectURL(blob);
+
+          const img = new Image();
+          img.src = blobUrl;
           
-          if (isVideo) {
-            // For videos, preload enough data to start playing
-            const video = document.createElement('video');
-            video.preload = 'auto';
-            video.src = blobUrl;
-            
-            // Wait for video to be ready to play
-            await new Promise<void>((resolve, reject) => {
-              video.oncanplaythrough = () => resolve();
-              video.onerror = () => reject(new Error('Video load failed'));
-              // Timeout after 10 seconds
-              setTimeout(() => resolve(), 10000);
-            });
-          } else {
-            // For images, ensure complete load and decode
-            const img = new Image();
-            img.src = blobUrl;
-            
-            // Wait for complete load AND decode
-            await new Promise<void>((resolve, reject) => {
-              img.onload = async () => {
-                try {
-                  // Ensure decode is complete
-                  await img.decode();
-                  
-                  // Detect orientation for mosaic mode
-                  const isPortrait = img.naturalHeight > img.naturalWidth;
-                  setImageOrientations(prev => new Map(prev).set(path, isPortrait));
-                  resolve();
-                } catch (err) {
-                  reject(err);
-                }
-              };
-              img.onerror = () => reject(new Error('Image load failed'));
-              // Timeout after 10 seconds
-              setTimeout(() => resolve(), 10000);
-            });
-          }
-          
+          // Wait for complete load AND decode
+          await new Promise<void>((resolve, reject) => {
+            img.onload = async () => {
+              try {
+                await img.decode();
+                const isPortrait = img.naturalHeight > img.naturalWidth;
+                setImageOrientations(prev => new Map(prev).set(path, isPortrait));
+                resolve();
+              } catch (err) {
+                reject(err);
+              }
+            };
+            img.onerror = () => reject(new Error('Image load failed'));
+            setTimeout(() => resolve(), 10000);
+          });
+
           return blobUrl;
         })();
         
         // Race between fetch and timeout
-        const blobUrl = await Promise.race([fetchPromise, timeoutPromise]);
+        const resolvedUrl = await Promise.race([fetchPromise, timeoutPromise]);
         
         // Clear timeout if we succeeded
         if (timeoutId) {
@@ -253,10 +247,13 @@ export function usePhotoSlideshow(
         }
         
         // Only mark as ready after everything is complete
-        blobUrls.current.set(path, blobUrl);
-        setReadyImages(prev => new Map(prev).set(path, blobUrl));
+        mediaUrls.current.set(path, resolvedUrl);
+        if (!isVideo) {
+          blobUrls.current.set(path, resolvedUrl);
+        }
+        setReadyImages(prev => new Map(prev).set(path, resolvedUrl));
         loadingPromises.current.delete(path);
-        return blobUrl;
+        return resolvedUrl;
       } catch (err) {
         // Clear timeout on error
         if (timeoutId) {
@@ -275,20 +272,61 @@ export function usePhotoSlideshow(
   // Cleanup
   useEffect(() => {
     const urls = blobUrls.current;
+    const displayUrls = mediaUrls.current;
     const promises = loadingPromises.current;
     return () => {
       urls.forEach((url) => {
         URL.revokeObjectURL(url);
       });
       urls.clear();
+      displayUrls.clear();
       promises.clear();
     };
   }, []);
+
+  const resetCachedMedia = useCallback(() => {
+    blobUrls.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+    });
+    blobUrls.current.clear();
+    mediaUrls.current.clear();
+    loadingPromises.current.clear();
+    setReadyImages(new Map());
+    setImageOrientations(new Map());
+    setFacePositions(new Map());
+  }, []);
+
+  useEffect(() => {
+    resetCachedMedia();
+    if (smartCrop) {
+      void loadFaceDetectionModule()
+        .then((module) => module.clearFacePositionCache())
+        .catch(() => {});
+    }
+  }, [folderPath, smartCrop, resetCachedMedia]);
+
+  const ensureFacePosition = useCallback(async (path: string, mediaUrl: string | null | undefined) => {
+    if (!smartCrop || !faceModelsLoaded || !mediaUrl || isVideoFile(path)) {
+      return;
+    }
+
+    const module = await loadFaceDetectionModule();
+    const facePosition = await module.detectFacePosition(mediaUrl, path);
+    setFacePositions((previous) => {
+      if (previous.get(path) === facePosition) {
+        return previous;
+      }
+      const next = new Map(previous);
+      next.set(path, facePosition);
+      return next;
+    });
+  }, [faceModelsLoaded, smartCrop]);
   
   // Load face detection models
   useEffect(() => {
     if (smartCrop && !faceModelsLoaded) {
-      loadFaceDetectionModels()
+      loadFaceDetectionModule()
+        .then((module) => module.loadFaceDetectionModels())
         .then(() => setFaceModelsLoaded(true))
         .catch(console.error);
     }
@@ -679,37 +717,12 @@ export function usePhotoSlideshow(
       setCurrentIndex(startIndex);
       setError(null);
       
-      // Preload first image
+      // Preload the first item so the slideshow can render immediately.
       const firstPath = orderedImages[startIndex];
-      const firstImgUrl = getMediaUrl(firstPath);
-      
       try {
-        const response = await fetchWithRetry(firstImgUrl, {}, 2, 500);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        
-        blobUrls.current.set(firstPath, blobUrl);
+        const initialUrl = await preloadMedia(firstPath);
         setLoading(false);
-        
-        // Decode in background
-        const firstImg = new Image();
-        firstImg.src = blobUrl;
-        firstImg.decode()
-          .then(() => {
-            const isPortrait = firstImg.naturalHeight > firstImg.naturalWidth;
-            setImageOrientations(prev => new Map(prev).set(firstPath, isPortrait));
-            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
-          })
-          .catch(() => {
-            setReadyImages(prev => new Map(prev).set(firstPath, blobUrl));
-          });
-        
-        if (smartCrop) {
-          detectFacePosition(blobUrl).then(facePos => {
-            setFacePositions(prev => new Map(prev).set(firstPath, facePos));
-          }).catch(console.error);
-        }
+        await ensureFacePosition(firstPath, initialUrl);
       } catch (_e) {
         console.error(_e);
         setLoading(false);
@@ -720,7 +733,7 @@ export function usePhotoSlideshow(
       setImages([]);
       setLoading(false);
     }
-  }, [folderPath, randomOrder, storageKey, smartCrop, fetchWithRetry]);
+  }, [folderPath, randomOrder, storageKey, preloadMedia, ensureFacePosition, fetchWithRetry]);
   
   // Trigger load
   useEffect(() => {
@@ -741,36 +754,47 @@ export function usePhotoSlideshow(
   useEffect(() => {
     if (images.length === 0) return;
     
-    const indicesToPreload = [0, 1, 2, 3].map(i => (currentIndex + i) % images.length);
-    
-    indicesToPreload.forEach(async (idx) => {
-      const path = images[idx];
-      const blobUrl = await preloadMedia(path);
-      
-      if (blobUrl && smartCrop && faceModelsLoaded && !facePositions.has(path)) {
-        detectFacePosition(blobUrl).then(facePos => {
-          setFacePositions(prev => new Map(prev).set(path, facePos));
-        }).catch(console.error);
-      }
+    const currentPath = images[currentIndex];
+    const nextIdx = (currentIndex + 1) % images.length;
+    const nextPath = images[nextIdx];
+    const keepPaths = new Set<string>([
+      currentPath,
+      images[(currentIndex - 1 + images.length) % images.length],
+      nextPath,
+    ].filter(Boolean));
+
+    const currentIsPortrait = currentPath ? imageOrientations.get(currentPath) : false;
+    const nextIsPortrait = nextPath ? imageOrientations.get(nextPath) : false;
+    if (
+      fitMode === 'mosaic' &&
+      currentPath &&
+      nextPath &&
+      currentIsPortrait &&
+      nextIsPortrait &&
+      !isVideoFile(currentPath)
+    ) {
+      keepPaths.add(nextPath);
+    }
+
+    Array.from(keepPaths).forEach(async (path) => {
+      const mediaUrl = await preloadMedia(path);
+      await ensureFacePosition(path, mediaUrl);
     });
     
-    // Cleanup old blobUrls not in preload window
-    const keepIndices = new Set(indicesToPreload);
-    keepIndices.add((currentIndex - 1 + images.length) % images.length);
-    
     const keysToDelete: string[] = [];
-    blobUrls.current.forEach((_, path) => {
-      const idx = images.indexOf(path);
-      if (idx >= 0 && !keepIndices.has(idx)) {
+    mediaUrls.current.forEach((_, path) => {
+      if (!keepPaths.has(path)) {
         keysToDelete.push(path);
       }
     });
+
     keysToDelete.forEach(key => {
       const blobUrl = blobUrls.current.get(key);
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
       }
       blobUrls.current.delete(key);
+      mediaUrls.current.delete(key);
       setReadyImages(prev => {
         const next = new Map(prev);
         next.delete(key);
@@ -778,7 +802,7 @@ export function usePhotoSlideshow(
       });
     });
     
-  }, [currentIndex, images, smartCrop, faceModelsLoaded, facePositions, preloadMedia]);
+  }, [currentIndex, ensureFacePosition, fitMode, imageOrientations, images, preloadMedia]);
   
   // Advance function
   const advanceToNext = useCallback(async () => {
@@ -801,9 +825,9 @@ export function usePhotoSlideshow(
     const targetIdx = wasMosaic ? (currentIndex + 2) % images.length : nextIdx;
     const targetPath = images[targetIdx];
     
-    if (!blobUrls.current.has(targetPath)) {
-      const blobUrl = await preloadMedia(targetPath);
-      if (!blobUrl) {
+    if (!mediaUrls.current.has(targetPath)) {
+      const mediaUrl = await preloadMedia(targetPath);
+      if (!mediaUrl) {
         setCurrentIndex(targetIdx);
         return;
       }
@@ -874,7 +898,7 @@ export function usePhotoSlideshow(
   
   const getBlobUrl = (path: string | null): string | undefined => {
     if (!path) return undefined;
-    return readyImages.get(path) || blobUrls.current.get(path);
+    return readyImages.get(path) || mediaUrls.current.get(path);
   };
   
   const currentBlobUrl = getBlobUrl(currentImage);

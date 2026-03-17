@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["fs", "cors"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "compression-full", "set-header"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures = "0.3"

@@ -300,12 +300,18 @@ function addDebugLog(level: string, message: string, data?: unknown) {
   if (debugLogBuffer.length > MAX_LOG_ENTRIES) {
     debugLogBuffer.shift();
   }
-  // Also log to console if available
-  const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
-  if (data !== undefined) {
-    logFn(`[VisualizerWindow] ${message}`, data);
-  } else {
-    logFn(`[VisualizerWindow] ${message}`);
+  const shouldLogToConsole = import.meta.env.DEV || (
+    typeof window !== 'undefined' &&
+    window.localStorage.getItem('vibecast:vizVerbose') === '1'
+  );
+
+  if (shouldLogToConsole) {
+    const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    if (data !== undefined) {
+      logFn(`[VisualizerWindow] ${message}`, data);
+    } else {
+      logFn(`[VisualizerWindow] ${message}`);
+    }
   }
 }
 
@@ -682,6 +688,7 @@ export const VisualizerWindow: React.FC = () => {
   // We need to ensure textStylePresets is loaded before rendering messages
   const [isStateLoaded, setIsStateLoaded] = useState(false);
   const [hasReceivedSSEState, setHasReceivedSSEState] = useState(false);
+  const lastConfigRevisionRef = useRef<number | null>(null);
 
   // Load SSE state into local zustand store when it arrives
   useEffect(() => {
@@ -703,33 +710,25 @@ export const VisualizerWindow: React.FC = () => {
       setHasReceivedSSEState(true);
     }
     
-    addDebugLog('log', 'SSE state received', {
-      activeVisualization: sseState.activeVisualization,
-      activeVisualizationPreset: sseState.activeVisualizationPreset,
-      presetsCount: sseState.visualizationPresets?.length ?? 0,
-      presetIds: sseState.visualizationPresets?.map(p => ({ id: p.id, name: p.name, vizId: p.visualizationId })),
-      textStylePresetsCount: sseState.textStylePresets?.length ?? 0,
-      triggeredMessage: sseState.triggeredMessage ? {
-        id: sseState.triggeredMessage.id,
-        text: sseState.triggeredMessage.text?.substring(0, 50),
-      } : null,
-    });
-    
-    loadConfiguration({
-      version: 1,
-      activeVisualization: sseState.activeVisualization,
-      activeVisualizationPreset: sseState.activeVisualizationPreset ?? undefined,
-      enabledVisualizations: sseState.enabledVisualizations,
-      commonSettings: sseState.commonSettings,
-      visualizationSettings: sseState.visualizationSettings ?? {},
-      visualizationPresets: sseState.visualizationPresets ?? [],
-      messages: sseState.messages ?? [],
-      messageTree: sseState.messageTree,
-      defaultTextStyle: sseState.defaultTextStyle,
-      textStyleSettings: sseState.textStyleSettings ?? {},
-      textStylePresets: sseState.textStylePresets ?? [],
-      messageStats: sseState.messageStats ?? {},
-    }, false); // sync=false to avoid broadcasting back
+    const configRevision = sseState.configRevision ?? 0;
+    if (lastConfigRevisionRef.current !== configRevision) {
+      lastConfigRevisionRef.current = configRevision;
+      loadConfiguration({
+        version: 1,
+        activeVisualization: sseState.activeVisualization,
+        activeVisualizationPreset: sseState.activeVisualizationPreset ?? undefined,
+        enabledVisualizations: sseState.enabledVisualizations,
+        commonSettings: sseState.commonSettings,
+        visualizationSettings: sseState.visualizationSettings ?? {},
+        visualizationPresets: sseState.visualizationPresets ?? [],
+        messages: sseState.messages ?? [],
+        messageTree: sseState.messageTree,
+        defaultTextStyle: sseState.defaultTextStyle,
+        textStyleSettings: sseState.textStyleSettings ?? {},
+        textStylePresets: sseState.textStylePresets ?? [],
+        messageStats: sseState.messageStats ?? {},
+      }, false); // sync=false to avoid broadcasting back
+    }
     
     // Fallback: Clear active messages if playback has stopped according to SSE state
     // This provides a safety net if the playback-control-changed event isn't received
@@ -743,7 +742,6 @@ export const VisualizerWindow: React.FC = () => {
           triggeredMessage: triggeredMessage ? 'exists' : 'null',
           activeMessagesCount: currentActiveMessages.length
         });
-        console.log('[VisualizerWindow] SSE state indicates playback stopped, clearing active messages');
         useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
       }
     }
@@ -784,10 +782,19 @@ export const VisualizerWindow: React.FC = () => {
     
     const sseQueue = sseState.folderPlaybackQueue;
     const currentQueue = useStore.getState().folderPlaybackQueue;
-    
-    // Only update if different to avoid unnecessary re-renders
-    if (JSON.stringify(sseQueue) !== JSON.stringify(currentQueue)) {
-      console.log('[VisualizerWindow] Syncing folderPlaybackQueue from SSE:', sseQueue);
+
+    const queuesMatch =
+      sseQueue === currentQueue ||
+      (
+        !!sseQueue &&
+        !!currentQueue &&
+        sseQueue.folderId === currentQueue.folderId &&
+        sseQueue.currentIndex === currentQueue.currentIndex &&
+        sseQueue.messageIds.length === currentQueue.messageIds.length &&
+        sseQueue.messageIds.every((messageId, index) => messageId === currentQueue.messageIds[index])
+      );
+
+    if (!queuesMatch) {
       useStore.setState({ folderPlaybackQueue: sseQueue ?? null });
     }
   }, [sseState?.folderPlaybackQueue]);
@@ -801,7 +808,6 @@ export const VisualizerWindow: React.FC = () => {
     if (!sseState?.triggeredMessage) {
       // Clear ref when triggeredMessage is cleared (so we can process new ones)
       if (lastTriggeredMessageRef.current) {
-        console.log('[VisualizerWindow] triggeredMessage cleared in SSE state');
         lastTriggeredMessageRef.current = null;
       }
       return;
@@ -1384,7 +1390,6 @@ export const VisualizerWindow: React.FC = () => {
       <div className="absolute inset-0 pointer-events-none z-[100]" data-message-overlay="true">
         {isStateLoaded ? (
           <>
-            {activeMessages.length > 0 && console.log('[VisualizerWindow] Rendering activeMessages:', activeMessages.map(am => ({ id: am.message.id, text: am.message.text?.substring(0, 30) })))}
             {activeMessages.map(({ message, timestamp }, index) => {
             // Calculate cumulative vertical offset based on heights of previous messages
             let cumulativeOffset = 0;
