@@ -4,6 +4,12 @@ import {
   MessageStats,
   VisualizationPreset,
 } from '../plugins/types';
+import {
+  buildE2EStateSnapshot,
+  postE2EProbe,
+  publishE2EWindowSnapshot,
+  readE2EContextFromUrl,
+} from '../e2e/client';
 import type { MessageConfig, MessageTreeNode } from '../plugins/types';
 import type { AppState, ConnectionPhase, FolderPlaybackQueue, PlaybackControlState } from './useAppState';
 import { DeviceType } from './useAppState';
@@ -122,6 +128,10 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     if (!effectiveBase) {
       return;
     }
+    const e2eContext = readE2EContextFromUrl('remote', 'remote');
+    if (e2eContext) {
+      clientIdRef.current = e2eContext.clientId;
+    }
 
     const remoteLoadStartedAt = Date.now();
     const perfEnabled =
@@ -130,9 +140,14 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     perfRef.current = { clientId: clientIdRef.current };
     hasReportedPerfRef.current = false;
     hasAnyStateRef.current = false;
+    publishE2EWindowSnapshot(null);
     setError(null);
     setIsConnected(false);
     setConnectionPhase('connecting');
+    void postE2EProbe(effectiveBase, 'remote_page_loaded', {
+      href: typeof window !== 'undefined' ? window.location.href : undefined,
+      perfEnabled,
+    });
 
     let isMounted = true;
     let eventSource: EventSource | null = null;
@@ -160,13 +175,23 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
       });
     };
 
-    const markUsable = (source: 'bootstrap' | 'sse') => {
+    const markUsable = (source: 'bootstrap' | 'sse', nextState: AppState, nextPhase: ConnectionPhase) => {
       if (perfRef.current.firstUsableRenderMs !== undefined) {
         return;
       }
 
       perfRef.current.firstUsableRenderMs = Date.now() - remoteLoadStartedAt;
       perfRef.current.bootstrapSource = source;
+      const snapshot = buildE2EStateSnapshot(nextState, nextPhase);
+      void postE2EProbe(effectiveBase, 'remote_first_usable_render', {
+        source,
+        bootstrapLatencyMs: perfRef.current.bootstrapLatencyMs,
+        sseOpenLatencyMs: perfRef.current.sseOpenLatencyMs,
+        firstUsableRenderMs: perfRef.current.firstUsableRenderMs,
+        payloadBytes: perfRef.current.payloadBytes,
+        serializeMs: perfRef.current.serializeMs,
+        snapshot,
+      });
       reportTimer = setTimeout(maybeReportPerf, 500);
     };
 
@@ -174,8 +199,15 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
       hasAnyStateRef.current = true;
       setState(nextState);
       setError(null);
-      setConnectionPhase(source === 'bootstrap' ? 'degraded' : 'live');
-      markUsable(source);
+      const nextPhase: ConnectionPhase = source === 'bootstrap' ? 'degraded' : 'live';
+      const snapshot = buildE2EStateSnapshot(nextState, nextPhase);
+      publishE2EWindowSnapshot(snapshot);
+      void postE2EProbe(effectiveBase, 'remote_dom_snapshot', {
+        source,
+        snapshot,
+      });
+      setConnectionPhase(nextPhase);
+      markUsable(source, nextState, nextPhase);
     };
 
     const connectSse = (attempt: number) => {
@@ -183,8 +215,14 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
         return;
       }
 
-      const sseUrl = `${effectiveBase}/api/remote/events?clientId=${encodeURIComponent(clientIdRef.current)}`;
-      eventSource = new EventSource(sseUrl);
+      const sseUrl = new URL(`${effectiveBase}/api/remote/events`);
+      sseUrl.searchParams.set('clientId', clientIdRef.current);
+      if (e2eContext) {
+        sseUrl.searchParams.set('sessionId', e2eContext.sessionId);
+        sseUrl.searchParams.set('clientLabel', e2eContext.clientLabel);
+        sseUrl.searchParams.set('clientKind', e2eContext.clientKind);
+      }
+      eventSource = new EventSource(sseUrl.toString());
 
       eventSource.onopen = () => {
         if (!isMounted) {
@@ -197,6 +235,10 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
           perfRef.current.sseOpenLatencyMs = Date.now() - remoteLoadStartedAt;
           maybeReportPerf();
         }
+        void postE2EProbe(effectiveBase, 'remote_sse_open', {
+          attempt,
+          sseOpenLatencyMs: perfRef.current.sseOpenLatencyMs,
+        });
       };
 
       eventSource.addEventListener('state', (event) => {
@@ -221,6 +263,10 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
         setIsConnected(false);
         eventSource?.close();
         const backoffMs = Math.min(8000, 500 * (2 ** attempt));
+        void postE2EProbe(effectiveBase, 'remote_sse_error', {
+          attempt,
+          backoffMs,
+        });
         reconnectTimer = setTimeout(() => connectSse(attempt + 1), backoffMs);
         if (hasAnyStateRef.current) {
           setConnectionPhase('degraded');
@@ -231,10 +277,21 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     const bootstrap = async () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const bootstrapUrl = new URL(`${effectiveBase}/api/remote/state`);
+      if (perfEnabled) {
+        bootstrapUrl.searchParams.set('perf', '1');
+      }
+      if (e2eContext) {
+        bootstrapUrl.searchParams.set('sessionId', e2eContext.sessionId);
+        bootstrapUrl.searchParams.set('clientId', e2eContext.clientId);
+        bootstrapUrl.searchParams.set('clientLabel', e2eContext.clientLabel);
+        bootstrapUrl.searchParams.set('clientKind', e2eContext.clientKind);
+      }
+      void postE2EProbe(effectiveBase, 'remote_bootstrap_started', {});
 
       try {
         const response = await fetch(
-          `${effectiveBase}/api/remote/state${perfEnabled ? '?perf=1' : ''}`,
+          bootstrapUrl.toString(),
           {
             cache: 'no-store',
             signal: controller.signal,
@@ -254,11 +311,20 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
 
         const nextState = parseRemoteState(await response.json());
         perfRef.current.bootstrapLatencyMs = Date.now() - remoteLoadStartedAt;
+        void postE2EProbe(effectiveBase, 'remote_bootstrap_succeeded', {
+          bootstrapLatencyMs: perfRef.current.bootstrapLatencyMs,
+          payloadBytes: perfRef.current.payloadBytes,
+          serializeMs: perfRef.current.serializeMs,
+          snapshot: buildE2EStateSnapshot(nextState, 'degraded'),
+        });
         applyState(nextState, 'bootstrap');
       } catch (bootstrapError) {
         if (bootstrapError instanceof Error && bootstrapError.name !== 'AbortError') {
           setError((current) => current ?? bootstrapError.message);
         }
+        void postE2EProbe(effectiveBase, 'remote_bootstrap_failed', {
+          error: bootstrapError instanceof Error ? bootstrapError.message : 'bootstrap failed',
+        });
       } finally {
         clearTimeout(timeoutId);
         connectSse(0);

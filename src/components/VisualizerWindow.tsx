@@ -8,6 +8,12 @@ import { MessageConfig, CommonVisualizationSettings, RemoteCommand, getDefaultsF
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
 import { useAppState, PlaybackControlState } from '../hooks/useAppState';
+import {
+  buildE2EStateSnapshot,
+  discoverE2EContext,
+  postE2EProbe,
+  publishE2EWindowSnapshot,
+} from '../e2e/client';
 import { resolveMessageText } from '../utils/messageLoader';
 
 /**
@@ -424,6 +430,8 @@ export const VisualizerWindow: React.FC = () => {
 
   // State for showing log viewer in debug overlay
   const [showLogs, setShowLogs] = useState(false);
+  const e2eReadyRef = useRef(false);
+  const lastVisualizedMessageIdsRef = useRef<string[]>([]);
   
   // Get state from store
   const activeVisualization = useStore((state) => state.activeVisualization);
@@ -480,6 +488,26 @@ export const VisualizerWindow: React.FC = () => {
       messages: activeMessages.map(am => ({ id: am.message.id, text: am.message.text?.substring(0, 30), timestamp: am.timestamp })),
     });
   }, [activeMessages]);
+  useEffect(() => {
+    const currentMessageIds = activeMessages.map(({ message }) => message.id);
+    const previousMessageIds = lastVisualizedMessageIdsRef.current;
+    const renderedIds = currentMessageIds.filter((messageId) => !previousMessageIds.includes(messageId));
+    const clearedIds = previousMessageIds.filter((messageId) => !currentMessageIds.includes(messageId));
+
+    for (const messageId of renderedIds) {
+      void postE2EProbe(apiBase, 'visualizer_message_rendered', {
+        messageId,
+      });
+    }
+
+    for (const messageId of clearedIds) {
+      void postE2EProbe(apiBase, 'visualizer_message_cleared', {
+        messageId,
+      });
+    }
+
+    lastVisualizedMessageIdsRef.current = currentMessageIds;
+  }, [activeMessages, apiBase]);
   const textStyleSettings = useStore((state) => state.textStyleSettings);
   const textStylePresets = useStore((state) => state.textStylePresets);
   
@@ -506,7 +534,12 @@ export const VisualizerWindow: React.FC = () => {
   // Helper to handle remote commands (from both Tauri events and SSE)
   const handleRemoteCommand = useCallback((command: string, payload: unknown) => {
     console.log('Received remote-command:', command, payload);
-      
+    void postE2EProbe(apiBase, 'window_command_observed', {
+      window: 'visualizer',
+      command,
+      payload,
+    });
+    
     switch (command) {
       case 'set-mode':
         if (typeof payload === 'string') setMode(payload as 'fireplace' | 'techno', false);
@@ -626,7 +659,7 @@ export const VisualizerWindow: React.FC = () => {
   // This ensures VisualizerWindow gets the same config as ControlPlane on startup
   // Must use the same API base as ControlPlane to connect to the Axum server
   // Only connect when server is ready to avoid initial connection failures
-  const { state: sseState, isConnected: sseConnected } = useAppState({ 
+  const { state: sseState, isConnected: sseConnected, connectionPhase } = useAppState({ 
     apiBase: serverReady ? apiBase : '', // Empty string prevents connection attempt
     onCommand: serverReady ? handleRemoteCommandCallback : undefined
   });
@@ -635,6 +668,45 @@ export const VisualizerWindow: React.FC = () => {
   useEffect(() => {
     addDebugLog('log', `Server ready state changed: ${serverReady}`);
   }, [serverReady]);
+
+  useEffect(() => {
+    if (!serverReady) {
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connectE2E = async () => {
+      const context = await discoverE2EContext(apiBase, 'visualizer', 'visualizer');
+      if (cancelled) {
+        return;
+      }
+
+      if (context) {
+        if (!e2eReadyRef.current) {
+          e2eReadyRef.current = true;
+          void postE2EProbe(apiBase, 'window_ready', {
+            window: 'visualizer',
+          });
+        }
+        return;
+      }
+
+      retryTimer = setTimeout(() => {
+        void connectE2E();
+      }, 1000);
+    };
+
+    void connectE2E();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [apiBase, serverReady]);
 
   // When server is ready, try to load initial state via Tauri IPC
   // This bypasses SSE/HTTP entirely and works even when webview HTTP is blocked
@@ -758,6 +830,45 @@ export const VisualizerWindow: React.FC = () => {
       hasReceivedSSEState,
     });
   }, [sseState, sseConnected, loadConfiguration, hasReceivedSSEState]);
+
+  useEffect(() => {
+    const localActiveMessageId = activeMessages[0]?.message.id ?? null;
+    const snapshot = buildE2EStateSnapshot({
+      configRevision: sseState?.configRevision ?? 0,
+      runtimeRevision: sseState?.runtimeRevision ?? 0,
+      activeVisualization,
+      activeVisualizationPreset,
+      triggeredMessage: localActiveMessageId
+        ? { id: localActiveMessageId }
+        : (sseState?.triggeredMessage ?? null),
+      playbackControl: {
+        sessionId: localActiveMessageId ? (sseState?.playbackControl?.sessionId ?? 'visualizer-local') : null,
+        currentMessage: localActiveMessageId ? { id: localActiveMessageId } : null,
+        isPlaying: activeMessages.length > 0,
+      },
+      folderPlaybackQueue: sseState?.folderPlaybackQueue ?? null,
+      messageStats: sseState?.messageStats ?? {},
+    }, connectionPhase);
+    publishE2EWindowSnapshot(snapshot);
+    if (!snapshot) {
+      return;
+    }
+
+    void postE2EProbe(apiBase, 'window_state_snapshot', {
+      window: 'visualizer',
+      snapshot,
+      isConnected: sseConnected,
+      activeMessageIds: activeMessages.map(({ message }) => message.id),
+    });
+  }, [
+    activeMessages,
+    activeVisualization,
+    activeVisualizationPreset,
+    apiBase,
+    connectionPhase,
+    sseConnected,
+    sseState,
+  ]);
 
   // Fallback timeout: If SSE state doesn't arrive within 2 seconds, enable rendering with defaults.
   // This prevents a permanent black screen in debug builds or if the backend is unreachable.

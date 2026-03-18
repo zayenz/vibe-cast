@@ -8,6 +8,7 @@ import {
   RemoteCommand,
   DEFAULT_COMMON_SETTINGS,
 } from '../plugins/types';
+import { getCommandE2EMetadata, postE2EProbe } from '../e2e/client';
 import type { MessageTreeNode } from '../plugins/types';
 
 /**
@@ -704,10 +705,17 @@ export function useSendCommand(options: UseAppStateOptions = {}) {
   const sendCommand = useCallback(async (command: string, payload?: unknown) => {
     setIsPending(true);
     try {
+      const e2eMetadata = getCommandE2EMetadata();
+      if (e2eMetadata.clientKind === 'remote') {
+        void postE2EProbe(apiBase, 'remote_command_sent', {
+          command,
+          payload,
+        });
+      }
       const response = await fetch(`${apiBase}/api/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command, payload, deviceType }),
+        body: JSON.stringify({ command, payload, deviceType, ...e2eMetadata }),
       });
       
       if (!response.ok) {

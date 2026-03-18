@@ -1,0 +1,89 @@
+{
+  "activeVisualization": "fireplace",
+  "activeVisualizationPreset": "fireplace-blue-glow",
+  "enabledVisualizations": [
+    "fireplace",
+    "techno"
+  ],
+  "commonSettings": {
+    "intensity": 1,
+    "dim": 1
+  },
+  "visualizationPresets": [
+    {
+      "id": "fireplace-blue-glow",
+      "name": "Fireplace Blue Glow",
+      "visualizationId": "fireplace",
+      "settings": {},
+      "enabled": true,
+      "icon": "Flame"
+    },
+    {
+      "id": "techno-bassline",
+      "name": "Techno Bassline",
+      "visualizationId": "techno",
+      "settings": {},
+      "enabled": true,
+      "icon": "Music"
+    }
+  ],
+  "messages": [
+    {
+      "id": "message-1",
+      "text": "HI",
+      "textStyle": "scrolling-capitals",
+      "speed": 30
+    },
+    {
+      "id": "message-2",
+      "text": "GO",
+      "textStyle": "scrolling-capitals",
+      "speed": 30
+    },
+    {
+      "id": "message-3",
+      "text": "NOW",
+      "textStyle": "scrolling-capitals",
+      "speed": 30
+    }
+  ],
+  "messageTree": [
+    {
+      "type": "folder",
+      "id": "showtime-folder",
+      "name": "Showtime",
+      "children": [
+        {
+          "type": "message",
+          "id": "message-1",
+          "message": {
+            "id": "message-1",
+            "text": "HI",
+            "textStyle": "scrolling-capitals",
+            "speed": 30
+          }
+        },
+        {
+          "type": "message",
+          "id": "message-2",
+          "message": {
+            "id": "message-2",
+            "text": "GO",
+            "textStyle": "scrolling-capitals",
+            "speed": 30
+          }
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "id": "message-3",
+      "message": {
+        "id": "message-3",
+        "text": "NOW",
+        "textStyle": "scrolling-capitals",
+        "speed": 30
+      }
+    }
+  ]
+}

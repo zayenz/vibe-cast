@@ -74,6 +74,7 @@ export const RemoteControl: React.FC = () => {
                       e.stopPropagation();
                       sendCommand('cancel-folder-playback', {});
                     }}
+                    data-testid={`folder-cancel-${node.id}`}
                     className="p-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded text-xs"
                     title="Cancel folder playback"
                   >
@@ -90,6 +91,7 @@ export const RemoteControl: React.FC = () => {
                       sendCommand('play-folder', { folderId: node.id });
                     }
                   }}
+                  data-testid={`folder-play-${node.id}`}
                   className="p-1 bg-zinc-800 text-zinc-400 hover:text-orange-500 rounded text-xs"
                   title="Play folder sequentially"
                 >
@@ -127,6 +129,7 @@ export const RemoteControl: React.FC = () => {
                 handleTriggerMessage(msg, isPlaying);
               }}
               disabled={isPending || isPlaying}
+              data-testid={`message-${msg.id}`}
               className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
                 isPlaying 
                   ? 'border-orange-500/60 shadow-lg shadow-orange-500/10 cursor-default pointer-events-none' 
@@ -175,6 +178,7 @@ export const RemoteControl: React.FC = () => {
                       handleTriggerMessage(msg, isPlaying);
                     }
                   }}
+                  data-testid={isPlaying ? `message-stop-${msg.id}` : `message-play-${msg.id}`}
                   className={`p-1.5 rounded transition-colors ${
                     isPlaying
                       ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
@@ -212,7 +216,7 @@ export const RemoteControl: React.FC = () => {
   // Show blocking loading state only during the initial connection phase.
   if (!state && !error && connectionPhase === 'connecting') {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="min-h-screen bg-black text-white flex items-center justify-center" data-testid="remote-loading">
         <div className="flex flex-col items-center gap-4">
           <Loader2 size={32} className="animate-spin text-orange-500" />
           <span className="text-zinc-500 text-sm">Connecting...</span>
@@ -224,7 +228,7 @@ export const RemoteControl: React.FC = () => {
   // Show error state
   if (error && !state) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6" data-testid="remote-error">
         <div className="text-center">
           <WifiOff size={48} className="text-red-500 mx-auto mb-4" />
           <p className="text-red-500 mb-4">{error}</p>
@@ -254,7 +258,11 @@ export const RemoteControl: React.FC = () => {
   const isLiveConnection = connectionPhase === 'live' && isConnected;
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-y-auto">
+    <div
+      className="min-h-screen bg-black text-white p-6 font-sans flex flex-col gap-8 selection:bg-orange-500/30 overflow-y-auto"
+      data-testid="remote-root"
+      data-connection-phase={connectionPhase}
+    >
       {/* Background Glows */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute -top-24 -left-24 w-64 h-64 bg-orange-600/20 blur-[100px] rounded-full" />
@@ -281,6 +289,7 @@ export const RemoteControl: React.FC = () => {
           </div>
           <button
             onClick={() => setShowSettings(!showSettings)}
+            data-testid="settings-toggle"
             className={`p-3 rounded-xl transition-colors ${
               showSettings ? 'bg-orange-500 text-white' : 'bg-zinc-900 text-zinc-400'
             }`}
@@ -319,6 +328,7 @@ export const RemoteControl: React.FC = () => {
                   key={preset.id}
                   active={active}
                   onClick={() => handleSetActivePreset(preset.id)}
+                  testId={`preset-${preset.id}`}
                   icon={
                     getIcon(preset?.icon, 28) || <Settings2 size={28} />
                   }
@@ -348,6 +358,7 @@ export const RemoteControl: React.FC = () => {
                   key={msg.id}
                   onClick={() => handleTriggerMessage(msg)}
                   disabled={isPending}
+                  data-testid={`message-${msg.id}`}
                   className={`w-full p-5 bg-zinc-950 border rounded-2xl text-left active:scale-[0.98] transition-all flex justify-between items-center group relative overflow-hidden disabled:opacity-50 ${
                     isPlaying ? 'border-orange-500/60 shadow-lg shadow-orange-500/10' : 'border-zinc-800/50'
                   }`}
@@ -468,16 +479,18 @@ interface RemoteVizCardProps {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  testId?: string;
   disabled?: boolean;
 }
 
 const RemoteVizCard: React.FC<RemoteVizCardProps> = ({ 
-  active, onClick, icon, label, disabled 
+  active, onClick, icon, label, testId, disabled 
 }) => {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      data-testid={testId}
       className={`relative p-6 rounded-3xl flex flex-col items-center gap-3 transition-all duration-300 border disabled:opacity-50 ${
         active 
           ? 'bg-orange-500 text-white shadow-2xl shadow-orange-900/40 border-orange-400/50 scale-105' 

@@ -14,6 +14,12 @@ import {
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { useAppState, useSendCommand, DeviceType, PlaybackControlState } from '../hooks/useAppState';
+import {
+  buildE2EStateSnapshot,
+  discoverE2EContext,
+  postE2EProbe,
+  publishE2EWindowSnapshot,
+} from '../e2e/client';
 import { getVisualization } from '../plugins/visualizations';
 import { getTextStyle } from '../plugins/textStyles';
 import { SettingsRenderer, CommonSettings } from './settings/SettingsRenderer';
@@ -63,7 +69,7 @@ export const ControlPlane: React.FC = () => {
   }, []);
   
   // SSE-based state - single source of truth
-  const { state, isConnected } = useAppState({ apiBase });
+  const { state, isConnected, connectionPhase } = useAppState({ apiBase });
   
   // Local override for playback control state from Tauri events (more immediate than SSE)
   const [playbackControlOverride, setPlaybackControlOverride] = useState<PlaybackControlState | null>(null);
@@ -105,6 +111,60 @@ export const ControlPlane: React.FC = () => {
   // NOTE: playFolder and cancelFolderPlayback are now handled via HTTP commands to Rust backend
   
   const lastConfigRevisionRef = useRef<number | null>(null);
+  const e2eReadyRef = useRef(false);
+
+  useEffect(() => {
+    if (!apiBase) {
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connectE2E = async () => {
+      const context = await discoverE2EContext(apiBase, 'control_plane', 'control-plane');
+      if (cancelled) {
+        return;
+      }
+
+      if (context) {
+        if (!e2eReadyRef.current) {
+          e2eReadyRef.current = true;
+          void postE2EProbe(apiBase, 'window_ready', {
+            window: 'control-plane',
+          });
+        }
+        return;
+      }
+
+      retryTimer = setTimeout(() => {
+        void connectE2E();
+      }, 1000);
+    };
+
+    void connectE2E();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [apiBase]);
+
+  useEffect(() => {
+    const snapshot = buildE2EStateSnapshot(state, connectionPhase);
+    publishE2EWindowSnapshot(snapshot);
+    if (!snapshot) {
+      return;
+    }
+
+    void postE2EProbe(apiBase, 'window_state_snapshot', {
+      window: 'control-plane',
+      snapshot,
+      isConnected,
+    });
+  }, [apiBase, connectionPhase, isConnected, state?.configRevision, state?.runtimeRevision, state]);
 
   useEffect(() => {
     if (!state) {

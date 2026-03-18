@@ -10,6 +10,9 @@
     "preview": "vite preview",
     "tauri": "cd src-tauri/crates/app && tauri",
     "tauri:dev": "cd src-tauri/crates/app && tauri dev",
+    "e2e:install": "playwright install chromium firefox webkit",
+    "e2e:remote": "playwright test --config playwright.config.ts --project=matrix",
+    "e2e:remote:debug": "playwright test --config playwright.config.ts --project=matrix --headed",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --ext .ts,.tsx",
@@ -40,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@playwright/test": "^1.56.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",

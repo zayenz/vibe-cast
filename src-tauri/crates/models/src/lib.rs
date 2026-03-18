@@ -105,6 +105,117 @@ pub struct E2EReport {
     pub message_count: usize,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum E2EClientKind {
+    Remote,
+    ControlPlane,
+    Visualizer,
+    Server,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct E2EStateSnapshot {
+    pub config_revision: u64,
+    pub runtime_revision: u64,
+    pub active_visualization: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_visualization_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triggered_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playback_session_id: Option<String>,
+    pub playback_is_playing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playback_current_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_folder_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_current_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_current_message_id: Option<String>,
+    pub message_trigger_counts: HashMap<String, u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_phase: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2EProbeEvent {
+    pub session_id: String,
+    pub client_id: String,
+    pub client_label: String,
+    pub client_kind: E2EClientKind,
+    pub event_type: String,
+    pub ts: u64,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct E2ESessionStartRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_name: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2ESessionStartResponse {
+    pub session_id: String,
+    pub server_port: u16,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct E2ESessionEndRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2EClientSnapshot {
+    pub client_id: String,
+    pub client_label: String,
+    pub client_kind: E2EClientKind,
+    pub updated_at: u64,
+    pub snapshot: E2EStateSnapshot,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2ESessionSummary {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_name: Option<String>,
+    pub started_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+    pub app_pid: u32,
+    pub server_port: u16,
+    pub status: String,
+    pub event_count: usize,
+    pub client_snapshots: HashMap<String, E2EClientSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_snapshot: Option<E2EStateSnapshot>,
+    pub perf_counters: HashMap<String, u64>,
+    pub failure_annotations: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct E2EConfigResponse {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCommand {
@@ -114,6 +225,14 @@ pub struct RemoteCommand {
     /// Defaults to MobileRemote for backward compatibility.
     #[serde(default)]
     pub device_type: Option<DeviceType>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_label: Option<String>,
+    #[serde(default)]
+    pub client_kind: Option<E2EClientKind>,
 }
 
 /// Application state that gets broadcast via SSE
@@ -321,7 +440,8 @@ mod systemtime_serde {
     where
         S: Serializer,
     {
-        let duration = time.duration_since(UNIX_EPOCH)
+        let duration = time
+            .duration_since(UNIX_EPOCH)
             .map_err(|_| serde::ser::Error::custom("SystemTime before UNIX_EPOCH"))?;
         serializer.serialize_u64(duration.as_millis() as u64)
     }
@@ -348,7 +468,9 @@ pub fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig
                     match t {
                         "message" => {
                             if let Some(msg_val) = obj.get("message") {
-                                if let Ok(msg) = serde_json::from_value::<MessageConfig>(msg_val.clone()) {
+                                if let Ok(msg) =
+                                    serde_json::from_value::<MessageConfig>(msg_val.clone())
+                                {
                                     out.push(msg);
                                 }
                             }
@@ -374,12 +496,12 @@ pub fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickcheck::{TestResult, Arbitrary, Gen};
+    use quickcheck::{Arbitrary, Gen, TestResult};
     use quickcheck_macros::quickcheck;
     use std::time::{Duration, UNIX_EPOCH};
 
     // Test data generators for property-based testing
-    
+
     #[derive(Debug, Clone)]
     struct TestPlaybackControlState(PlaybackControlState);
 
@@ -387,7 +509,7 @@ mod tests {
         fn arbitrary(g: &mut Gen) -> Self {
             let is_playing = bool::arbitrary(g);
             let has_message = bool::arbitrary(g);
-            
+
             let current_message = if has_message {
                 Some(MessageInfo {
                     id: format!("msg_{}", u32::arbitrary(g) % 1000),
@@ -416,12 +538,16 @@ mod tests {
             // Generate consistent state based on playing status and message presence
             let (can_stop, can_start) = match (is_playing, has_message) {
                 (true, true) => (true, false),   // Playing: can stop, cannot start
-                (false, true) => (false, true),  // Paused/stopped with message: can start, cannot stop
+                (false, true) => (false, true), // Paused/stopped with message: can start, cannot stop
                 (false, false) => (false, true), // Idle: can start, cannot stop
-                (true, false) => (false, true),  // Invalid state, normalize to idle
+                (true, false) => (false, true), // Invalid state, normalize to idle
             };
 
-            let device_types = [DeviceType::ControlPlane, DeviceType::MobileRemote, DeviceType::System];
+            let device_types = [
+                DeviceType::ControlPlane,
+                DeviceType::MobileRemote,
+                DeviceType::System,
+            ];
             let initiated_by = device_types[usize::arbitrary(g) % device_types.len()].clone();
 
             TestPlaybackControlState(PlaybackControlState {
@@ -432,7 +558,8 @@ mod tests {
                 can_stop,
                 can_start,
                 initiated_by,
-                last_updated: UNIX_EPOCH + Duration::from_secs((u64::arbitrary(g) % 1_000_000) + 1_600_000_000),
+                last_updated: UNIX_EPOCH
+                    + Duration::from_secs((u64::arbitrary(g) % 1_000_000) + 1_600_000_000),
             })
         }
     }
@@ -444,10 +571,10 @@ mod tests {
         fn arbitrary(g: &mut Gen) -> Self {
             let mut devices = Vec::new();
             let device_types = [DeviceType::ControlPlane, DeviceType::MobileRemote];
-            
+
             // Always include at least one device
             devices.push(device_types[usize::arbitrary(g) % device_types.len()].clone());
-            
+
             // Optionally add more devices (up to both types)
             if bool::arbitrary(g) {
                 for device_type in &device_types {
@@ -456,25 +583,25 @@ mod tests {
                     }
                 }
             }
-            
+
             ConnectedDevices(devices)
         }
     }
 
     /// **Feature: message-control-sync, Property 3: UI State Consistency**
     /// **Validates: Requirements 1.4, 1.5, 4.1, 4.2, 4.3, 4.4**
-    /// 
-    /// Property: For any system state (playing or idle) and any set of connected devices, 
-    /// all devices should display consistent control interfaces that accurately reflect 
+    ///
+    /// Property: For any system state (playing or idle) and any set of connected devices,
+    /// all devices should display consistent control interfaces that accurately reflect
     /// the current playback capabilities.
     #[quickcheck(tests = 20)]
     fn prop_ui_state_consistency(
-        state: TestPlaybackControlState, 
-        devices: ConnectedDevices
+        state: TestPlaybackControlState,
+        devices: ConnectedDevices,
     ) -> TestResult {
         let state = state.0;
         let devices = devices.0;
-        
+
         // Skip empty device lists (shouldn't happen with our generator, but safety check)
         if devices.is_empty() {
             return TestResult::discard();
@@ -518,7 +645,8 @@ mod tests {
         }
 
         // Rule 3: Playback position should be reasonable
-        if state.playback_position > Duration::from_secs(86400) { // Max 24 hours
+        if state.playback_position > Duration::from_secs(86400) {
+            // Max 24 hours
             return false;
         }
 
@@ -535,13 +663,13 @@ mod tests {
         match (state.is_playing, state.current_message.is_some()) {
             // Playing with message: should be able to stop, not start
             (true, true) => state.can_stop && !state.can_start,
-            
+
             // Not playing but has message (paused/stopped): should be able to start, not stop
             (false, true) => !state.can_stop && state.can_start,
-            
+
             // Not playing and no message (idle): should be able to start, not stop
             (false, false) => !state.can_stop && state.can_start,
-            
+
             // Playing without message: invalid state
             (true, false) => false,
         }
@@ -553,7 +681,7 @@ mod tests {
         for device in devices {
             // Each device should be able to determine the correct UI state from the PlaybackControlState
             let ui_state = determine_ui_state_for_device(state, device);
-            
+
             // Validate that the UI state is consistent with the playback state
             if !validate_device_ui_state(&ui_state, state) {
                 return false;
@@ -582,7 +710,10 @@ mod tests {
     }
 
     /// Determines what UI state a device should show based on the playback control state
-    fn determine_ui_state_for_device(state: &PlaybackControlState, _device: &DeviceType) -> DeviceUIState {
+    fn determine_ui_state_for_device(
+        state: &PlaybackControlState,
+        _device: &DeviceType,
+    ) -> DeviceUIState {
         // UI state should be the same for all device types - this is the consistency requirement
         DeviceUIState {
             shows_playing: state.is_playing,
@@ -594,7 +725,10 @@ mod tests {
     }
 
     /// Validates that a device's UI state is consistent with the playback control state
-    fn validate_device_ui_state(ui_state: &DeviceUIState, control_state: &PlaybackControlState) -> bool {
+    fn validate_device_ui_state(
+        ui_state: &DeviceUIState,
+        control_state: &PlaybackControlState,
+    ) -> bool {
         // Playing indicator should match is_playing
         if ui_state.shows_playing != control_state.is_playing {
             return false;
@@ -616,7 +750,10 @@ mod tests {
         }
 
         // Message title should match
-        let expected_title = control_state.current_message.as_ref().map(|m| m.title.clone());
+        let expected_title = control_state
+            .current_message
+            .as_ref()
+            .map(|m| m.title.clone());
         if ui_state.message_title != expected_title {
             return false;
         }

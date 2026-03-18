@@ -1,14 +1,61 @@
-use std::sync::Mutex;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
 use vibe_cast_models::{
-    MessageConfig, VisualizationPreset, TextStylePreset, 
-    CommonSettings, FolderPlaybackQueue, BroadcastState, E2EReport, RemoteCommand,
-    PlaybackControlState, DeviceType, MessageInfo, PlaybackCommand,
-    RemoteMessageStats, RemoteStateV2, RemoteVisualizationPreset,
+    BroadcastState, CommonSettings, DeviceType, E2EClientKind, E2EClientSnapshot,
+    E2EConfigResponse, E2EProbeEvent, E2EReport, E2ESessionStartResponse, E2ESessionSummary,
+    E2EStateSnapshot, FolderPlaybackQueue, MessageConfig, MessageInfo, PlaybackCommand,
+    PlaybackControlState, RemoteCommand, RemoteMessageStats, RemoteStateV2,
+    RemoteVisualizationPreset, TextStylePreset, VisualizationPreset,
 };
+
+const MAX_E2E_SESSIONS: usize = 8;
+const MAX_E2E_EVENTS_PER_SESSION: usize = 4_000;
+
+#[derive(Clone)]
+struct E2ESessionRecord {
+    session_id: String,
+    scenario_name: Option<String>,
+    started_at: u64,
+    ended_at: Option<u64>,
+    app_pid: u32,
+    server_port: u16,
+    status: String,
+    events: VecDeque<E2EProbeEvent>,
+    client_snapshots: HashMap<String, E2EClientSnapshot>,
+    server_snapshot: Option<E2EStateSnapshot>,
+    perf_counters: HashMap<String, u64>,
+    failure_annotations: Vec<String>,
+}
+
+impl E2ESessionRecord {
+    fn to_summary(&self) -> E2ESessionSummary {
+        E2ESessionSummary {
+            session_id: self.session_id.clone(),
+            scenario_name: self.scenario_name.clone(),
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            app_pid: self.app_pid,
+            server_port: self.server_port,
+            status: self.status.clone(),
+            event_count: self.events.len(),
+            client_snapshots: self.client_snapshots.clone(),
+            server_snapshot: self.server_snapshot.clone(),
+            perf_counters: self.perf_counters.clone(),
+            failure_annotations: self.failure_annotations.clone(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct E2ESessionRegistry {
+    active_session_id: Option<String>,
+    session_order: VecDeque<String>,
+    sessions: HashMap<String, E2ESessionRecord>,
+}
 
 fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
     fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
@@ -23,7 +70,9 @@ fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
                     match t {
                         "message" => {
                             if let Some(msg_val) = obj.get("message") {
-                                if let Ok(msg) = serde_json::from_value::<MessageConfig>(msg_val.clone()) {
+                                if let Ok(msg) =
+                                    serde_json::from_value::<MessageConfig>(msg_val.clone())
+                                {
                                     out.push(msg);
                                 }
                             }
@@ -50,11 +99,13 @@ fn build_flat_message_tree_value(messages: &[MessageConfig]) -> serde_json::Valu
     serde_json::Value::Array(
         messages
             .iter()
-            .map(|message| serde_json::json!({
-                "type": "message",
-                "id": message.id,
-                "message": message,
-            }))
+            .map(|message| {
+                serde_json::json!({
+                    "type": "message",
+                    "id": message.id,
+                    "message": message,
+                })
+            })
             .collect(),
     )
 }
@@ -113,6 +164,8 @@ pub struct AppStateSync {
     pub triggered_message: Mutex<Option<MessageConfig>>,
     /// Last E2E report received from frontend
     pub last_e2e_report: Mutex<Option<E2EReport>>,
+    e2e_enabled: bool,
+    e2e_sessions: Mutex<E2ESessionRegistry>,
     /// Playback control state for message synchronization
     pub playback_control: Mutex<PlaybackControlState>,
     /// Broadcast channel for SSE - sends full state on every change
@@ -134,7 +187,7 @@ impl AppStateSync {
         let (state_tx, _) = broadcast::channel(64);
         let (remote_state_tx, _) = broadcast::channel(64);
         let (command_tx, _) = broadcast::channel(64);
-        
+
         // Default messages
         let default_messages = vec![
             MessageConfig {
@@ -216,7 +269,7 @@ impl AppStateSync {
                 ]
             }
         ]);
-        
+
         let default_viz_presets = vec![
             VisualizationPreset {
                 id: "fireplace-default".to_string(),
@@ -319,23 +372,21 @@ impl AppStateSync {
                 enabled: Some(true),
                 order: None,
                 icon: None,
-            }
+            },
         ];
 
-        let default_text_style_presets = vec![
-            TextStylePreset {
-                id: "scrolling-capitals-centered".to_string(),
-                name: "Scrolling Capitals Centered".to_string(),
-                text_style_id: "scrolling-capitals".to_string(),
-                settings: serde_json::json!({
-                    "position": "center",
-                    "fontSize": 12,
-                    "glowIntensity": 0.5,
-                    "color": "#ffffff"
-                }),
-            }
-        ];
-        
+        let default_text_style_presets = vec![TextStylePreset {
+            id: "scrolling-capitals-centered".to_string(),
+            name: "Scrolling Capitals Centered".to_string(),
+            text_style_id: "scrolling-capitals".to_string(),
+            settings: serde_json::json!({
+                "position": "center",
+                "fontSize": 12,
+                "glowIntensity": 0.5,
+                "color": "#ffffff"
+            }),
+        }];
+
         Self {
             config_revision: Mutex::new(0),
             runtime_revision: Mutex::new(0),
@@ -356,6 +407,13 @@ impl AppStateSync {
             server_port: Mutex::new(0), // 0 indicates not yet bound
             triggered_message: Mutex::new(None),
             last_e2e_report: Mutex::new(None),
+            e2e_enabled: std::env::var("VIBECAST_E2E")
+                .map(|value| {
+                    let normalized = value.trim().to_ascii_lowercase();
+                    matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+                })
+                .unwrap_or(false),
+            e2e_sessions: Mutex::new(E2ESessionRegistry::default()),
             playback_control: Mutex::new(PlaybackControlState::default()),
             state_tx,
             remote_state_tx,
@@ -387,63 +445,359 @@ impl AppStateSync {
         Self::bump_revision(&self.runtime_revision)
     }
 
+    pub fn is_e2e_enabled(&self) -> bool {
+        self.e2e_enabled
+    }
+
+    pub fn get_e2e_config(&self) -> E2EConfigResponse {
+        E2EConfigResponse {
+            enabled: self.e2e_enabled,
+            active_session_id: self.get_active_e2e_session_id(),
+            server_port: self
+                .server_port
+                .lock()
+                .ok()
+                .map(|port| *port)
+                .filter(|port| *port != 0),
+        }
+    }
+
+    pub fn get_active_e2e_session_id(&self) -> Option<String> {
+        self.e2e_sessions
+            .lock()
+            .ok()
+            .and_then(|registry| registry.active_session_id.clone())
+    }
+
+    pub fn start_e2e_session(&self, scenario_name: Option<String>) -> E2ESessionStartResponse {
+        let started_at = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let session_id = format!("e2e-{}", started_at);
+        let server_port = self.server_port.lock().ok().map(|port| *port).unwrap_or(0);
+        let initial_snapshot = self.get_e2e_state_snapshot(None);
+        let record = E2ESessionRecord {
+            session_id: session_id.clone(),
+            scenario_name,
+            started_at,
+            ended_at: None,
+            app_pid: std::process::id(),
+            server_port,
+            status: "active".to_string(),
+            events: VecDeque::new(),
+            client_snapshots: HashMap::new(),
+            server_snapshot: Some(initial_snapshot),
+            perf_counters: HashMap::new(),
+            failure_annotations: Vec::new(),
+        };
+
+        if let Ok(mut registry) = self.e2e_sessions.lock() {
+            registry.active_session_id = Some(session_id.clone());
+            registry.session_order.push_back(session_id.clone());
+            registry.sessions.insert(session_id.clone(), record);
+            while registry.session_order.len() > MAX_E2E_SESSIONS {
+                if let Some(expired_session_id) = registry.session_order.pop_front() {
+                    registry.sessions.remove(&expired_session_id);
+                    if registry.active_session_id.as_deref() == Some(expired_session_id.as_str()) {
+                        registry.active_session_id = None;
+                    }
+                }
+            }
+        }
+
+        E2ESessionStartResponse {
+            session_id,
+            server_port,
+        }
+    }
+
+    pub fn end_e2e_session(
+        &self,
+        session_id: &str,
+        status: Option<String>,
+        failure_reason: Option<String>,
+    ) -> Result<(), String> {
+        let ended_at = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let final_status = status.unwrap_or_else(|| "completed".to_string());
+
+        let mut registry = self
+            .e2e_sessions
+            .lock()
+            .map_err(|_| "Failed to lock E2E session registry".to_string())?;
+        let record = registry
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("Unknown E2E session: {}", session_id))?;
+
+        record.ended_at = Some(ended_at);
+        record.status = final_status;
+        record.server_snapshot = Some(self.get_e2e_state_snapshot(None));
+        if let Some(reason) = failure_reason {
+            record.failure_annotations.push(reason);
+        }
+        if registry.active_session_id.as_deref() == Some(session_id) {
+            registry.active_session_id = None;
+        }
+        Ok(())
+    }
+
+    pub fn get_e2e_session_events(&self, session_id: &str) -> Option<Vec<E2EProbeEvent>> {
+        self.e2e_sessions.lock().ok().and_then(|registry| {
+            registry
+                .sessions
+                .get(session_id)
+                .map(|record| record.events.iter().cloned().collect())
+        })
+    }
+
+    pub fn get_e2e_session_summary(&self, session_id: &str) -> Option<E2ESessionSummary> {
+        self.e2e_sessions.lock().ok().and_then(|registry| {
+            registry
+                .sessions
+                .get(session_id)
+                .map(E2ESessionRecord::to_summary)
+        })
+    }
+
+    pub fn record_e2e_probe(&self, event: E2EProbeEvent) {
+        if !self.e2e_enabled {
+            return;
+        }
+
+        let mut registry = match self.e2e_sessions.lock() {
+            Ok(registry) => registry,
+            Err(_) => return,
+        };
+        let Some(record) = registry.sessions.get_mut(&event.session_id) else {
+            return;
+        };
+
+        *record
+            .perf_counters
+            .entry(event.event_type.clone())
+            .or_insert(0) += 1;
+
+        if let Some(snapshot) = event
+            .payload
+            .get("snapshot")
+            .and_then(|value| serde_json::from_value::<E2EStateSnapshot>(value.clone()).ok())
+        {
+            if event.client_kind == E2EClientKind::Server {
+                record.server_snapshot = Some(snapshot);
+            } else {
+                record.client_snapshots.insert(
+                    event.client_id.clone(),
+                    E2EClientSnapshot {
+                        client_id: event.client_id.clone(),
+                        client_label: event.client_label.clone(),
+                        client_kind: event.client_kind.clone(),
+                        updated_at: event.ts,
+                        snapshot,
+                    },
+                );
+            }
+        }
+
+        if record.events.len() >= MAX_E2E_EVENTS_PER_SESSION {
+            record.events.pop_front();
+        }
+        record.events.push_back(event);
+    }
+
+    pub fn record_server_e2e_event(
+        &self,
+        event_type: &str,
+        payload: serde_json::Value,
+        session_id: Option<&str>,
+        client_id: Option<&str>,
+        client_label: Option<&str>,
+        client_kind: Option<E2EClientKind>,
+    ) {
+        if !self.e2e_enabled {
+            return;
+        }
+
+        let Some(session_id) = session_id
+            .map(|id| id.to_string())
+            .or_else(|| self.get_active_e2e_session_id())
+        else {
+            return;
+        };
+
+        let ts = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.record_e2e_probe(E2EProbeEvent {
+            session_id,
+            client_id: client_id.unwrap_or("server").to_string(),
+            client_label: client_label.unwrap_or("server").to_string(),
+            client_kind: client_kind.unwrap_or(E2EClientKind::Server),
+            event_type: event_type.to_string(),
+            ts,
+            payload,
+        });
+    }
+
+    pub fn get_e2e_state_snapshot(&self, connection_phase: Option<String>) -> E2EStateSnapshot {
+        let config_revision = self.config_revision.lock().map(|value| *value).unwrap_or(0);
+        let runtime_revision = self
+            .runtime_revision
+            .lock()
+            .map(|value| *value)
+            .unwrap_or(0);
+        let active_visualization = self
+            .active_visualization
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| "fireplace".to_string());
+        let active_visualization_preset = self
+            .active_visualization_preset
+            .lock()
+            .ok()
+            .and_then(|value| value.clone());
+        let triggered_message_id = self
+            .triggered_message
+            .lock()
+            .ok()
+            .and_then(|message| message.clone().map(|value| value.id));
+        let playback_control = self
+            .playback_control
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        let folder_playback_queue = self
+            .folder_playback_queue
+            .lock()
+            .ok()
+            .and_then(|queue| queue.clone());
+        let message_trigger_counts = self
+            .message_stats
+            .lock()
+            .map(|value| compact_message_stats_map(&value))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(message_id, stats)| (message_id, stats.trigger_count))
+            .collect();
+        let queue_current_message_id = folder_playback_queue
+            .as_ref()
+            .and_then(|queue| queue.message_ids.get(queue.current_index).cloned());
+
+        E2EStateSnapshot {
+            config_revision,
+            runtime_revision,
+            active_visualization,
+            active_visualization_preset,
+            triggered_message_id,
+            playback_session_id: playback_control.session_id.clone(),
+            playback_is_playing: playback_control.is_playing,
+            playback_current_message_id: playback_control
+                .current_message
+                .as_ref()
+                .map(|message| message.id.clone()),
+            queue_folder_id: folder_playback_queue
+                .as_ref()
+                .map(|queue| queue.folder_id.clone()),
+            queue_current_index: folder_playback_queue
+                .as_ref()
+                .map(|queue| queue.current_index),
+            queue_current_message_id,
+            message_trigger_counts,
+            connection_phase,
+        }
+    }
+
     /// Get current state snapshot
     pub fn get_state(&self) -> BroadcastState {
-        let config_revision = self.config_revision.lock()
+        let config_revision = self
+            .config_revision
+            .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let runtime_revision = self.runtime_revision.lock()
+        let runtime_revision = self
+            .runtime_revision
+            .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let active_visualization = self.active_visualization.lock()
+        let active_visualization = self
+            .active_visualization
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| "fireplace".to_string());
-        let enabled_visualizations = self.enabled_visualizations.lock()
+        let enabled_visualizations = self
+            .enabled_visualizations
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let common_settings = self.common_settings.lock()
+        let common_settings = self
+            .common_settings
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let visualization_settings = self.visualization_settings.lock()
+        let visualization_settings = self
+            .visualization_settings
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
-        let visualization_presets = self.visualization_presets.lock()
+        let visualization_presets = self
+            .visualization_presets
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let active_visualization_preset = self.active_visualization_preset.lock()
+        let active_visualization_preset = self
+            .active_visualization_preset
+            .lock()
             .map(|m| m.clone())
             .unwrap_or(None);
-        let messages = self.messages.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let message_tree = self.message_tree.lock()
+        let messages = self.messages.lock().map(|m| m.clone()).unwrap_or_default();
+        let message_tree = self
+            .message_tree
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!([]));
-        let default_text_style = self.default_text_style.lock()
+        let default_text_style = self
+            .default_text_style
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| "scrolling-capitals".to_string());
-        let text_style_settings = self.text_style_settings.lock()
+        let text_style_settings = self
+            .text_style_settings
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
-        let text_style_presets = self.text_style_presets.lock()
+        let text_style_presets = self
+            .text_style_presets
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let message_stats = self.message_stats.lock()
+        let message_stats = self
+            .message_stats
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
-        let folder_playback_queue = self.folder_playback_queue.lock()
+        let folder_playback_queue = self
+            .folder_playback_queue
+            .lock()
             .map(|m| m.clone())
             .unwrap_or(None);
-        let triggered_message = self.triggered_message.lock()
+        let triggered_message = self
+            .triggered_message
+            .lock()
             .map(|m| m.clone())
             .unwrap_or(None);
-        let playback_control = self.playback_control.lock()
+        let playback_control = self
+            .playback_control
+            .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        
+
         // Legacy mode field
         let mode = active_visualization.clone();
-        
+
         BroadcastState {
             config_revision,
             runtime_revision,
@@ -468,22 +822,34 @@ impl AppStateSync {
 
     /// Get the compact remote-only state snapshot without cloning desktop-only fields.
     pub fn get_remote_state(&self) -> RemoteStateV2 {
-        let config_revision = self.config_revision.lock()
+        let config_revision = self
+            .config_revision
+            .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let runtime_revision = self.runtime_revision.lock()
+        let runtime_revision = self
+            .runtime_revision
+            .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let active_visualization = self.active_visualization.lock()
+        let active_visualization = self
+            .active_visualization
+            .lock()
             .map(|value| value.clone())
             .unwrap_or_else(|_| "fireplace".to_string());
-        let active_visualization_preset = self.active_visualization_preset.lock()
+        let active_visualization_preset = self
+            .active_visualization_preset
+            .lock()
             .map(|value| value.clone())
             .unwrap_or(None);
-        let common_settings = self.common_settings.lock()
+        let common_settings = self
+            .common_settings
+            .lock()
             .map(|value| value.clone())
             .unwrap_or_default();
-        let visualization_presets = self.visualization_presets.lock()
+        let visualization_presets = self
+            .visualization_presets
+            .lock()
             .map(|presets| {
                 presets
                     .iter()
@@ -498,29 +864,42 @@ impl AppStateSync {
             })
             .unwrap_or_default();
         let message_tree = {
-            let message_tree = self.message_tree.lock()
+            let message_tree = self
+                .message_tree
+                .lock()
                 .map(|value| value.clone())
                 .unwrap_or_else(|_| serde_json::json!([]));
-            let has_tree_entries = matches!(&message_tree, serde_json::Value::Array(nodes) if !nodes.is_empty());
+            let has_tree_entries =
+                matches!(&message_tree, serde_json::Value::Array(nodes) if !nodes.is_empty());
             if has_tree_entries {
                 message_tree
             } else {
-                let messages = self.messages.lock()
+                let messages = self
+                    .messages
+                    .lock()
                     .map(|value| value.clone())
                     .unwrap_or_default();
                 build_flat_message_tree_value(&messages)
             }
         };
-        let message_stats = self.message_stats.lock()
+        let message_stats = self
+            .message_stats
+            .lock()
             .map(|value| compact_message_stats_map(&value))
             .unwrap_or_default();
-        let triggered_message = self.triggered_message.lock()
+        let triggered_message = self
+            .triggered_message
+            .lock()
             .map(|value| value.clone())
             .unwrap_or(None);
-        let playback_control = self.playback_control.lock()
+        let playback_control = self
+            .playback_control
+            .lock()
             .map(|value| value.clone())
             .unwrap_or_default();
-        let folder_playback_queue = self.folder_playback_queue.lock()
+        let folder_playback_queue = self
+            .folder_playback_queue
+            .lock()
             .map(|value| value.clone())
             .unwrap_or(None);
 
@@ -550,15 +929,33 @@ impl AppStateSync {
     pub fn broadcast_current_state(&self) {
         let state = self.get_state();
         let remote_state = self.get_remote_state();
+        let snapshot_value = serde_json::to_value(self.get_e2e_state_snapshot(None))
+            .unwrap_or_else(|_| serde_json::json!({}));
         let _ = self.state_tx.send(state);
         let _ = self.remote_state_tx.send(remote_state);
+        self.record_server_e2e_event(
+            "server_desktop_state_broadcast",
+            serde_json::json!({ "snapshot": snapshot_value.clone() }),
+            None,
+            None,
+            None,
+            Some(E2EClientKind::Server),
+        );
+        self.record_server_e2e_event(
+            "server_remote_state_broadcast",
+            serde_json::json!({ "snapshot": snapshot_value }),
+            None,
+            None,
+            None,
+            Some(E2EClientKind::Server),
+        );
     }
-    
+
     /// Broadcast a transient command to all SSE subscribers
     pub fn broadcast_command(&self, command: RemoteCommand) {
         let _ = self.command_tx.send(command);
     }
-    
+
     /// Clear the triggered message (called when message completes)
     pub fn clear_triggered_message(&self) {
         self.set_triggered_message_value(None);
@@ -571,7 +968,7 @@ impl AppStateSync {
         if !path.exists() {
             return Err(format!("Config file does not exist: {}", config_path));
         }
-        
+
         // Extract and set the config base path (directory containing the config file)
         if let Some(parent) = path.parent() {
             let base_path = parent.to_string_lossy().to_string();
@@ -580,13 +977,13 @@ impl AppStateSync {
                 *m = Some(base_path);
             }
         }
-        
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-        
+
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read config file: {}", e))?;
+
         let config: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
-        
+
         // Apply configuration similar to the "load-configuration" command handler
         if let Some(obj) = config.as_object() {
             if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
@@ -596,7 +993,8 @@ impl AppStateSync {
             }
             if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
                 if let Ok(mut m) = self.enabled_visualizations.lock() {
-                    *m = vizs.iter()
+                    *m = vizs
+                        .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                 }
@@ -633,15 +1031,14 @@ impl AppStateSync {
                 // If no tree was provided, build a flat tree from messages
                 if let Ok(m) = self.messages.lock() {
                     if let Ok(mut t) = self.message_tree.lock() {
-                        *t = serde_json::json!(
-                            m.iter()
-                                .map(|msg| serde_json::json!({
-                                    "type": "message",
-                                    "id": msg.id,
-                                    "message": msg
-                                }))
-                                .collect::<Vec<serde_json::Value>>()
-                        );
+                        *t = serde_json::json!(m
+                            .iter()
+                            .map(|msg| serde_json::json!({
+                                "type": "message",
+                                "id": msg.id,
+                                "message": msg
+                            }))
+                            .collect::<Vec<serde_json::Value>>());
                     }
                 }
             }
@@ -662,7 +1059,10 @@ impl AppStateSync {
                     }
                 }
             }
-            if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
+            if let Some(preset_id) = obj
+                .get("activeVisualizationPreset")
+                .and_then(|v| v.as_str())
+            {
                 if let Ok(mut m) = self.active_visualization_preset.lock() {
                     *m = Some(preset_id.to_string());
                 }
@@ -680,10 +1080,10 @@ impl AppStateSync {
                 }
             }
         }
-        
+
         self.mark_config_changed();
         self.broadcast_current_state();
-        
+
         Ok(())
     }
 
@@ -699,18 +1099,26 @@ impl AppStateSync {
 
     /// Get current playback control state
     pub fn get_playback_control(&self) -> PlaybackControlState {
-        self.playback_control.lock()
+        self.playback_control
+            .lock()
             .map(|state| state.clone())
             .unwrap_or_default()
     }
 
     /// Start message playback and update control state
-    pub fn start_message_playback(&self, message_id: &str, device_type: DeviceType) -> Result<(), String> {
+    pub fn start_message_playback(
+        &self,
+        message_id: &str,
+        device_type: DeviceType,
+    ) -> Result<(), String> {
         // Find the message
         let message = {
-            let messages = self.messages.lock()
+            let messages = self
+                .messages
+                .lock()
                 .map_err(|_| "Failed to lock messages")?;
-            messages.iter()
+            messages
+                .iter()
                 .find(|msg| msg.id == message_id)
                 .cloned()
                 .ok_or_else(|| format!("Message not found: {}", message_id))?
@@ -725,10 +1133,13 @@ impl AppStateSync {
         };
 
         // Generate session ID
-        let session_id = format!("session_{}", SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let session_id = format!(
+            "session_{}",
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         // Update playback control state
         let new_state = PlaybackControlState {
@@ -750,7 +1161,11 @@ impl AppStateSync {
 
     /// Start message playback using a provided message (no lookup).
     /// Use when the frontend sends the full message and it may not yet be in state.messages.
-    pub fn start_message_playback_with_message(&self, message: MessageConfig, device_type: DeviceType) {
+    pub fn start_message_playback_with_message(
+        &self,
+        message: MessageConfig,
+        device_type: DeviceType,
+    ) {
         let message_info = MessageInfo {
             id: message.id.clone(),
             title: message.text.clone(),
@@ -758,10 +1173,13 @@ impl AppStateSync {
             folder_path: self.get_message_folder_path(&message.id),
         };
 
-        let session_id = format!("session_{}", SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let session_id = format!(
+            "session_{}",
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
 
         let new_state = PlaybackControlState {
             session_id: Some(session_id),
@@ -797,30 +1215,45 @@ impl AppStateSync {
 
     /// Process a playback command with validation and error handling
     /// This is the main entry point for all playback control commands
-    pub fn process_playback_command(&self, command: PlaybackCommand) -> Result<PlaybackControlState, PlaybackError> {
+    pub fn process_playback_command(
+        &self,
+        command: PlaybackCommand,
+    ) -> Result<PlaybackControlState, PlaybackError> {
         match command {
-            PlaybackCommand::Start { message_id, device_id, timestamp } => {
-                self.process_start_command(&message_id, &device_id, timestamp)
-            }
-            PlaybackCommand::Stop { device_id, timestamp } => {
-                self.process_stop_command(&device_id, timestamp)
-            }
-            PlaybackCommand::Pause { device_id, timestamp } => {
-                self.process_pause_command(&device_id, timestamp)
-            }
-            PlaybackCommand::Resume { device_id, timestamp } => {
-                self.process_resume_command(&device_id, timestamp)
-            }
+            PlaybackCommand::Start {
+                message_id,
+                device_id,
+                timestamp,
+            } => self.process_start_command(&message_id, &device_id, timestamp),
+            PlaybackCommand::Stop {
+                device_id,
+                timestamp,
+            } => self.process_stop_command(&device_id, timestamp),
+            PlaybackCommand::Pause {
+                device_id,
+                timestamp,
+            } => self.process_pause_command(&device_id, timestamp),
+            PlaybackCommand::Resume {
+                device_id,
+                timestamp,
+            } => self.process_resume_command(&device_id, timestamp),
         }
     }
 
     /// Process a start command with validation
-    fn process_start_command(&self, message_id: &str, device_id: &str, timestamp: SystemTime) -> Result<PlaybackControlState, PlaybackError> {
+    fn process_start_command(
+        &self,
+        message_id: &str,
+        device_id: &str,
+        timestamp: SystemTime,
+    ) -> Result<PlaybackControlState, PlaybackError> {
         // Validate message exists
         let message = {
-            let messages = self.messages.lock()
-                .map_err(|_| PlaybackError::StateCorruption("Failed to lock messages".to_string()))?;
-            messages.iter()
+            let messages = self.messages.lock().map_err(|_| {
+                PlaybackError::StateCorruption("Failed to lock messages".to_string())
+            })?;
+            messages
+                .iter()
                 .find(|msg| msg.id == message_id)
                 .cloned()
                 .ok_or_else(|| PlaybackError::MessageNotFound(message_id.to_string()))?
@@ -830,7 +1263,7 @@ impl AppStateSync {
         let current_state = self.get_playback_control();
         if current_state.is_playing {
             return Err(PlaybackError::InvalidCommand(
-                "Cannot start playback: another message is already playing".to_string()
+                "Cannot start playback: another message is already playing".to_string(),
             ));
         }
 
@@ -846,8 +1279,10 @@ impl AppStateSync {
         };
 
         // Generate session ID
-        let session_id = format!("session_{}_{}", 
-            timestamp.duration_since(std::time::UNIX_EPOCH)
+        let session_id = format!(
+            "session_{}_{}",
+            timestamp
+                .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis(),
             device_id
@@ -874,13 +1309,17 @@ impl AppStateSync {
     }
 
     /// Process a stop command
-    fn process_stop_command(&self, device_id: &str, timestamp: SystemTime) -> Result<PlaybackControlState, PlaybackError> {
+    fn process_stop_command(
+        &self,
+        device_id: &str,
+        timestamp: SystemTime,
+    ) -> Result<PlaybackControlState, PlaybackError> {
         let current_state = self.get_playback_control();
-        
+
         // Validate that we can stop (must be playing or paused)
         if !current_state.is_playing && current_state.current_message.is_none() {
             return Err(PlaybackError::InvalidCommand(
-                "Cannot stop playback: no active playback session".to_string()
+                "Cannot stop playback: no active playback session".to_string(),
             ));
         }
 
@@ -907,13 +1346,17 @@ impl AppStateSync {
     }
 
     /// Process a pause command
-    fn process_pause_command(&self, device_id: &str, timestamp: SystemTime) -> Result<PlaybackControlState, PlaybackError> {
+    fn process_pause_command(
+        &self,
+        device_id: &str,
+        timestamp: SystemTime,
+    ) -> Result<PlaybackControlState, PlaybackError> {
         let current_state = self.get_playback_control();
-        
+
         // Validate that we can pause (must be playing)
         if !current_state.is_playing {
             return Err(PlaybackError::InvalidCommand(
-                "Cannot pause playback: no active playback".to_string()
+                "Cannot pause playback: no active playback".to_string(),
             ));
         }
 
@@ -925,8 +1368,8 @@ impl AppStateSync {
             current_message: current_state.current_message,
             is_playing: false,
             playback_position: current_state.playback_position, // Preserve position
-            can_stop: true,  // Can still stop when paused
-            can_start: true, // Can resume when paused
+            can_stop: true,                                     // Can still stop when paused
+            can_start: true,                                    // Can resume when paused
             initiated_by: device_type,
             last_updated: timestamp,
         };
@@ -939,19 +1382,23 @@ impl AppStateSync {
     }
 
     /// Process a resume command
-    fn process_resume_command(&self, device_id: &str, timestamp: SystemTime) -> Result<PlaybackControlState, PlaybackError> {
+    fn process_resume_command(
+        &self,
+        device_id: &str,
+        timestamp: SystemTime,
+    ) -> Result<PlaybackControlState, PlaybackError> {
         let current_state = self.get_playback_control();
-        
+
         // Validate that we can resume (must be paused - has message but not playing)
         if current_state.is_playing {
             return Err(PlaybackError::InvalidCommand(
-                "Cannot resume playback: already playing".to_string()
+                "Cannot resume playback: already playing".to_string(),
             ));
         }
-        
+
         if current_state.current_message.is_none() {
             return Err(PlaybackError::InvalidCommand(
-                "Cannot resume playback: no paused session".to_string()
+                "Cannot resume playback: no paused session".to_string(),
             ));
         }
 
@@ -960,7 +1407,10 @@ impl AppStateSync {
         // Find the full message config for backward compatibility BEFORE updating state
         let message_to_broadcast = if let Some(ref message_info) = current_state.current_message {
             if let Ok(messages) = self.messages.lock() {
-                messages.iter().find(|msg| msg.id == message_info.id).cloned()
+                messages
+                    .iter()
+                    .find(|msg| msg.id == message_info.id)
+                    .cloned()
             } else {
                 None
             }
@@ -994,8 +1444,12 @@ impl AppStateSync {
     /// Parse device type from device ID string
     fn parse_device_type(&self, device_id: &str) -> Result<DeviceType, PlaybackError> {
         match device_id {
-            id if id.starts_with("control_plane") || id.starts_with("control-plane") => Ok(DeviceType::ControlPlane),
-            id if id.starts_with("mobile_remote") || id.starts_with("mobile-remote") => Ok(DeviceType::MobileRemote),
+            id if id.starts_with("control_plane") || id.starts_with("control-plane") => {
+                Ok(DeviceType::ControlPlane)
+            }
+            id if id.starts_with("mobile_remote") || id.starts_with("mobile-remote") => {
+                Ok(DeviceType::MobileRemote)
+            }
             id if id.starts_with("system") => Ok(DeviceType::System),
             _ => {
                 // Default to mobile remote for unknown device IDs (most likely from web interface)
@@ -1008,11 +1462,11 @@ impl AppStateSync {
     fn calculate_message_duration(&self, message: &MessageConfig) -> Option<std::time::Duration> {
         let text_length = message.text.len() as f64;
         let speed = message.speed.unwrap_or(1.0);
-        
+
         // Rough estimation: assume 5 characters per second at normal speed
         let base_chars_per_second = 5.0;
         let adjusted_chars_per_second = base_chars_per_second * speed;
-        
+
         if adjusted_chars_per_second > 0.0 {
             let duration_seconds = text_length / adjusted_chars_per_second;
             Some(std::time::Duration::from_secs_f64(duration_seconds))
@@ -1031,11 +1485,18 @@ impl AppStateSync {
     }
 
     /// Recursively search for a message in the tree and return its folder path
-    fn find_message_folder_path(&self, node: &serde_json::Value, message_id: &str, current_path: Option<String>) -> Option<String> {
+    fn find_message_folder_path(
+        &self,
+        node: &serde_json::Value,
+        message_id: &str,
+        current_path: Option<String>,
+    ) -> Option<String> {
         match node {
             serde_json::Value::Array(arr) => {
                 for item in arr {
-                    if let Some(path) = self.find_message_folder_path(item, message_id, current_path.clone()) {
+                    if let Some(path) =
+                        self.find_message_folder_path(item, message_id, current_path.clone())
+                    {
                         return Some(path);
                     }
                 }
@@ -1044,14 +1505,21 @@ impl AppStateSync {
                 if let Some(node_type) = obj.get("type").and_then(|v| v.as_str()) {
                     match node_type {
                         "folder" => {
-                            let folder_name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+                            let folder_name = obj
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown");
                             let new_path = match current_path {
                                 Some(path) => format!("{}/{}", path, folder_name),
                                 None => folder_name.to_string(),
                             };
-                            
+
                             if let Some(children) = obj.get("children") {
-                                if let Some(path) = self.find_message_folder_path(children, message_id, Some(new_path)) {
+                                if let Some(path) = self.find_message_folder_path(
+                                    children,
+                                    message_id,
+                                    Some(new_path),
+                                ) {
                                     return Some(path);
                                 }
                             }
@@ -1075,7 +1543,7 @@ impl AppStateSync {
     /// Validate command idempotency - returns true if command should be processed
     pub fn should_process_command(&self, command: &PlaybackCommand) -> bool {
         let current_state = self.get_playback_control();
-        
+
         match command {
             PlaybackCommand::Start { message_id, .. } => {
                 // Don't process if the same message is already playing
@@ -1156,9 +1624,13 @@ mod remote_state_tests {
         assert!(remote_json.get("textStyleSettings").is_none());
         assert!(remote_json["messageTree"].as_array().is_some());
         assert_eq!(remote_json["messageStats"]["msg-1"]["triggerCount"], 3);
-        assert!(remote_json["messageStats"]["msg-1"].get("history").is_none());
+        assert!(remote_json["messageStats"]["msg-1"]
+            .get("history")
+            .is_none());
         assert!(
-            remote_json["visualizationPresets"][0].get("settings").is_none(),
+            remote_json["visualizationPresets"][0]
+                .get("settings")
+                .is_none(),
             "remote presets should only include summary metadata"
         );
     }
@@ -1186,14 +1658,14 @@ mod remote_state_tests {
 #[cfg(test)]
 mod legacy_tests {
     use super::*;
-    use std::time::SystemTime;
     use quickcheck::TestResult;
     use quickcheck_macros::quickcheck;
+    use std::time::SystemTime;
 
     #[test]
     fn test_process_start_command_success() {
         let app_state = AppStateSync::new();
-        
+
         let command = PlaybackCommand::Start {
             message_id: "msg-1".to_string(),
             device_id: "control_plane_1".to_string(),
@@ -1202,7 +1674,7 @@ mod legacy_tests {
 
         let result = app_state.process_playback_command(command);
         assert!(result.is_ok());
-        
+
         let state = result.unwrap();
         assert!(state.is_playing);
         assert!(state.can_stop);
@@ -1215,7 +1687,7 @@ mod legacy_tests {
     #[test]
     fn test_process_start_command_message_not_found() {
         let app_state = AppStateSync::new();
-        
+
         let command = PlaybackCommand::Start {
             message_id: "nonexistent".to_string(),
             device_id: "control_plane_1".to_string(),
@@ -1224,7 +1696,7 @@ mod legacy_tests {
 
         let result = app_state.process_playback_command(command);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             PlaybackError::MessageNotFound(id) => assert_eq!(id, "nonexistent"),
             _ => panic!("Expected MessageNotFound error"),
@@ -1234,7 +1706,7 @@ mod legacy_tests {
     #[test]
     fn test_process_stop_command_success() {
         let app_state = AppStateSync::new();
-        
+
         // First start a message
         let start_command = PlaybackCommand::Start {
             message_id: "msg-1".to_string(),
@@ -1251,7 +1723,7 @@ mod legacy_tests {
 
         let result = app_state.process_playback_command(stop_command);
         assert!(result.is_ok());
-        
+
         let state = result.unwrap();
         assert!(!state.is_playing);
         assert!(!state.can_stop);
@@ -1264,7 +1736,7 @@ mod legacy_tests {
     #[test]
     fn test_process_stop_command_no_active_session() {
         let app_state = AppStateSync::new();
-        
+
         let command = PlaybackCommand::Stop {
             device_id: "control_plane_1".to_string(),
             timestamp: SystemTime::now(),
@@ -1272,7 +1744,7 @@ mod legacy_tests {
 
         let result = app_state.process_playback_command(command);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             PlaybackError::InvalidCommand(msg) => {
                 assert!(msg.contains("no active playback session"));
@@ -1284,7 +1756,7 @@ mod legacy_tests {
     #[test]
     fn test_process_pause_and_resume_commands() {
         let app_state = AppStateSync::new();
-        
+
         // Start a message
         let start_command = PlaybackCommand::Start {
             message_id: "msg-1".to_string(),
@@ -1300,7 +1772,7 @@ mod legacy_tests {
         };
         let pause_result = app_state.process_playback_command(pause_command);
         assert!(pause_result.is_ok());
-        
+
         let paused_state = pause_result.unwrap();
         assert!(!paused_state.is_playing);
         assert!(paused_state.can_stop);
@@ -1315,7 +1787,7 @@ mod legacy_tests {
         };
         let resume_result = app_state.process_playback_command(resume_command);
         assert!(resume_result.is_ok());
-        
+
         let resumed_state = resume_result.unwrap();
         assert!(resumed_state.is_playing);
         assert!(resumed_state.can_stop);
@@ -1327,29 +1799,33 @@ mod legacy_tests {
     #[test]
     fn test_command_idempotency() {
         let app_state = AppStateSync::new();
-        
+
         // Start a message
         let start_command = PlaybackCommand::Start {
             message_id: "msg-1".to_string(),
             device_id: "control_plane_1".to_string(),
             timestamp: SystemTime::now(),
         };
-        
+
         // First start should be processed
         assert!(app_state.should_process_command(&start_command));
-        app_state.process_playback_command(start_command.clone()).unwrap();
-        
+        app_state
+            .process_playback_command(start_command.clone())
+            .unwrap();
+
         // Second identical start should not be processed (idempotent)
         assert!(!app_state.should_process_command(&start_command));
-        
+
         // Stop command should be processed
         let stop_command = PlaybackCommand::Stop {
             device_id: "control_plane_1".to_string(),
             timestamp: SystemTime::now(),
         };
         assert!(app_state.should_process_command(&stop_command));
-        app_state.process_playback_command(stop_command.clone()).unwrap();
-        
+        app_state
+            .process_playback_command(stop_command.clone())
+            .unwrap();
+
         // Second stop should not be processed (idempotent)
         assert!(!app_state.should_process_command(&stop_command));
     }
@@ -1357,21 +1833,39 @@ mod legacy_tests {
     #[test]
     fn test_parse_device_type() {
         let app_state = AppStateSync::new();
-        
-        assert_eq!(app_state.parse_device_type("control_plane_1").unwrap(), DeviceType::ControlPlane);
-        assert_eq!(app_state.parse_device_type("control-plane-1").unwrap(), DeviceType::ControlPlane);
-        assert_eq!(app_state.parse_device_type("mobile_remote_1").unwrap(), DeviceType::MobileRemote);
-        assert_eq!(app_state.parse_device_type("mobile-remote-1").unwrap(), DeviceType::MobileRemote);
-        assert_eq!(app_state.parse_device_type("system").unwrap(), DeviceType::System);
-        
+
+        assert_eq!(
+            app_state.parse_device_type("control_plane_1").unwrap(),
+            DeviceType::ControlPlane
+        );
+        assert_eq!(
+            app_state.parse_device_type("control-plane-1").unwrap(),
+            DeviceType::ControlPlane
+        );
+        assert_eq!(
+            app_state.parse_device_type("mobile_remote_1").unwrap(),
+            DeviceType::MobileRemote
+        );
+        assert_eq!(
+            app_state.parse_device_type("mobile-remote-1").unwrap(),
+            DeviceType::MobileRemote
+        );
+        assert_eq!(
+            app_state.parse_device_type("system").unwrap(),
+            DeviceType::System
+        );
+
         // Unknown device IDs default to MobileRemote
-        assert_eq!(app_state.parse_device_type("unknown_device").unwrap(), DeviceType::MobileRemote);
+        assert_eq!(
+            app_state.parse_device_type("unknown_device").unwrap(),
+            DeviceType::MobileRemote
+        );
     }
 
     #[test]
     fn test_calculate_message_duration() {
         let app_state = AppStateSync::new();
-        
+
         let message = MessageConfig {
             id: "test".to_string(),
             text: "Hello World".to_string(), // 11 characters
@@ -1384,10 +1878,10 @@ mod legacy_tests {
             split_enabled: None,
             split_separator: None,
         };
-        
+
         let duration = app_state.calculate_message_duration(&message);
         assert!(duration.is_some());
-        
+
         // Should be approximately 11 chars / 5 chars per second = 2.2 seconds
         let duration = duration.unwrap();
         assert!(duration.as_secs_f64() > 2.0 && duration.as_secs_f64() < 3.0);
@@ -1396,7 +1890,7 @@ mod legacy_tests {
     #[test]
     fn test_concurrent_command_validation() {
         let app_state = AppStateSync::new();
-        
+
         // Start a message
         let start_command = PlaybackCommand::Start {
             message_id: "msg-1".to_string(),
@@ -1404,17 +1898,17 @@ mod legacy_tests {
             timestamp: SystemTime::now(),
         };
         app_state.process_playback_command(start_command).unwrap();
-        
+
         // Try to start another message while one is playing
         let conflicting_start = PlaybackCommand::Start {
             message_id: "msg-2".to_string(),
             device_id: "mobile_remote_1".to_string(),
             timestamp: SystemTime::now(),
         };
-        
+
         let result = app_state.process_playback_command(conflicting_start);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             PlaybackError::InvalidCommand(msg) => {
                 assert!(msg.contains("another message is already playing"));
@@ -1427,58 +1921,65 @@ mod legacy_tests {
 
     /// **Feature: message-control-sync, Property 9: Command Validation**
     /// **Validates: Requirements 3.1**
-    /// 
-    /// Property: For any start command with a message ID, the system should validate 
-    /// the message exists before updating playback state, rejecting invalid messages 
+    ///
+    /// Property: For any start command with a message ID, the system should validate
+    /// the message exists before updating playback state, rejecting invalid messages
     /// without state changes.
     #[quickcheck(tests = 15)]
-    fn prop_command_validation_message_existence(message_id: String, device_id: String) -> TestResult {
+    fn prop_command_validation_message_existence(
+        message_id: String,
+        device_id: String,
+    ) -> TestResult {
         // Skip empty strings and very long strings to keep tests reasonable
-        if message_id.is_empty() || message_id.len() > 100 || device_id.is_empty() || device_id.len() > 100 {
+        if message_id.is_empty()
+            || message_id.len() > 100
+            || device_id.is_empty()
+            || device_id.len() > 100
+        {
             return TestResult::discard();
         }
-        
+
         // Skip message IDs that contain control characters or invalid UTF-8 sequences
         if message_id.chars().any(|c| c.is_control()) || device_id.chars().any(|c| c.is_control()) {
             return TestResult::discard();
         }
 
         let app_state = AppStateSync::new();
-        
+
         // Get the initial state before any command processing
         let initial_state = app_state.get_playback_control();
-        
+
         // Create a start command with the generated message_id
         let start_command = PlaybackCommand::Start {
             message_id: message_id.clone(),
             device_id: device_id.clone(),
             timestamp: SystemTime::now(),
         };
-        
+
         // Process the command
         let result = app_state.process_playback_command(start_command);
-        
+
         // Get the state after command processing
         let final_state = app_state.get_playback_control();
-        
+
         // Check if the message exists in the default messages
         let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
         let message_exists = default_message_ids.contains(&message_id.as_str());
-        
+
         if message_exists {
             // If message exists, command should succeed and state should be updated
             match result {
                 Ok(new_state) => {
                     // Verify the state was updated correctly
                     TestResult::from_bool(
-                        new_state.is_playing &&
-                        new_state.can_stop &&
-                        !new_state.can_start &&
-                        new_state.session_id.is_some() &&
-                        new_state.current_message.is_some() &&
-                        new_state.current_message.as_ref().unwrap().id == message_id &&
-                        final_state.is_playing &&
-                        final_state.current_message.is_some()
+                        new_state.is_playing
+                            && new_state.can_stop
+                            && !new_state.can_start
+                            && new_state.session_id.is_some()
+                            && new_state.current_message.is_some()
+                            && new_state.current_message.as_ref().unwrap().id == message_id
+                            && final_state.is_playing
+                            && final_state.current_message.is_some(),
                     )
                 }
                 Err(_) => {
@@ -1496,22 +1997,22 @@ mod legacy_tests {
                 Err(PlaybackError::MessageNotFound(not_found_id)) => {
                     // Verify the error contains the correct message ID and state is unchanged
                     TestResult::from_bool(
-                        not_found_id == message_id &&
-                        final_state.is_playing == initial_state.is_playing &&
-                        final_state.can_stop == initial_state.can_stop &&
-                        final_state.can_start == initial_state.can_start &&
-                        final_state.session_id == initial_state.session_id &&
-                        final_state.current_message == initial_state.current_message
+                        not_found_id == message_id
+                            && final_state.is_playing == initial_state.is_playing
+                            && final_state.can_stop == initial_state.can_stop
+                            && final_state.can_start == initial_state.can_start
+                            && final_state.session_id == initial_state.session_id
+                            && final_state.current_message == initial_state.current_message,
                     )
                 }
                 Err(_) => {
                     // Wrong error type, but state should still be unchanged
                     TestResult::from_bool(
-                        final_state.is_playing == initial_state.is_playing &&
-                        final_state.can_stop == initial_state.can_stop &&
-                        final_state.can_start == initial_state.can_start &&
-                        final_state.session_id == initial_state.session_id &&
-                        final_state.current_message == initial_state.current_message
+                        final_state.is_playing == initial_state.is_playing
+                            && final_state.can_stop == initial_state.can_stop
+                            && final_state.can_start == initial_state.can_start
+                            && final_state.session_id == initial_state.session_id
+                            && final_state.current_message == initial_state.current_message,
                     )
                 }
             }
@@ -1520,7 +2021,7 @@ mod legacy_tests {
 
     /// **Feature: message-control-sync, Property 9: Command Validation**
     /// **Validates: Requirements 3.1**
-    /// 
+    ///
     /// Property: Command validation should be consistent regardless of device type
     /// and should preserve state integrity when validation fails.
     #[quickcheck(tests = 10)]
@@ -1529,38 +2030,38 @@ mod legacy_tests {
         if message_id.is_empty() || message_id.len() > 100 {
             return TestResult::discard();
         }
-        
+
         // Skip message IDs that contain control characters
         if message_id.chars().any(|c| c.is_control()) {
             return TestResult::discard();
         }
 
         let app_state = AppStateSync::new();
-        
+
         // Test with different device types
         let device_types = vec![
             "control_plane_1",
-            "mobile_remote_1", 
+            "mobile_remote_1",
             "system_1",
-            "unknown_device_123"
+            "unknown_device_123",
         ];
-        
+
         let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
         let message_exists = default_message_ids.contains(&message_id.as_str());
-        
+
         // Test that validation behavior is consistent across all device types
         for device_id in device_types {
             let initial_state = app_state.get_playback_control();
-            
+
             let start_command = PlaybackCommand::Start {
                 message_id: message_id.clone(),
                 device_id: device_id.to_string(),
                 timestamp: SystemTime::now(),
             };
-            
+
             let result = app_state.process_playback_command(start_command);
             let final_state = app_state.get_playback_control();
-            
+
             // Reset state for next iteration if command succeeded
             if result.is_ok() {
                 let stop_command = PlaybackCommand::Stop {
@@ -1569,7 +2070,7 @@ mod legacy_tests {
                 };
                 let _ = app_state.process_playback_command(stop_command);
             }
-            
+
             // Verify consistent behavior regardless of device type
             if message_exists {
                 if result.is_err() {
@@ -1585,66 +2086,79 @@ mod legacy_tests {
                     }
                     Err(_) => {
                         // Other errors are acceptable as long as state is preserved
-                        if final_state.is_playing != initial_state.is_playing ||
-                           final_state.current_message != initial_state.current_message {
+                        if final_state.is_playing != initial_state.is_playing
+                            || final_state.current_message != initial_state.current_message
+                        {
                             return TestResult::from_bool(false);
                         }
                     }
                 }
             }
         }
-        
+
         TestResult::from_bool(true)
     }
 
     /// **Feature: message-control-sync, Property 12: Command Idempotency**
     /// **Validates: Requirements 3.5**
-    /// 
-    /// Property: For any control command sent multiple times in rapid succession, 
+    ///
+    /// Property: For any control command sent multiple times in rapid succession,
     /// the system should handle it idempotently without state corruption.
     #[quickcheck(tests = 10)]
-    fn prop_command_idempotency_rapid_succession(command_type: u8, message_id: String, device_id: String, repeat_count: u8) -> TestResult {
+    fn prop_command_idempotency_rapid_succession(
+        command_type: u8,
+        message_id: String,
+        device_id: String,
+        repeat_count: u8,
+    ) -> TestResult {
         // Limit inputs to reasonable ranges
-        if message_id.trim().is_empty() || message_id.len() > 100 || 
-           device_id.trim().is_empty() || device_id.len() > 100 ||
-           repeat_count == 0 || repeat_count > 20 {
+        if message_id.trim().is_empty()
+            || message_id.len() > 100
+            || device_id.trim().is_empty()
+            || device_id.len() > 100
+            || repeat_count == 0
+            || repeat_count > 20
+        {
             return TestResult::discard();
         }
-        
+
         // Skip message IDs and device IDs with control characters or only whitespace
-        if message_id.chars().any(|c| c.is_control()) || device_id.chars().any(|c| c.is_control()) ||
-           message_id.trim().is_empty() || device_id.trim().is_empty() {
+        if message_id.chars().any(|c| c.is_control())
+            || device_id.chars().any(|c| c.is_control())
+            || message_id.trim().is_empty()
+            || device_id.trim().is_empty()
+        {
             return TestResult::discard();
         }
 
         let app_state = AppStateSync::new();
         let timestamp = SystemTime::now();
-        
+
         // Map command_type to actual command variants
         let base_command = match command_type % 4 {
-            0 => PlaybackCommand::Start { 
-                message_id: message_id.clone(), 
-                device_id: device_id.clone(), 
-                timestamp 
+            0 => PlaybackCommand::Start {
+                message_id: message_id.clone(),
+                device_id: device_id.clone(),
+                timestamp,
             },
-            1 => PlaybackCommand::Stop { 
-                device_id: device_id.clone(), 
-                timestamp 
+            1 => PlaybackCommand::Stop {
+                device_id: device_id.clone(),
+                timestamp,
             },
-            2 => PlaybackCommand::Pause { 
-                device_id: device_id.clone(), 
-                timestamp 
+            2 => PlaybackCommand::Pause {
+                device_id: device_id.clone(),
+                timestamp,
             },
-            3 => PlaybackCommand::Resume { 
-                device_id: device_id.clone(), 
-                timestamp 
+            3 => PlaybackCommand::Resume {
+                device_id: device_id.clone(),
+                timestamp,
             },
             _ => unreachable!(),
         };
 
         // Check if this is a Start command with invalid message ID
         let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
-        let is_invalid_start = matches!(&base_command, PlaybackCommand::Start { message_id, .. } 
+        let is_invalid_start = matches!(&base_command, PlaybackCommand::Start { message_id, .. }
             if !default_message_ids.contains(&message_id.as_str()));
 
         if is_invalid_start {
@@ -1676,7 +2190,7 @@ mod legacy_tests {
                 if app_state.process_playback_command(setup_command).is_err() {
                     return TestResult::discard(); // Skip if setup fails
                 }
-            },
+            }
             PlaybackCommand::Resume { .. } => {
                 // Start and then pause a message so we have something to resume
                 let start_command = PlaybackCommand::Start {
@@ -1694,19 +2208,19 @@ mod legacy_tests {
                 if app_state.process_playback_command(pause_command).is_err() {
                     return TestResult::discard();
                 }
-            },
+            }
             PlaybackCommand::Start { .. } => {
                 // Valid start command - no setup needed
-            },
+            }
         }
 
         // Get initial state before processing commands
         let initial_state = app_state.get_playback_control();
-        
+
         // Process the same command multiple times in rapid succession
         let mut results = Vec::new();
         let mut final_states = Vec::new();
-        
+
         for _ in 0..repeat_count {
             let result = app_state.process_playback_command(base_command.clone());
             results.push(result);
@@ -1714,23 +2228,23 @@ mod legacy_tests {
         }
 
         // Validate idempotency properties
-        
+
         // Property 1: First command should succeed if valid, subsequent identical commands should be idempotent
         let first_result = &results[0];
-        
+
         // Reset state to initial for should_process_command check
         match &base_command {
             PlaybackCommand::Start { .. } => {
                 // Reset to initial state for proper should_process_command evaluation
                 app_state.stop_message_playback(DeviceType::System);
-            },
-            _ => {},
+            }
+            _ => {}
         }
-        
+
         match first_result {
             Ok(first_state) => {
                 // If first command succeeded, verify state consistency
-                
+
                 // Property 2: All subsequent results should either succeed with same state or be rejected idempotently
                 for (i, result) in results.iter().enumerate().skip(1) {
                     match result {
@@ -1739,7 +2253,7 @@ mod legacy_tests {
                             if !states_equivalent(first_state, state) {
                                 return TestResult::from_bool(false);
                             }
-                        },
+                        }
                         Err(_) => {
                             // If subsequent command was rejected, that's acceptable for idempotency
                             // as long as the system state wasn't corrupted
@@ -1750,14 +2264,13 @@ mod legacy_tests {
                         }
                     }
                 }
-                
+
                 // Property 3: Final state should be consistent with first successful command
                 let final_state = &final_states[final_states.len() - 1];
                 if !state_is_valid(final_state) {
                     return TestResult::from_bool(false);
                 }
-                
-            },
+            }
             Err(_) => {
                 // If first command failed, all subsequent commands should also fail
                 for result in results.iter().skip(1) {
@@ -1765,7 +2278,7 @@ mod legacy_tests {
                         return TestResult::from_bool(false);
                     }
                 }
-                
+
                 // Property 4: State should remain unchanged if all commands fail
                 let final_state = &final_states[final_states.len() - 1];
                 if !states_equivalent(&initial_state, final_state) {
@@ -1779,17 +2292,20 @@ mod legacy_tests {
 
     /// **Feature: message-control-sync, Property 12: Command Idempotency**
     /// **Validates: Requirements 3.5**
-    /// 
+    ///
     /// Property: Idempotency should be maintained across different device types
     /// sending the same command simultaneously.
     #[quickcheck(tests = 8)]
     fn prop_command_idempotency_cross_device(message_id: String, device_count: u8) -> TestResult {
         // Limit inputs to reasonable ranges
-        if message_id.trim().is_empty() || message_id.len() > 100 || 
-           device_count == 0 || device_count > 10 {
+        if message_id.trim().is_empty()
+            || message_id.len() > 100
+            || device_count == 0
+            || device_count > 10
+        {
             return TestResult::discard();
         }
-        
+
         // Skip message IDs with control characters or only whitespace
         if message_id.chars().any(|c| c.is_control()) || message_id.trim().is_empty() {
             return TestResult::discard();
@@ -1803,7 +2319,7 @@ mod legacy_tests {
 
         let app_state = AppStateSync::new();
         let timestamp = SystemTime::now();
-        
+
         // Generate different device IDs
         let device_types = ["control_plane", "mobile_remote", "system"];
         let mut device_ids = Vec::new();
@@ -1815,28 +2331,28 @@ mod legacy_tests {
         // Test Start command idempotency across devices
         let mut results = Vec::new();
         let mut states = Vec::new();
-        
+
         for device_id in &device_ids {
             let command = PlaybackCommand::Start {
                 message_id: message_id.clone(),
                 device_id: device_id.clone(),
                 timestamp,
             };
-            
+
             let result = app_state.process_playback_command(command);
             results.push(result);
             states.push(app_state.get_playback_control());
         }
 
         // Validate idempotency across devices
-        
+
         // Property 1: First command should succeed
         if results[0].is_err() {
             return TestResult::from_bool(false);
         }
-        
+
         let first_successful_state = results[0].as_ref().unwrap();
-        
+
         // Property 2: Subsequent commands should be handled idempotently
         for (i, result) in results.iter().enumerate().skip(1) {
             match result {
@@ -1845,7 +2361,7 @@ mod legacy_tests {
                     if !states_equivalent(first_successful_state, state) {
                         return TestResult::from_bool(false);
                     }
-                },
+                }
                 Err(_) => {
                     // If command was rejected (idempotent), that's acceptable
                     // Verify system state wasn't corrupted
@@ -1865,27 +2381,27 @@ mod legacy_tests {
         // Test Stop command idempotency across devices
         let mut stop_results = Vec::new();
         let mut stop_states = Vec::new();
-        
+
         for device_id in &device_ids {
             let stop_command = PlaybackCommand::Stop {
                 device_id: device_id.clone(),
                 timestamp,
             };
-            
+
             let result = app_state.process_playback_command(stop_command);
             stop_results.push(result);
             stop_states.push(app_state.get_playback_control());
         }
 
         // Validate stop command idempotency
-        
+
         // Property 4: First stop should succeed
         if stop_results[0].is_err() {
             return TestResult::from_bool(false);
         }
-        
+
         let first_stop_state = stop_results[0].as_ref().unwrap();
-        
+
         // Property 5: Subsequent stops should be idempotent
         for (i, result) in stop_results.iter().enumerate().skip(1) {
             match result {
@@ -1893,7 +2409,7 @@ mod legacy_tests {
                     if !states_equivalent(first_stop_state, state) {
                         return TestResult::from_bool(false);
                     }
-                },
+                }
                 Err(_) => {
                     // Idempotent rejection is acceptable
                     if !state_is_valid(&stop_states[i]) {
@@ -1914,16 +2430,19 @@ mod legacy_tests {
 
     /// **Feature: message-control-sync, Property 12: Command Idempotency**
     /// **Validates: Requirements 3.5**
-    /// 
+    ///
     /// Property: Command idempotency should preserve state consistency even
     /// when commands are interleaved with state queries.
     #[quickcheck(tests = 8)]
-    fn prop_command_idempotency_with_state_queries(message_id: String, query_count: u8) -> TestResult {
+    fn prop_command_idempotency_with_state_queries(
+        message_id: String,
+        query_count: u8,
+    ) -> TestResult {
         // Limit inputs to reasonable ranges
         if message_id.trim().is_empty() || message_id.len() > 100 || query_count > 20 {
             return TestResult::discard();
         }
-        
+
         // Skip message IDs with control characters or only whitespace
         if message_id.chars().any(|c| c.is_control()) || message_id.trim().is_empty() {
             return TestResult::discard();
@@ -1938,7 +2457,7 @@ mod legacy_tests {
         let app_state = AppStateSync::new();
         let timestamp = SystemTime::now();
         let device_id = "test_device".to_string();
-        
+
         let start_command = PlaybackCommand::Start {
             message_id: message_id.clone(),
             device_id: device_id.clone(),
@@ -1950,35 +2469,35 @@ mod legacy_tests {
         if first_result.is_err() {
             return TestResult::discard();
         }
-        
+
         let first_state = first_result.unwrap();
         let mut all_states = vec![first_state.clone()];
-        
+
         // Interleave duplicate commands with state queries
         for _ in 0..query_count {
             // Query state multiple times
             let queried_state1 = app_state.get_playback_control();
             let queried_state2 = app_state.get_playback_control();
-            
+
             // States from queries should be identical
             if !states_equivalent(&queried_state1, &queried_state2) {
                 return TestResult::from_bool(false);
             }
-            
+
             // Execute duplicate command
             let duplicate_result = app_state.process_playback_command(start_command.clone());
-            
+
             // Query state again
             let post_command_state = app_state.get_playback_control();
             all_states.push(post_command_state);
-            
+
             // Duplicate command should either succeed with same state or be rejected idempotently
             match duplicate_result {
                 Ok(result_state) => {
                     if !states_equivalent(&first_state, &result_state) {
                         return TestResult::from_bool(false);
                     }
-                },
+                }
                 Err(_) => {
                     // Idempotent rejection is acceptable, but state should be preserved
                     let current_state = app_state.get_playback_control();
@@ -2000,42 +2519,42 @@ mod legacy_tests {
     }
 
     // Helper functions for property tests
-    
+
     /// Check if two PlaybackControlState instances are equivalent for idempotency purposes
     fn states_equivalent(state1: &PlaybackControlState, state2: &PlaybackControlState) -> bool {
-        state1.session_id == state2.session_id &&
-        state1.current_message == state2.current_message &&
-        state1.is_playing == state2.is_playing &&
-        state1.can_stop == state2.can_stop &&
-        state1.can_start == state2.can_start
-        // Note: We don't compare playback_position, initiated_by, or last_updated 
+        state1.session_id == state2.session_id
+            && state1.current_message == state2.current_message
+            && state1.is_playing == state2.is_playing
+            && state1.can_stop == state2.can_stop
+            && state1.can_start == state2.can_start
+        // Note: We don't compare playback_position, initiated_by, or last_updated
         // as these may legitimately differ between equivalent states
     }
-    
+
     /// Validate that a PlaybackControlState is internally consistent and valid
     fn state_is_valid(state: &PlaybackControlState) -> bool {
         // Rule 1: If playing, must have current message and session
         if state.is_playing && (state.current_message.is_none() || state.session_id.is_none()) {
             return false;
         }
-        
+
         // Rule 2: If not playing and no message, should not have session
         if !state.is_playing && state.current_message.is_none() && state.session_id.is_some() {
             return false;
         }
-        
+
         // Rule 3: Control capabilities should be consistent with state
         match (state.is_playing, state.current_message.is_some()) {
-            (true, true) => state.can_stop && !state.can_start,   // Playing: can stop, cannot start
-            (false, true) => state.can_stop && state.can_start,   // Paused: can stop OR resume (start)
+            (true, true) => state.can_stop && !state.can_start, // Playing: can stop, cannot start
+            (false, true) => state.can_stop && state.can_start, // Paused: can stop OR resume (start)
             (false, false) => !state.can_stop && state.can_start, // Idle: cannot stop, can start
-            (true, false) => false, // Invalid: playing without message
+            (true, false) => false,                             // Invalid: playing without message
         }
     }
 
     /// **Feature: message-control-sync, Property 9: Command Validation**
     /// **Validates: Requirements 3.1**
-    /// 
+    ///
     /// Property: State should never be corrupted by invalid commands, even when
     /// multiple invalid commands are processed in sequence.
     #[quickcheck(tests = 10)]
@@ -2044,104 +2563,125 @@ mod legacy_tests {
         if invalid_message_ids.len() > 10 {
             return TestResult::discard();
         }
-        
+
         // Filter out valid message IDs and empty strings
         let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
         let truly_invalid_ids: Vec<String> = invalid_message_ids
             .into_iter()
-            .filter(|id| !id.is_empty() && 
-                        id.len() <= 100 && 
-                        !id.chars().any(|c| c.is_control()) &&
-                        !default_message_ids.contains(&id.as_str()))
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 100
+                    && !id.chars().any(|c| c.is_control())
+                    && !default_message_ids.contains(&id.as_str())
+            })
             .collect();
-        
+
         if truly_invalid_ids.is_empty() {
             return TestResult::discard();
         }
 
         let app_state = AppStateSync::new();
         let initial_state = app_state.get_playback_control();
-        
+
         // Process multiple invalid commands in sequence
         for (i, message_id) in truly_invalid_ids.iter().enumerate() {
             let device_id = format!("device_{}", i);
-            
+
             let start_command = PlaybackCommand::Start {
                 message_id: message_id.clone(),
                 device_id,
                 timestamp: SystemTime::now(),
             };
-            
+
             let result = app_state.process_playback_command(start_command);
-            
+
             // All commands should fail
             if result.is_ok() {
                 return TestResult::from_bool(false);
             }
-            
+
             // Verify state remains unchanged after each failed command
             let current_state = app_state.get_playback_control();
-            if current_state.is_playing != initial_state.is_playing ||
-               current_state.can_stop != initial_state.can_stop ||
-               current_state.can_start != initial_state.can_start ||
-               current_state.session_id != initial_state.session_id ||
-               current_state.current_message != initial_state.current_message {
+            if current_state.is_playing != initial_state.is_playing
+                || current_state.can_stop != initial_state.can_stop
+                || current_state.can_start != initial_state.can_start
+                || current_state.session_id != initial_state.session_id
+                || current_state.current_message != initial_state.current_message
+            {
                 return TestResult::from_bool(false);
             }
         }
-        
+
         // Final verification that state is completely unchanged
         let final_state = app_state.get_playback_control();
         TestResult::from_bool(
-            final_state.is_playing == initial_state.is_playing &&
-            final_state.can_stop == initial_state.can_stop &&
-            final_state.can_start == initial_state.can_start &&
-            final_state.session_id == initial_state.session_id &&
-            final_state.current_message == initial_state.current_message &&
-            final_state.playback_position == initial_state.playback_position
+            final_state.is_playing == initial_state.is_playing
+                && final_state.can_stop == initial_state.can_stop
+                && final_state.can_start == initial_state.can_start
+                && final_state.session_id == initial_state.session_id
+                && final_state.current_message == initial_state.current_message
+                && final_state.playback_position == initial_state.playback_position,
         )
     }
 
     #[test]
     fn test_enhanced_tauri_event_data_structure() {
         let app_state = AppStateSync::new();
-        
+
         // Start a message to create a playback state
         let result = app_state.start_message_playback("msg-1", DeviceType::MobileRemote);
         assert!(result.is_ok());
-        
+
         // Get the complete state that would be sent in Tauri events
         let complete_state = app_state.get_state();
-        
+
         // Verify that the complete state includes playback control information
         assert!(complete_state.playback_control.is_playing);
         assert!(complete_state.playback_control.can_stop);
         assert!(!complete_state.playback_control.can_start);
-        assert_eq!(complete_state.playback_control.initiated_by, DeviceType::MobileRemote);
+        assert_eq!(
+            complete_state.playback_control.initiated_by,
+            DeviceType::MobileRemote
+        );
         assert!(complete_state.playback_control.current_message.is_some());
         assert!(complete_state.playback_control.session_id.is_some());
-        
+
         // Verify that the message information is included
-        let message_info = complete_state.playback_control.current_message.as_ref().unwrap();
+        let message_info = complete_state
+            .playback_control
+            .current_message
+            .as_ref()
+            .unwrap();
         assert_eq!(message_info.id, "msg-1");
         assert_eq!(message_info.title, "Countdown initiated...");
-        
+
         // Test the JSON serialization that would be sent in Tauri events
         let event_payload = serde_json::json!({
             "type": "MESSAGE_STARTED_FROM_REMOTE",
             "playbackControl": complete_state.playback_control,
             "state": complete_state
         });
-        
+
         // Verify the event payload structure
         assert_eq!(event_payload["type"], "MESSAGE_STARTED_FROM_REMOTE");
-        assert!(event_payload["playbackControl"]["isPlaying"].as_bool().unwrap());
-        assert!(event_payload["playbackControl"]["canStop"].as_bool().unwrap());
-        assert!(!event_payload["playbackControl"]["canStart"].as_bool().unwrap());
-        assert_eq!(event_payload["playbackControl"]["initiatedBy"], "mobile_remote");
-        
+        assert!(event_payload["playbackControl"]["isPlaying"]
+            .as_bool()
+            .unwrap());
+        assert!(event_payload["playbackControl"]["canStop"]
+            .as_bool()
+            .unwrap());
+        assert!(!event_payload["playbackControl"]["canStart"]
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            event_payload["playbackControl"]["initiatedBy"],
+            "mobile_remote"
+        );
+
         // Verify that the complete state is included for full synchronization
-        assert!(event_payload["state"]["playbackControl"]["isPlaying"].as_bool().unwrap());
+        assert!(event_payload["state"]["playbackControl"]["isPlaying"]
+            .as_bool()
+            .unwrap());
         assert!(event_payload["state"]["messages"].is_array());
         assert!(event_payload["state"]["activeVisualization"].is_string());
     }
@@ -2149,37 +2689,51 @@ mod legacy_tests {
     #[test]
     fn test_stop_command_enhanced_tauri_event() {
         let app_state = AppStateSync::new();
-        
+
         // Start a message first
-        app_state.start_message_playback("msg-1", DeviceType::ControlPlane).unwrap();
-        
+        app_state
+            .start_message_playback("msg-1", DeviceType::ControlPlane)
+            .unwrap();
+
         // Stop the message
         app_state.stop_message_playback(DeviceType::MobileRemote);
-        
+
         // Get the complete state that would be sent in Tauri events
         let complete_state = app_state.get_state();
-        
+
         // Verify the stopped state
         assert!(!complete_state.playback_control.is_playing);
         assert!(!complete_state.playback_control.can_stop);
         assert!(complete_state.playback_control.can_start);
-        assert_eq!(complete_state.playback_control.initiated_by, DeviceType::MobileRemote);
+        assert_eq!(
+            complete_state.playback_control.initiated_by,
+            DeviceType::MobileRemote
+        );
         assert!(complete_state.playback_control.current_message.is_none());
         assert!(complete_state.playback_control.session_id.is_none());
-        
+
         // Test the JSON serialization for stop event
         let event_payload = serde_json::json!({
             "type": "MESSAGE_STOPPED_FROM_REMOTE",
             "playbackControl": complete_state.playback_control,
             "state": complete_state
         });
-        
+
         // Verify the stop event payload structure
         assert_eq!(event_payload["type"], "MESSAGE_STOPPED_FROM_REMOTE");
-        assert!(!event_payload["playbackControl"]["isPlaying"].as_bool().unwrap());
-        assert!(!event_payload["playbackControl"]["canStop"].as_bool().unwrap());
-        assert!(event_payload["playbackControl"]["canStart"].as_bool().unwrap());
-        assert_eq!(event_payload["playbackControl"]["initiatedBy"], "mobile_remote");
+        assert!(!event_payload["playbackControl"]["isPlaying"]
+            .as_bool()
+            .unwrap());
+        assert!(!event_payload["playbackControl"]["canStop"]
+            .as_bool()
+            .unwrap());
+        assert!(event_payload["playbackControl"]["canStart"]
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            event_payload["playbackControl"]["initiatedBy"],
+            "mobile_remote"
+        );
         assert!(event_payload["playbackControl"]["currentMessage"].is_null());
         assert!(event_payload["playbackControl"]["sessionId"].is_null());
     }
