@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Query, Request, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -31,6 +31,8 @@ use vibe_cast_models::{
     RemoteCommand, RemoteStartupPerfReport, TextStylePreset, VisualizationPreset,
 };
 use vibe_cast_state::AppStateSync;
+
+const MAX_COMMAND_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Structured error response for API endpoints
 ///
@@ -574,7 +576,10 @@ pub async fn start_server(app_handle: AppHandle, app_state_sync: Arc<AppStateSyn
     let app = Router::new()
         .merge(compressed_api)
         .merge(static_assets)
-        .route("/api/command", post(handle_command))
+        .route(
+            "/api/command",
+            post(handle_command).layer(DefaultBodyLimit::max(MAX_COMMAND_BODY_BYTES)),
+        )
         .route("/api/e2e/session/:session_id/end", post(end_e2e_session))
         .route("/api/e2e/session/:session_id/probe", post(handle_e2e_probe))
         .route("/api/events", get(state_events))

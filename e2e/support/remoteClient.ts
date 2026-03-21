@@ -135,6 +135,7 @@ export class RemoteClient {
 
     const url = new URL(baseUrl);
     url.searchParams.set('e2e', '1');
+    url.searchParams.set('perf', '1');
     url.searchParams.set('sessionId', sessionId);
     url.searchParams.set('clientId', descriptor.clientId);
     url.searchParams.set('clientLabel', descriptor.clientLabel);

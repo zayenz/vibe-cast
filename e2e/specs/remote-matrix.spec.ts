@@ -3,6 +3,18 @@ import type { ProbeEvent, SessionSummary } from '../support/appHarness';
 import { RemoteClient } from '../support/remoteClient';
 import { buildLargeFixtureConfig, loadFixtureConfig } from '../support/config';
 
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const coldStartBudgetMs = parsePositiveIntEnv('VIBECAST_E2E_MAX_FIRST_USABLE_MS', 12_000);
+
 async function bootClients(
   projectName: string,
   appSession: { launchMatrix: (project: string) => Promise<RemoteClient[]>; waitForWindowReadiness: () => Promise<void> },
@@ -55,7 +67,7 @@ test('cold-start remote hydration converges across the browser matrix', async ({
 
     const firstUsable = remoteEvent(events, 'remote_first_usable_render', client.clientId);
     expect(firstUsable).toBeTruthy();
-    expect(Number(firstUsable?.payload.firstUsableRenderMs ?? 0)).toBeLessThanOrEqual(12_000);
+    expect(Number(firstUsable?.payload.firstUsableRenderMs ?? 0)).toBeLessThanOrEqual(coldStartBudgetMs);
   }
 });
 

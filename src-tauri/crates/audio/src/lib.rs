@@ -13,9 +13,15 @@ pub struct AudioState {
     pub fft_data: Arc<Mutex<Vec<f32>>>,
 }
 
+pub fn silent_audio_state() -> AudioState {
+    AudioState {
+        fft_data: Arc::new(Mutex::new(vec![0.0; 512])),
+    }
+}
+
 pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
     let host = cpal::default_host();
-    
+
     // On macOS, loopback usually requires a virtual device like BlackHole.
     // We'll try to find a device with "BlackHole" in the name, otherwise use default input.
     let device = host
@@ -68,42 +74,41 @@ pub fn start_audio_capture(app_handle: AppHandle) -> AudioState {
     let mut fft_output = fft.make_output_vec();
     let mut magnitudes = vec![0.0_f32; fft_size / 2];
 
-    let stream = device.build_input_stream(
-        &config,
-        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            for &sample in data {
-                buffer.push(sample);
-                if buffer.len() >= fft_size {
-                    fft_input.copy_from_slice(&buffer[..fft_size]);
-                    if fft.process(&mut fft_input, &mut fft_output).is_ok() {
-                        for (index, value) in fft_output.iter().take(fft_size / 2).enumerate() {
-                            magnitudes[index] =
-                                (value.re * value.re + value.im * value.im).sqrt()
+    let stream = device
+        .build_input_stream(
+            &config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                for &sample in data {
+                    buffer.push(sample);
+                    if buffer.len() >= fft_size {
+                        fft_input.copy_from_slice(&buffer[..fft_size]);
+                        if fft.process(&mut fft_input, &mut fft_output).is_ok() {
+                            for (index, value) in fft_output.iter().take(fft_size / 2).enumerate() {
+                                magnitudes[index] = (value.re * value.re + value.im * value.im)
+                                    .sqrt()
                                     / (fft_size as f32).sqrt();
-                        }
+                            }
 
-                        if let Ok(mut latest) = latest_frame_callback.try_lock() {
-                            latest.copy_from_slice(&magnitudes);
-                            has_pending_frame_callback.store(true, Ordering::Release);
+                            if let Ok(mut latest) = latest_frame_callback.try_lock() {
+                                latest.copy_from_slice(&magnitudes);
+                                has_pending_frame_callback.store(true, Ordering::Release);
+                            }
                         }
+                        buffer.clear();
                     }
-                    buffer.clear();
                 }
-            }
-        },
-        |err| eprintln!("Audio stream error: {}", err),
-        None,
-    ).expect("Failed to build input stream");
+            },
+            |err| eprintln!("Audio stream error: {}", err),
+            None,
+        )
+        .expect("Failed to build input stream");
 
     stream.play().expect("Failed to play audio stream");
-    
+
     // Keep the stream alive for the app's lifetime.
     // Note: cpal::Stream is not Send+Sync, so we can't store it in Tauri state.
     // Using mem::forget is the standard workaround for long-running audio streams.
     std::mem::forget(stream);
 
-    AudioState {
-        fft_data,
-    }
+    AudioState { fft_data }
 }
-

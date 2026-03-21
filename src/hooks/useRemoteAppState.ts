@@ -136,7 +136,10 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     const remoteLoadStartedAt = Date.now();
     const perfEnabled =
       typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('perf') === '1';
+      (
+        new URLSearchParams(window.location.search).get('perf') === '1'
+        || e2eContext !== null
+      );
     perfRef.current = { clientId: clientIdRef.current };
     hasReportedPerfRef.current = false;
     hasAnyStateRef.current = false;

@@ -689,6 +689,14 @@ export const VisualizerWindow: React.FC = () => {
           void postE2EProbe(apiBase, 'window_ready', {
             window: 'visualizer',
           });
+          const currentSnapshot = window.__VIBECAST_E2E__?.getSnapshot?.() ?? null;
+          if (currentSnapshot) {
+            void postE2EProbe(apiBase, 'window_state_snapshot', {
+              window: 'visualizer',
+              snapshot: currentSnapshot,
+              isConnected: sseConnected,
+            });
+          }
         }
         return;
       }
@@ -706,7 +714,7 @@ export const VisualizerWindow: React.FC = () => {
         clearTimeout(retryTimer);
       }
     };
-  }, [apiBase, serverReady]);
+  }, [apiBase, serverReady, sseConnected]);
 
   // When server is ready, try to load initial state via Tauri IPC
   // This bypasses SSE/HTTP entirely and works even when webview HTTP is blocked

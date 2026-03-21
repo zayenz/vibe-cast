@@ -133,6 +133,14 @@ export const ControlPlane: React.FC = () => {
           void postE2EProbe(apiBase, 'window_ready', {
             window: 'control-plane',
           });
+          const currentSnapshot = window.__VIBECAST_E2E__?.getSnapshot?.() ?? null;
+          if (currentSnapshot) {
+            void postE2EProbe(apiBase, 'window_state_snapshot', {
+              window: 'control-plane',
+              snapshot: currentSnapshot,
+              isConnected,
+            });
+          }
         }
         return;
       }
@@ -150,7 +158,7 @@ export const ControlPlane: React.FC = () => {
         clearTimeout(retryTimer);
       }
     };
-  }, [apiBase]);
+  }, [apiBase, isConnected]);
 
   useEffect(() => {
     const snapshot = buildE2EStateSnapshot(state, connectionPhase);

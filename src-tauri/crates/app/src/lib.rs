@@ -1,34 +1,38 @@
-use std::sync::Arc;
-use tauri::{Manager, Emitter};
 use local_ip_address::local_ip;
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
 use vibe_cast_audio::AudioState;
-use vibe_cast_state::AppStateSync;
 use vibe_cast_models::{
-    MessageConfig, VisualizationPreset, TextStylePreset, 
-    CommonSettings, flatten_message_tree_value, PlaybackCommand, DeviceType
+    flatten_message_tree_value, CommonSettings, DeviceType, MessageConfig, PlaybackCommand,
+    TextStylePreset, VisualizationPreset,
 };
+use vibe_cast_state::AppStateSync;
 
 #[tauri::command]
-async fn get_server_info(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<serde_json::Value, String> {
+async fn get_server_info(
+    state: tauri::State<'_, Arc<AppStateSync>>,
+) -> Result<serde_json::Value, String> {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(5);
-    
+
     // Poll until port is set (non-zero)
     loop {
         if let Ok(port_lock) = state.server_port.lock() {
             if *port_lock != 0 {
-                let my_local_ip = local_ip().map(|ip| ip.to_string()).unwrap_or_else(|_| "127.0.0.1".to_string());
+                let my_local_ip = local_ip()
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_else(|_| "127.0.0.1".to_string());
                 return Ok(serde_json::json!({
                     "ip": my_local_ip,
                     "port": *port_lock
                 }));
             }
         }
-        
+
         if start.elapsed() > timeout {
             return Err("Timeout waiting for server to bind port".to_string());
         }
-        
+
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
@@ -49,51 +53,79 @@ async fn check_server_ready(state: tauri::State<'_, Arc<AppStateSync>>) -> Resul
 #[tauri::command]
 fn get_app_state(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<serde_json::Value, String> {
     // Build state object similar to what SSE would return
-    let active_visualization = state.active_visualization.lock()
+    let active_visualization = state
+        .active_visualization
+        .lock()
         .map(|v| v.clone())
         .unwrap_or_else(|_| "fireplace".to_string());
-    let enabled_visualizations = state.enabled_visualizations.lock()
+    let enabled_visualizations = state
+        .enabled_visualizations
+        .lock()
         .map(|v| v.clone())
         .unwrap_or_else(|_| vec![]);
-    let active_visualization_preset: Option<String> = state.active_visualization_preset.lock()
+    let active_visualization_preset: Option<String> = state
+        .active_visualization_preset
+        .lock()
         .ok()
         .and_then(|guard| guard.clone());
-    let messages = state.messages.lock()
+    let messages = state
+        .messages
+        .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| vec![]);
-    let message_tree = state.message_tree.lock()
+    let message_tree = state
+        .message_tree
+        .lock()
         .map(|t| t.clone())
         .unwrap_or_else(|_| serde_json::Value::Null);
-    let visualization_presets = state.visualization_presets.lock()
+    let visualization_presets = state
+        .visualization_presets
+        .lock()
         .map(|p| p.clone())
         .unwrap_or_else(|_| vec![]);
-    let text_style_presets = state.text_style_presets.lock()
+    let text_style_presets = state
+        .text_style_presets
+        .lock()
         .map(|p| p.clone())
         .unwrap_or_else(|_| vec![]);
-    let default_text_style = state.default_text_style.lock()
+    let default_text_style = state
+        .default_text_style
+        .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| "scrolling-capitals".to_string());
-    let text_style_settings = state.text_style_settings.lock()
+    let text_style_settings = state
+        .text_style_settings
+        .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    let common_settings = state.common_settings.lock()
+    let common_settings = state
+        .common_settings
+        .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| CommonSettings::default());
-    let visualization_settings = state.visualization_settings.lock()
+    let visualization_settings = state
+        .visualization_settings
+        .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    let message_stats = state.message_stats.lock()
+    let message_stats = state
+        .message_stats
+        .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
     // triggered_message is Mutex<Option<T>>, need to clone the inner Option
-    let triggered_message: Option<MessageConfig> = state.triggered_message.lock()
+    let triggered_message: Option<MessageConfig> = state
+        .triggered_message
+        .lock()
         .ok()
         .and_then(|guard| guard.clone());
     // playback_control is Mutex<T> (not Option), directly clone it
-    let playback_control = state.playback_control.lock()
+    let playback_control = state
+        .playback_control
+        .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default();
-    
+
     Ok(serde_json::json!({
         "activeVisualization": active_visualization,
         "enabledVisualizations": enabled_visualizations,
@@ -124,19 +156,19 @@ fn get_audio_data(state: tauri::State<'_, AudioState>) -> Vec<f32> {
 fn resolve_path(path: &str, base_path: Option<&str>) -> String {
     use std::path::Path;
     let p = Path::new(path);
-    
+
     // If absolute, return as-is
     if p.is_absolute() {
         return path.to_string();
     }
-    
+
     // If relative and we have a base path, resolve it
     if let Some(base) = base_path {
         let base_path = Path::new(base);
         let resolved = base_path.join(path);
         return resolved.to_string_lossy().to_string();
     }
-    
+
     // No base path, return as-is
     path.to_string()
 }
@@ -144,9 +176,12 @@ fn resolve_path(path: &str, base_path: Option<&str>) -> String {
 #[tauri::command]
 fn set_config_base_path(
     state: tauri::State<'_, Arc<AppStateSync>>,
-    path: Option<String>
+    path: Option<String>,
 ) -> Result<(), String> {
-    eprintln!("[Rust] set_config_base_path command called with: {:?}", path);
+    eprintln!(
+        "[Rust] set_config_base_path command called with: {:?}",
+        path
+    );
     if let Ok(mut p) = state.config_base_path.lock() {
         *p = path.clone();
         eprintln!("[Rust] Config base path set successfully to: {:?}", path);
@@ -159,7 +194,7 @@ fn set_config_base_path(
 
 #[tauri::command]
 fn get_config_base_path(
-    state: tauri::State<'_, Arc<AppStateSync>>
+    state: tauri::State<'_, Arc<AppStateSync>>,
 ) -> Result<Option<String>, String> {
     match state.config_base_path.lock() {
         Ok(p) => {
@@ -177,20 +212,18 @@ fn get_config_base_path(
 #[tauri::command]
 fn load_message_text_file(
     state: tauri::State<'_, Arc<AppStateSync>>,
-    file_path: String
+    file_path: String,
 ) -> Result<String, String> {
     use std::fs;
-    let base_path_opt = state.config_base_path.lock() 
-        .ok()
-        .and_then(|p| p.clone());
-    
+    let base_path_opt = state.config_base_path.lock().ok().and_then(|p| p.clone());
+
     eprintln!("[Rust] load_message_text_file called");
     eprintln!("[Rust]   file_path: {}", file_path);
     eprintln!("[Rust]   base_path: {:?}", base_path_opt);
-    
+
     let resolved = resolve_path(&file_path, base_path_opt.as_deref());
     eprintln!("[Rust]   resolved path: {}", resolved);
-    
+
     match fs::read_to_string(&resolved) {
         Ok(content) => {
             eprintln!("[Rust]   Successfully read file, length: {}", content.len());
@@ -215,10 +248,13 @@ fn restart_viz_window(handle: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Recreate it pointing at the app index route. The App component will route by window label.
-    let mut builder = tauri::WebviewWindowBuilder::new(&handle, "viz", tauri::WebviewUrl::App("index.html".into()))
-        .title("VibeCast")
-        .resizable(true)
-        ;
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        &handle,
+        "viz",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("VibeCast")
+    .resizable(true);
 
     if let Some(size) = prev_size {
         builder = builder.inner_size(size.width as f64, size.height as f64);
@@ -237,19 +273,19 @@ fn restart_viz_window(handle: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn emit_state_change(
-    handle: tauri::AppHandle, 
+    handle: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppStateSync>>,
-    event_type: String, 
-    payload: String  // JSON string from frontend
+    event_type: String,
+    payload: String, // JSON string from frontend
 ) {
     let mut triggered_message: Option<MessageConfig> = None;
     let mut config_changed = false;
     let mut runtime_changed = false;
-    
+
     // Parse the payload
-    let payload_value: serde_json::Value = serde_json::from_str(&payload)
-        .unwrap_or(serde_json::Value::Null);
-    
+    let payload_value: serde_json::Value =
+        serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+
     // Update local state based on event type
     match event_type.as_str() {
         "SET_ACTIVE_VISUALIZATION" => {
@@ -263,7 +299,8 @@ fn emit_state_change(
         "SET_ENABLED_VISUALIZATIONS" => {
             if let Some(vizs) = payload_value.as_array() {
                 if let Ok(mut m) = state.enabled_visualizations.lock() {
-                    *m = vizs.iter() 
+                    *m = vizs
+                        .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                 }
@@ -285,7 +322,9 @@ fn emit_state_change(
             config_changed = true;
         }
         "SET_MESSAGES" => {
-            if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(payload_value.clone()) {
+            if let Ok(messages) =
+                serde_json::from_value::<Vec<MessageConfig>>(payload_value.clone())
+            {
                 if let Ok(mut m) = state.messages.lock() {
                     *m = messages;
                 }
@@ -342,7 +381,9 @@ fn emit_state_change(
             }
         }
         "SET_VISUALIZATION_PRESETS" => {
-            if let Ok(presets) = serde_json::from_value::<Vec<VisualizationPreset>>(payload_value.clone()) {
+            if let Ok(presets) =
+                serde_json::from_value::<Vec<VisualizationPreset>>(payload_value.clone())
+            {
                 if let Ok(mut m) = state.visualization_presets.lock() {
                     *m = presets;
                 }
@@ -371,7 +412,9 @@ fn emit_state_change(
             }
         }
         "SET_TEXT_STYLE_PRESETS" => {
-            if let Ok(presets) = serde_json::from_value::<Vec<TextStylePreset>>(payload_value.clone()) {
+            if let Ok(presets) =
+                serde_json::from_value::<Vec<TextStylePreset>>(payload_value.clone())
+            {
                 if let Ok(mut m) = state.text_style_presets.lock() {
                     *m = presets;
                 }
@@ -392,7 +435,8 @@ fn emit_state_change(
                 }
                 if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
                     if let Ok(mut m) = state.enabled_visualizations.lock() {
-                        *m = vizs.iter() 
+                        *m = vizs
+                            .iter()
                             .filter_map(|v| v.as_str().map(|s| s.to_string()))
                             .collect();
                     }
@@ -410,7 +454,8 @@ fn emit_state_change(
                     }
                 }
                 if let Some(msgs) = obj.get("messages") {
-                    if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
+                    if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone())
+                    {
                         if let Ok(mut m) = state.messages.lock() {
                             *m = messages;
                         }
@@ -430,15 +475,14 @@ fn emit_state_change(
                     // If no tree was provided, keep a flat tree representation of messages
                     if let Ok(m) = state.messages.lock() {
                         if let Ok(mut t) = state.message_tree.lock() {
-                            *t = serde_json::json!(
-                                m.iter()
-                                    .map(|msg| serde_json::json!({ 
-                                        "type": "message", 
-                                        "id": msg.id, 
-                                        "message": msg 
-                                    }))
-                                    .collect::<Vec<serde_json::Value>>()
-                            );
+                            *t = serde_json::json!(m
+                                .iter()
+                                .map(|msg| serde_json::json!({
+                                    "type": "message",
+                                    "id": msg.id,
+                                    "message": msg
+                                }))
+                                .collect::<Vec<serde_json::Value>>());
                         }
                     }
                 }
@@ -453,13 +497,18 @@ fn emit_state_change(
                     }
                 }
                 if let Some(presets) = obj.get("visualizationPresets") {
-                    if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
+                    if let Ok(p) =
+                        serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone())
+                    {
                         if let Ok(mut m) = state.visualization_presets.lock() {
                             *m = p;
                         }
                     }
                 }
-                if let Some(preset_id) = obj.get("activeVisualizationPreset").and_then(|v| v.as_str()) {
+                if let Some(preset_id) = obj
+                    .get("activeVisualizationPreset")
+                    .and_then(|v| v.as_str())
+                {
                     if let Ok(mut m) = state.active_visualization_preset.lock() {
                         *m = Some(preset_id.to_string());
                     }
@@ -503,15 +552,18 @@ fn emit_state_change(
     } else {
         state.broadcast_current_state();
     }
-    
+
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
     // Include complete state information including playback control state for bidirectional control
     let complete_state = state.get_state();
-    let _ = handle.emit("state-changed", serde_json::json!({ 
-        "type": event_type,
-        "payload": payload_value,
-        "state": complete_state
-    }));
+    let _ = handle.emit(
+        "state-changed",
+        serde_json::json!({
+            "type": event_type,
+            "payload": payload_value,
+            "state": complete_state
+        }),
+    );
 }
 
 /// Process a playback command and emit enhanced Tauri events for Control Plane synchronization
@@ -519,34 +571,38 @@ fn emit_state_change(
 fn process_playback_command(
     handle: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppStateSync>>,
-    command: PlaybackCommand
+    command: PlaybackCommand,
 ) -> Result<serde_json::Value, String> {
     // Process the command using the state management logic
     let result = state.process_playback_command(command);
-    
+
     match result {
         Ok(new_state) => {
             // Emit enhanced Tauri event with complete control state to all windows
             // emit() broadcasts globally to all windows in Tauri v2
             let complete_state = state.get_state();
-            let _ = handle.emit("playback-control-changed", serde_json::json!({
-                "type": "PLAYBACK_CONTROL_UPDATE",
-                "playbackControl": new_state,
-                "state": complete_state
-            }));
-            
+            let _ = handle.emit(
+                "playback-control-changed",
+                serde_json::json!({
+                    "type": "PLAYBACK_CONTROL_UPDATE",
+                    "playbackControl": new_state,
+                    "state": complete_state
+                }),
+            );
+
             // Also emit the general state-changed event to all windows for backward compatibility
-            let _ = handle.emit("state-changed", serde_json::json!({
-                "type": "PLAYBACK_CONTROL_UPDATE",
-                "payload": serde_json::to_value(&new_state).unwrap_or_default(),
-                "state": complete_state
-            }));
-            
+            let _ = handle.emit(
+                "state-changed",
+                serde_json::json!({
+                    "type": "PLAYBACK_CONTROL_UPDATE",
+                    "payload": serde_json::to_value(&new_state).unwrap_or_default(),
+                    "state": complete_state
+                }),
+            );
+
             Ok(serde_json::to_value(new_state).unwrap_or_default())
         }
-        Err(error) => {
-            Err(format!("Playback command failed: {:?}", error))
-        }
+        Err(error) => Err(format!("Playback command failed: {:?}", error)),
     }
 }
 
@@ -557,15 +613,18 @@ async fn start_message_playback(
     handle: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppStateSync>>,
     message_id: String,
-    message: MessageConfig
+    message: MessageConfig,
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
 
     // Verify message_id matches message.id
     if message.id != message_id {
-        return Err(format!("Message ID mismatch: expected {}, got {}", message_id, message.id));
+        return Err(format!(
+            "Message ID mismatch: expected {}, got {}",
+            message_id, message.id
+        ));
     }
-    
+
     let result = state.start_message_playback(&message_id, device_type.clone());
 
     if let Err(ref error) = result {
@@ -584,19 +643,29 @@ async fn start_message_playback(
 
     let _ = handle.emit("triggered-message", &message);
 
-    let _ = handle.emit("playback-control-changed", serde_json::json!({
-        "type": "MESSAGE_STARTED",
-        "playbackControl": playback_control,
-        "state": complete_state
-    }));
+    let _ = handle.emit(
+        "playback-control-changed",
+        serde_json::json!({
+            "type": "MESSAGE_STARTED",
+            "playbackControl": playback_control,
+            "state": complete_state
+        }),
+    );
 
-    let _ = handle.emit("state-changed", serde_json::json!({
-        "type": "MESSAGE_STARTED",
-        "payload": serde_json::json!({ "messageId": message_id }),
-        "state": complete_state
-    }));
+    let _ = handle.emit(
+        "state-changed",
+        serde_json::json!({
+            "type": "MESSAGE_STARTED",
+            "payload": serde_json::json!({ "messageId": message_id }),
+            "state": complete_state
+        }),
+    );
 
-    if let Some(duration) = playback_control.current_message.as_ref().and_then(|m| m.duration) {
+    if let Some(duration) = playback_control
+        .current_message
+        .as_ref()
+        .and_then(|m| m.duration)
+    {
         let state_clone = state.inner().clone();
         let handle_clone = handle.clone();
         let message_id_clone = message_id.clone();
@@ -606,19 +675,23 @@ async fn start_message_playback(
             tokio::time::sleep(timeout_duration).await;
 
             let current_state = state_clone.get_playback_control();
-            if current_state.is_playing &&
-               current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone) {
+            if current_state.is_playing
+                && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone)
+            {
                 state_clone.stop_message_playback(DeviceType::System);
                 state_clone.broadcast_current_state();
 
                 let updated_state = state_clone.get_state();
                 let updated_playback_control = state_clone.get_playback_control();
 
-                let _ = handle_clone.emit("playback-control-changed", serde_json::json!({
-                    "type": "MESSAGE_TIMEOUT",
-                    "playbackControl": updated_playback_control,
-                    "state": updated_state
-                }));
+                let _ = handle_clone.emit(
+                    "playback-control-changed",
+                    serde_json::json!({
+                        "type": "MESSAGE_TIMEOUT",
+                        "playbackControl": updated_playback_control,
+                        "state": updated_state
+                    }),
+                );
             }
         });
     }
@@ -630,31 +703,37 @@ async fn start_message_playback(
 #[tauri::command]
 fn stop_message_playback(
     handle: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppStateSync>>
+    state: tauri::State<'_, Arc<AppStateSync>>,
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
     state.stop_message_playback(device_type);
     state.broadcast_current_state();
-    
+
     // Get the updated state and emit enhanced events
     let complete_state = state.get_state();
     let playback_control = state.get_playback_control();
-    
+
     // Emit specific playback control event to all windows
     // emit() broadcasts globally to all windows in Tauri v2
-    let _ = handle.emit("playback-control-changed", serde_json::json!({
-        "type": "MESSAGE_STOPPED",
-        "playbackControl": playback_control,
-        "state": complete_state
-    }));
-    
+    let _ = handle.emit(
+        "playback-control-changed",
+        serde_json::json!({
+            "type": "MESSAGE_STOPPED",
+            "playbackControl": playback_control,
+            "state": complete_state
+        }),
+    );
+
     // Also emit general state-changed event to all windows for backward compatibility
-    let _ = handle.emit("state-changed", serde_json::json!({
-        "type": "MESSAGE_STOPPED",
-        "payload": serde_json::Value::Null,
-        "state": complete_state
-    }));
-    
+    let _ = handle.emit(
+        "state-changed",
+        serde_json::json!({
+            "type": "MESSAGE_STOPPED",
+            "payload": serde_json::Value::Null,
+            "state": complete_state
+        }),
+    );
+
     Ok(serde_json::to_value(playback_control).unwrap_or_default())
 }
 
@@ -662,21 +741,21 @@ fn stop_message_playback(
 fn list_images_in_folder(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppStateSync>>,
-    folder_path: String
+    folder_path: String,
 ) -> Result<Vec<String>, String> {
     use std::fs;
     use std::path::Path;
     use tauri::path::BaseDirectory;
-    
+
     eprintln!("Listing media files in folder: {}", folder_path);
-    
+
     let resolved = if folder_path.starts_with("$RESOURCES/") {
         let subpath = &folder_path["$RESOURCES/".len()..];
         match app.path().resolve(subpath, BaseDirectory::Resource) {
             Ok(p) => {
                 eprintln!("Resolved resource '{}' to: {:?}", subpath, p);
                 p.to_string_lossy().to_string()
-            },
+            }
             Err(e) => {
                 eprintln!("ERROR: Failed to resolve resource '{}': {}", subpath, e);
                 return Err(format!("Failed to resolve resource: {}", e));
@@ -684,29 +763,29 @@ fn list_images_in_folder(
         }
     } else {
         // Resolve path relative to config base path
-        let base_path_opt = state.config_base_path.lock() 
-            .ok()
-            .and_then(|p| p.clone());
+        let base_path_opt = state.config_base_path.lock().ok().and_then(|p| p.clone());
         resolve_path(&folder_path, base_path_opt.as_deref())
     };
-    
+
     eprintln!("Resolved path: {}", resolved);
-    
+
     let path = Path::new(&resolved);
     if !path.exists() {
         eprintln!("ERROR: Folder does not exist: {}", resolved);
         return Err(format!("Folder does not exist: {}", resolved));
     }
-    
+
     if !path.is_dir() {
         eprintln!("ERROR: Path is not a directory: {}", folder_path);
         return Err(format!("Path is not a directory: {}", folder_path));
     }
-    
+
     let mut media_files = Vec::new();
-    let image_extensions = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif"];
+    let image_extensions = [
+        "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif",
+    ];
     let video_extensions = ["mp4", "mov", "webm", "m4v", "avi", "mkv"];
-    
+
     match fs::read_dir(path) {
         Ok(entries) => {
             for entry in entries.flatten() {
@@ -714,7 +793,9 @@ fn list_images_in_folder(
                 if entry_path.is_file() {
                     if let Some(ext) = entry_path.extension() {
                         let ext_str = ext.to_string_lossy().to_lowercase();
-                        if image_extensions.contains(&ext_str.as_str()) || video_extensions.contains(&ext_str.as_str()) {
+                        if image_extensions.contains(&ext_str.as_str())
+                            || video_extensions.contains(&ext_str.as_str())
+                        {
                             if let Some(path_str) = entry_path.to_str() {
                                 // Strip \\?\ prefix on Windows if present, as it can confuse frontend APIs
                                 let clean_path = if cfg!(windows) && path_str.starts_with(r"\\?\") {
@@ -767,15 +848,15 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
-            
+
             // Create shared app state for syncing
             let app_state_sync = Arc::new(AppStateSync::new());
-            
+
             // Parse command-line arguments for config file
             // Note: We use --app-config to avoid conflict with Tauri's --config flag
             let args: Vec<String> = std::env::args().collect();
             eprintln!("Command-line arguments: {:?}", args);
-            
+
             // Debug: Print all environment variables that start with VIBECAST
             eprintln!("Environment variables containing 'VIBECAST':");
             for (key, value) in std::env::vars() {
@@ -783,9 +864,9 @@ pub fn run() {
                     eprintln!("  {} = {}", key, value);
                 }
             }
-            
+
             let mut config_path: Option<String> = None;
-            
+
             for i in 0..args.len() {
                 // Use --app-config to avoid conflict with Tauri's --config
                 if (args[i] == "--app-config" || args[i] == "--appconfig") && i + 1 < args.len() {
@@ -793,7 +874,7 @@ pub fn run() {
                     eprintln!("Found app config path argument: {}", args[i + 1]);
                 }
             }
-            
+
             // Also check for environment variable (primary method, more reliable)
             if config_path.is_none() {
                 match std::env::var("VIBECAST_CONFIG") {
@@ -809,7 +890,7 @@ pub fn run() {
                     }
                 }
             }
-            
+
             // Load config if provided
             if let Some(path) = config_path {
                 eprintln!("Attempting to load config from: {}", path);
@@ -824,11 +905,22 @@ pub fn run() {
             } else {
                 eprintln!("No config file specified (use --app-config <path> or set VIBECAST_CONFIG env var)");
             }
-            
+
             app.manage(app_state_sync.clone());
-            
-            // Start audio capture and manage the state to keep the stream alive
-            let audio_state = vibe_cast_audio::start_audio_capture(handle);
+
+            let skip_audio_for_e2e = matches!(
+                std::env::var("VIBECAST_E2E_SKIP_AUDIO").as_deref(),
+                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+            ) || std::env::var("VIBECAST_E2E").is_ok();
+
+            // E2E runs do not exercise audio-reactive behavior, so skip device startup to
+            // reduce launch variance and keep repeated browser benchmarks focused on UI sync.
+            let audio_state = if skip_audio_for_e2e {
+                eprintln!("Skipping audio capture for E2E run");
+                vibe_cast_audio::silent_audio_state()
+            } else {
+                vibe_cast_audio::start_audio_capture(handle)
+            };
             app.manage(audio_state);
 
             // Start LAN server with shared state
@@ -840,7 +932,7 @@ pub fn run() {
 
             // Ensure we have the windows
             let _main_window = app.get_webview_window("main").unwrap();
-            
+
             Ok(())
         })
         .run(tauri::generate_context!())
