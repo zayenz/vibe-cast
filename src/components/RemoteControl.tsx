@@ -41,13 +41,19 @@ export const RemoteControl: React.FC = () => {
   // Folder playback queue from SSE state
   type FolderQueue = { folderId: string; messageIds: string[]; currentIndex: number };
   const folderPlaybackQueue: FolderQueue | null = state?.folderPlaybackQueue ?? null;
-  // Active message ids: include triggeredMessage, playbackControl.currentMessage, and current folder queue item
+  // Active message ids should come from actual playback state, not just queue presence.
   const queueActiveId =
     folderPlaybackQueue && folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
       ? folderPlaybackQueue.messageIds[folderPlaybackQueue.currentIndex]
       : null;
-  const currentMessageId = playbackControl?.currentMessage?.id ?? triggeredMessage?.id ?? queueActiveId;
-  const activeMessageIds = currentMessageId ? [currentMessageId] : [];
+  const activeMessageIds = Array.from(
+    new Set(
+      [
+        playbackControl?.isPlaying ? playbackControl.currentMessage?.id ?? null : null,
+        triggeredMessage?.id ?? null,
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
   const queueIsActive = !!(folderPlaybackQueue && queueActiveId && activeMessageIds.includes(queueActiveId));
 
   // Filter to show only active visualization preset
@@ -64,9 +70,10 @@ export const RemoteControl: React.FC = () => {
               className="text-xs text-zinc-500 font-bold uppercase tracking-wider mt-4 mb-2 px-2 flex items-center justify-between"
             >
               <span>{node.name}</span>
-              {folderQueue && queueIsActive && (
+              {folderQueue && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-orange-400 font-bold">
+                  <span className={`text-xs font-bold ${queueIsActive ? 'text-orange-400' : 'text-blue-400'}`}>
+                    {queueIsActive ? 'Playing' : 'Queued'}{' '}
                     {folderQueue.currentIndex + 1}/{folderQueue.messageIds.length}
                   </span>
                   <button

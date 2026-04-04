@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use tauri::{path::BaseDirectory, AppHandle, Emitter, Manager};
+use tauri::{path::BaseDirectory, AppHandle, Emitter, Manager, Runtime};
 use tokio_stream::wrappers::BroadcastStream;
 use tower::ServiceExt;
 use tower_http::{
@@ -288,11 +288,212 @@ fn collect_messages_from_folder(folder_id: &str, tree: &serde_json::Value) -> Ve
     ids
 }
 
-#[derive(Clone)]
-struct AppState {
-    app_handle: AppHandle,
+fn update_message_stats(app_state_sync: &AppStateSync, msg: &MessageConfig) {
+    if let Ok(mut stats) = app_state_sync.message_stats.lock() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let current_stats: serde_json::Value = stats.get(&msg.id).cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "messageId": msg.id,
+                "triggerCount": 0,
+                "lastTriggered": 0,
+                "history": []
+            })
+        });
+
+        let trigger_count = current_stats
+            .get("triggerCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            + 1;
+
+        let mut history = current_stats
+            .get("history")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        history.push(serde_json::json!({ "timestamp": timestamp }));
+        if history.len() > 50 {
+            history = history.into_iter().rev().take(50).rev().collect();
+        }
+
+        let new_stats = serde_json::json!({
+            "messageId": msg.id,
+            "triggerCount": trigger_count,
+            "lastTriggered": timestamp,
+            "history": history
+        });
+
+        if let Some(obj) = stats.as_object_mut() {
+            obj.insert(msg.id.clone(), new_stats);
+        } else {
+            *stats = serde_json::json!({ msg.id.clone(): new_stats });
+        }
+    }
+}
+
+fn resolve_next_folder_message(
+    app_state_sync: &AppStateSync,
+    message_id: &str,
+) -> (bool, Option<MessageConfig>) {
+    let mut matched_current = false;
+    let mut should_clear_queue = false;
+    let mut next_message: Option<MessageConfig> = None;
+
+    if let Ok(mut queue) = app_state_sync.folder_playback_queue.lock() {
+        if let Some(ref mut q) = *queue {
+            if let Some(current_id) = q.message_ids.get(q.current_index) {
+                if current_id == message_id {
+                    matched_current = true;
+                    q.current_index += 1;
+
+                    if q.current_index < q.message_ids.len() {
+                        if let Some(next_id) = q.message_ids.get(q.current_index) {
+                            if let Ok(messages) = app_state_sync.messages.lock() {
+                                next_message = messages.iter().find(|m| &m.id == next_id).cloned();
+                            }
+                        }
+                    } else {
+                        should_clear_queue = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if should_clear_queue {
+        if let Ok(mut queue) = app_state_sync.folder_playback_queue.lock() {
+            *queue = None;
+        }
+    }
+
+    (matched_current, next_message)
+}
+
+fn emit_playback_control_event<R: Runtime>(
+    state: &AppState<R>,
+    event_type: &str,
+    payload: serde_json::Value,
+) {
+    let complete_state = state.app_state_sync.get_state();
+    let playback_control = state.app_state_sync.get_playback_control();
+
+    let _ = state.app_handle.emit(
+        "playback-control-changed",
+        serde_json::json!({
+            "type": event_type,
+            "playbackControl": playback_control,
+            "state": complete_state
+        }),
+    );
+    let _ = state.app_handle.emit(
+        "state-changed",
+        serde_json::json!({
+            "type": event_type,
+            "payload": payload,
+            "state": complete_state
+        }),
+    );
+}
+
+fn schedule_playback_timeout<R: Runtime>(
+    state: AppState<R>,
+    message_id: String,
+    duration: Duration,
+) {
+    let timeout_duration = duration + std::time::Duration::from_millis(500);
+
+    tokio::spawn(async move {
+        tokio::time::sleep(timeout_duration).await;
+
+        let current_state = state.app_state_sync.get_playback_control();
+        if current_state.is_playing
+            && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id)
+        {
+            let (matched_current, next_message) =
+                resolve_next_folder_message(state.app_state_sync.as_ref(), &message_id);
+
+            state
+                .app_state_sync
+                .stop_message_playback(DeviceType::System);
+            state.app_state_sync.broadcast_current_state();
+            emit_playback_control_event(
+                &state,
+                "MESSAGE_TIMEOUT",
+                serde_json::json!({ "messageId": message_id }),
+            );
+
+            let clear_cmd = serde_json::json!({
+                "command": "clear-active-message",
+                "payload": { "messageId": message_id }
+            });
+            let _ = state.app_handle.emit("remote-command", clear_cmd);
+
+            if let Some(next_message) = next_message {
+                start_message_with_side_effects(&state, next_message, DeviceType::System, true);
+            } else if matched_current {
+                emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
+            }
+        }
+    });
+}
+
+fn start_message_with_side_effects<R: Runtime>(
+    state: &AppState<R>,
+    msg: MessageConfig,
+    device_type: DeviceType,
+    emit_trigger_command: bool,
+) {
+    let message_id = msg.id.clone();
+    state
+        .app_state_sync
+        .start_message_playback_with_message(msg.clone(), device_type);
+
+    let playback_control = state.app_state_sync.get_playback_control();
+
+    emit_playback_control_event(
+        state,
+        "MESSAGE_STARTED",
+        serde_json::json!({ "messageId": msg.id }),
+    );
+
+    update_message_stats(state.app_state_sync.as_ref(), &msg);
+
+    if emit_trigger_command {
+        let trigger_cmd = serde_json::json!({
+            "command": "trigger-message",
+            "payload": msg.clone()
+        });
+        let _ = state.app_handle.emit("remote-command", trigger_cmd);
+    }
+
+    if let Some(duration) = playback_control
+        .current_message
+        .as_ref()
+        .and_then(|m| m.duration)
+    {
+        schedule_playback_timeout(state.clone(), message_id, duration);
+    }
+}
+
+struct AppState<R: Runtime = tauri::Wry> {
+    app_handle: AppHandle<R>,
     app_state_sync: Arc<AppStateSync>,
     dist_path: std::path::PathBuf,
+}
+
+impl<R: Runtime> Clone for AppState<R> {
+    fn clone(&self) -> Self {
+        Self {
+            app_handle: self.app_handle.clone(),
+            app_state_sync: self.app_state_sync.clone(),
+            dist_path: self.dist_path.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -890,10 +1091,10 @@ async fn serve_spa(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-async fn handle_command(
-    State(state): State<AppState>,
+async fn handle_command<R: Runtime>(
+    State(state): State<AppState<R>>,
     Json(payload): Json<RemoteCommand>,
-) -> Json<serde_json::Value> {
+) -> Response {
     // Determine device type from the command payload, defaulting to MobileRemote for backward compatibility
     let device_type = payload
         .device_type
@@ -985,118 +1186,7 @@ async fn handle_command(
                 };
 
                 if let Some(msg) = msg {
-                    // Update playback_control so all clients (Control Plane, other remotes) get canStop
-                    state
-                        .app_state_sync
-                        .start_message_playback_with_message(msg.clone(), device_type.clone());
-                    // Emit to Tauri windows (Control Plane, Visualizer) so they get stop capability immediately
-                    let complete_state = state.app_state_sync.get_state();
-                    let playback_control = state.app_state_sync.get_playback_control();
-                    let _ = state.app_handle.emit(
-                        "playback-control-changed",
-                        serde_json::json!({
-                            "type": "MESSAGE_STARTED",
-                            "playbackControl": playback_control,
-                            "state": complete_state
-                        }),
-                    );
-                    let _ = state.app_handle.emit(
-                        "state-changed",
-                        serde_json::json!({
-                            "type": "MESSAGE_STARTED",
-                            "payload": serde_json::json!({ "messageId": msg.id }),
-                            "state": complete_state
-                        }),
-                    );
-
-                    // Update message stats
-                    if let Ok(mut stats) = state.app_state_sync.message_stats.lock() {
-                        let timestamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-
-                        let current_stats: serde_json::Value =
-                            stats.get(&msg.id).cloned().unwrap_or_else(|| {
-                                serde_json::json!({
-                                    "messageId": msg.id,
-                                    "triggerCount": 0,
-                                    "lastTriggered": 0,
-                                    "history": []
-                                })
-                            });
-
-                        let trigger_count = current_stats
-                            .get("triggerCount")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0)
-                            + 1;
-
-                        let mut history = current_stats
-                            .get("history")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-
-                        history.push(serde_json::json!({ "timestamp": timestamp }));
-                        // Keep last 50 entries
-                        if history.len() > 50 {
-                            history = history.into_iter().rev().take(50).rev().collect();
-                        }
-
-                        let new_stats = serde_json::json!({
-                            "messageId": msg.id,
-                            "triggerCount": trigger_count,
-                            "lastTriggered": timestamp,
-                            "history": history
-                        });
-
-                        if let Some(obj) = stats.as_object_mut() {
-                            obj.insert(msg.id.clone(), new_stats);
-                        } else {
-                            *stats = serde_json::json!({ msg.id.clone(): new_stats });
-                        }
-                    }
-
-                    // Auto-stop safety timer: if the message has a known duration,
-                    // spawn a task that stops it after duration + 500ms buffer.
-                    // This prevents stuck "playing" state if the Visualizer doesn't
-                    // report message-complete (e.g. window closed, error, etc.)
-                    if let Some(duration) = playback_control
-                        .current_message
-                        .as_ref()
-                        .and_then(|m| m.duration)
-                    {
-                        let state_clone = state.app_state_sync.clone();
-                        let handle_clone = state.app_handle.clone();
-                        let message_id_clone = msg.id.clone();
-                        let timeout_duration = duration + std::time::Duration::from_millis(500);
-
-                        tokio::spawn(async move {
-                            tokio::time::sleep(timeout_duration).await;
-
-                            let current_state = state_clone.get_playback_control();
-                            if current_state.is_playing
-                                && current_state.current_message.as_ref().map(|m| &m.id)
-                                    == Some(&message_id_clone)
-                            {
-                                state_clone.stop_message_playback(DeviceType::System);
-                                state_clone.broadcast_current_state();
-
-                                let updated_state = state_clone.get_state();
-                                let updated_playback_control = state_clone.get_playback_control();
-
-                                let _ = handle_clone.emit(
-                                    "playback-control-changed",
-                                    serde_json::json!({
-                                        "type": "MESSAGE_TIMEOUT",
-                                        "playbackControl": updated_playback_control,
-                                        "state": updated_state
-                                    }),
-                                );
-                            }
-                        });
-                    }
+                    start_message_with_side_effects(&state, msg, device_type.clone(), false);
                 }
             }
         }
@@ -1247,71 +1337,28 @@ async fn handle_command(
             // Manual stop of a message - clear triggered message and handle queue
             if let Some(p) = &payload.payload {
                 if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    // Check if this message is the current queue message
-                    let mut should_clear_queue = false;
-                    let mut next_message: Option<MessageConfig> = None;
-                    let mut matched_current = false;
-
-                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                        if let Some(ref mut q) = *queue {
-                            if let Some(current_id) = q.message_ids.get(q.current_index) {
-                                if current_id == message_id {
-                                    matched_current = true;
-                                    // User manually stopped the current queue message
-                                    // Advance to next or clear queue
-                                    q.current_index += 1;
-                                    if q.current_index < q.message_ids.len() {
-                                        // Get next message
-                                        if let Some(next_id) = q.message_ids.get(q.current_index) {
-                                            if let Ok(messages) =
-                                                state.app_state_sync.messages.lock()
-                                            {
-                                                next_message = messages
-                                                    .iter()
-                                                    .find(|m| &m.id == next_id)
-                                                    .cloned();
-                                            }
-                                        }
-                                    } else {
-                                        // Queue complete
-                                        should_clear_queue = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if should_clear_queue {
-                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                            *queue = None;
-                        }
-                    }
+                    let playback_current_id = state
+                        .app_state_sync
+                        .get_playback_control()
+                        .current_message
+                        .as_ref()
+                        .map(|message| message.id.clone());
+                    let (matched_current, next_message) =
+                        resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
 
                     // Trigger next message if any
                     if let Some(msg) = next_message {
-                        state
-                            .app_state_sync
-                            .start_message_playback_with_message(msg.clone(), DeviceType::System);
-                        let trigger_cmd = serde_json::json!({
-                            "command": "trigger-message",
-                            "payload": msg
-                        });
-                        // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
-                        let _ = state.app_handle.emit("remote-command", trigger_cmd);
-                    } else if matched_current {
+                        start_message_with_side_effects(&state, msg, DeviceType::System, true);
+                    } else if matched_current || playback_current_id.as_deref() == Some(message_id)
+                    {
                         // Stopped current message with no next — sync playback_control and notify all views
                         state
                             .app_state_sync
                             .stop_message_playback(DeviceType::MobileRemote);
-                        let complete_state = state.app_state_sync.get_state();
-                        let playback_control = state.app_state_sync.get_playback_control();
-                        let _ = state.app_handle.emit(
-                            "playback-control-changed",
-                            serde_json::json!({
-                                "type": "MESSAGE_STOPPED",
-                                "playbackControl": playback_control,
-                                "state": complete_state
-                            }),
+                        emit_playback_control_event(
+                            &state,
+                            "MESSAGE_STOPPED",
+                            serde_json::Value::Null,
                         );
                     }
                 }
@@ -1322,119 +1369,81 @@ async fn handle_command(
             // This is the single source of truth for queue advancement
             if let Some(p) = &payload.payload {
                 if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    let mut should_clear_queue = false;
-                    let mut next_message: Option<MessageConfig> = None;
-
-                    // Check if we have a folder queue and this message is the current one
-                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                        if let Some(ref mut q) = *queue {
-                            if let Some(current_id) = q.message_ids.get(q.current_index) {
-                                if current_id == message_id {
-                                    q.current_index += 1;
-
-                                    if q.current_index < q.message_ids.len() {
-                                        // Get next message
-                                        if let Some(next_id) = q.message_ids.get(q.current_index) {
-                                            if let Ok(messages) =
-                                                state.app_state_sync.messages.lock()
-                                            {
-                                                next_message = messages
-                                                    .iter()
-                                                    .find(|m| &m.id == next_id)
-                                                    .cloned();
-                                            }
-                                        }
-                                    } else {
-                                        // Queue complete
-                                        should_clear_queue = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if should_clear_queue {
-                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                            *queue = None;
-                        }
-                    }
+                    let playback_current_id = state
+                        .app_state_sync
+                        .get_playback_control()
+                        .current_message
+                        .as_ref()
+                        .map(|message| message.id.clone());
+                    let (matched_current, next_message) =
+                        resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
 
                     // Trigger next message if any; otherwise clear playback so all views show stopped
                     if let Some(msg) = next_message {
-                        state
-                            .app_state_sync
-                            .start_message_playback_with_message(msg.clone(), DeviceType::System);
-
-                        // Emit trigger-message to all Tauri windows
-                        let trigger_cmd = serde_json::json!({
-                            "command": "trigger-message",
-                            "payload": msg
-                        });
-                        // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
-                        let _ = state.app_handle.emit("remote-command", trigger_cmd);
-                    } else {
+                        start_message_with_side_effects(&state, msg, DeviceType::System, true);
+                    } else if matched_current || playback_current_id.as_deref() == Some(message_id)
+                    {
                         // Message completed with no next — clear playback_control and notify all views
                         state
                             .app_state_sync
                             .stop_message_playback(DeviceType::System);
-                        let complete_state = state.app_state_sync.get_state();
-                        let playback_control = state.app_state_sync.get_playback_control();
-                        let _ = state.app_handle.emit(
-                            "playback-control-changed",
-                            serde_json::json!({
-                                "type": "MESSAGE_STOPPED",
-                                "playbackControl": playback_control,
-                                "state": complete_state
-                            }),
+                        emit_playback_control_event(
+                            &state,
+                            "MESSAGE_STOPPED",
+                            serde_json::Value::Null,
                         );
                     }
                 }
             }
         }
         "play-folder" => {
-            if let Some(p) = &payload.payload {
-                if let Some(folder_id) = p.get("folderId").and_then(|v| v.as_str()) {
-                    // Get message tree and collect message IDs from the folder
-                    let message_ids = if let Ok(tree) = state.app_state_sync.message_tree.lock() {
-                        collect_messages_from_folder(folder_id, &tree)
-                    } else {
-                        vec![]
-                    };
+            let Some(p) = &payload.payload else {
+                return ApiErrorResponse::bad_request("Missing payload for play-folder")
+                    .into_response();
+            };
+            let Some(folder_id) = p.get("folderId").and_then(|v| v.as_str()) else {
+                return ApiErrorResponse::bad_request("Missing folderId for play-folder")
+                    .into_response();
+            };
 
-                    if !message_ids.is_empty() {
-                        // Set up the queue
-                        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                            *queue = Some(FolderPlaybackQueue {
-                                folder_id: folder_id.to_string(),
-                                message_ids: message_ids.clone(),
-                                current_index: 0,
-                            });
-                        }
+            let message_ids = if let Ok(tree) = state.app_state_sync.message_tree.lock() {
+                collect_messages_from_folder(folder_id, &tree)
+            } else {
+                vec![]
+            };
 
-                        // Trigger the first message
-                        if let Some(first_id) = message_ids.first() {
-                            if let Ok(messages) = state.app_state_sync.messages.lock() {
-                                if let Some(msg) = messages.iter().find(|m| &m.id == first_id) {
-                                    let msg_clone = msg.clone();
-                                    state.app_state_sync.start_message_playback_with_message(
-                                        msg_clone.clone(),
-                                        device_type.clone(),
-                                    );
-
-                                    // Emit trigger-message remote command to all Tauri windows
-                                    // This ensures VisualizerWindow receives the command and actually plays the message
-                                    let trigger_cmd = serde_json::json!({
-                                        "command": "trigger-message",
-                                        "payload": msg_clone
-                                    });
-                                    // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
-                                    let _ = state.app_handle.emit("remote-command", trigger_cmd);
-                                }
-                            }
-                        }
-                    }
-                }
+            if message_ids.is_empty() {
+                return ApiErrorResponse::not_found("Folder contains no playable messages")
+                    .into_response();
             }
+
+            let first_id = message_ids.first().cloned().unwrap_or_default();
+            let first_message = match state.app_state_sync.messages.lock() {
+                Ok(messages) => messages.iter().find(|m| m.id == first_id).cloned(),
+                Err(_) => None,
+            };
+
+            let Some(first_message) = first_message else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiErrorResponse::with_details(
+                        "Folder playback could not resolve the first message".to_string(),
+                        "PLAY_FOLDER_MESSAGE_RESOLUTION_FAILED".to_string(),
+                        format!("folderId={folder_id}, missingMessageId={first_id}"),
+                    )),
+                )
+                    .into_response();
+            };
+
+            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                *queue = Some(FolderPlaybackQueue {
+                    folder_id: folder_id.to_string(),
+                    message_ids: message_ids.clone(),
+                    current_index: 0,
+                });
+            }
+
+            start_message_with_side_effects(&state, first_message, device_type.clone(), true);
         }
         "cancel-folder-playback" => {
             // Clear the folder playback queue and stop current message
@@ -1583,7 +1592,7 @@ async fn handle_command(
     // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
     let _ = state.app_handle.emit("remote-command", &payload);
 
-    Json(serde_json::json!({ "status": "ok" }))
+    Json(serde_json::json!({ "status": "ok" })).into_response()
 }
 
 async fn get_state(
@@ -1973,9 +1982,214 @@ async fn remote_state_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
     use quickcheck::{Arbitrary, Gen, TestResult};
     use quickcheck_macros::quickcheck;
     use serde_json;
+    use std::sync::{Arc, Mutex};
+    use tauri::Listener;
+
+    fn test_message(id: &str, text: &str) -> MessageConfig {
+        MessageConfig {
+            id: id.to_string(),
+            text: text.to_string(),
+            text_file: None,
+            text_style: "scrolling-capitals".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(1),
+            speed: Some(1.0),
+            split_enabled: None,
+            split_separator: None,
+        }
+    }
+
+    fn test_app_state() -> (
+        tauri::App<tauri::test::MockRuntime>,
+        AppState<tauri::test::MockRuntime>,
+    ) {
+        let app = tauri::test::mock_app();
+        let state = AppState {
+            app_handle: app.handle().clone(),
+            app_state_sync: Arc::new(AppStateSync::new()),
+            dist_path: std::env::current_dir().unwrap(),
+        };
+        (app, state)
+    }
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        serde_json::json!({
+            "status": status.as_u16(),
+            "body": value,
+        })
+    }
+
+    #[test]
+    fn play_folder_bootstraps_first_message_with_trigger_side_effects() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (app, state) = test_app_state();
+        let message = test_message("message-1", "Hello folder");
+
+        if let Ok(mut messages) = state.app_state_sync.messages.lock() {
+            *messages = vec![message.clone()];
+        }
+        if let Ok(mut tree) = state.app_state_sync.message_tree.lock() {
+            *tree = serde_json::json!([
+                {
+                    "type": "folder",
+                    "id": "folder-1",
+                    "name": "Folder 1",
+                    "children": [
+                        {
+                            "type": "message",
+                            "id": message.id,
+                            "message": message
+                        }
+                    ]
+                }
+            ]);
+        }
+
+        let emitted_remote_commands = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let emitted_playback_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+
+        {
+            let emitted_remote_commands = emitted_remote_commands.clone();
+            app.listen_any("remote-command", move |event: tauri::Event| {
+                emitted_remote_commands
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_str(event.payload()).unwrap());
+            });
+        }
+        {
+            let emitted_playback_events = emitted_playback_events.clone();
+            app.listen_any("playback-control-changed", move |event: tauri::Event| {
+                emitted_playback_events
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_str(event.payload()).unwrap());
+            });
+        }
+
+        runtime.block_on(async {
+            let response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "play-folder".to_string(),
+                    payload: Some(serde_json::json!({ "folderId": "folder-1" })),
+                    device_type: Some(DeviceType::MobileRemote),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+
+            let response = response_json(response).await;
+            assert_eq!(response["status"], 200);
+            assert_eq!(response["body"]["status"], "ok");
+        });
+
+        let queue = state
+            .app_state_sync
+            .folder_playback_queue
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(queue.folder_id, "folder-1");
+        assert_eq!(queue.current_index, 0);
+        assert_eq!(queue.message_ids, vec!["message-1"]);
+
+        let playback_control = state.app_state_sync.get_playback_control();
+        assert!(playback_control.is_playing);
+        assert_eq!(
+            playback_control
+                .current_message
+                .as_ref()
+                .map(|message| message.id.as_str()),
+            Some("message-1")
+        );
+
+        let trigger_count = state.app_state_sync.get_state().message_stats["message-1"]
+            ["triggerCount"]
+            .as_u64()
+            .unwrap_or(0);
+        assert_eq!(trigger_count, 1);
+
+        let remote_commands = emitted_remote_commands.lock().unwrap();
+        assert!(remote_commands.iter().any(|payload| {
+            payload["command"] == "trigger-message" && payload["payload"]["id"] == "message-1"
+        }));
+
+        let playback_events = emitted_playback_events.lock().unwrap();
+        assert!(playback_events.iter().any(|payload| {
+            payload["type"] == "MESSAGE_STARTED"
+                && payload["playbackControl"]["currentMessage"]["id"] == "message-1"
+        }));
+    }
+
+    #[test]
+    fn play_folder_returns_error_without_committing_queue_when_message_lookup_fails() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_app, state) = test_app_state();
+
+        if let Ok(mut messages) = state.app_state_sync.messages.lock() {
+            *messages = Vec::new();
+        }
+        if let Ok(mut tree) = state.app_state_sync.message_tree.lock() {
+            *tree = serde_json::json!([
+                {
+                    "type": "folder",
+                    "id": "folder-1",
+                    "name": "Folder 1",
+                    "children": [
+                        {
+                            "type": "message",
+                            "id": "missing-message",
+                            "message": test_message("missing-message", "Missing")
+                        }
+                    ]
+                }
+            ]);
+        }
+
+        runtime.block_on(async {
+            let response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "play-folder".to_string(),
+                    payload: Some(serde_json::json!({ "folderId": "folder-1" })),
+                    device_type: Some(DeviceType::MobileRemote),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+
+            let response = response_json(response).await;
+            assert_eq!(response["status"], 500);
+            assert_eq!(
+                response["body"]["code"],
+                "PLAY_FOLDER_MESSAGE_RESOLUTION_FAILED"
+            );
+        });
+
+        assert!(state
+            .app_state_sync
+            .folder_playback_queue
+            .lock()
+            .unwrap()
+            .is_none());
+        assert!(!state.app_state_sync.get_playback_control().is_playing);
+    }
 
     #[test]
     fn test_api_error_response_serialization() {

@@ -6,9 +6,30 @@ import { MockEventSource } from '../../test/mocks/sse';
 // Mock fetch for command submissions
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
+let bootstrapState: Record<string, unknown>;
 
 function renderRemoteControl() {
   return render(<RemoteControl />);
+}
+
+async function connectRemoteSse(): Promise<MockEventSource> {
+  await act(async () => {
+    vi.advanceTimersByTime(600);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  const sse = MockEventSource.getLatest();
+  expect(sse).toBeDefined();
+  return sse!;
+}
+
+async function pushRemoteState(nextState: Record<string, unknown>): Promise<void> {
+  const sse = await connectRemoteSse();
+  await act(async () => {
+    sse.simulateEvent('state', nextState);
+    await Promise.resolve();
+  });
 }
 
 // Helper to create mock state with presets (include playbackControl/messageTree so RemoteControl has full state shape)
@@ -33,9 +54,13 @@ describe('RemoteControl', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     MockEventSource.reset();
+    bootstrapState = createMockState();
     
     // Default mock for fetch
     mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes('/api/remote/state')) {
+        return { ok: true, json: async () => bootstrapState };
+      }
       if (url.includes('/api/command') && options?.method === 'POST') {
         return { ok: true, json: async () => ({ status: 'ok' }) };
       }
@@ -52,11 +77,11 @@ describe('RemoteControl', () => {
     expect(screen.getByText('Connecting...')).toBeInTheDocument();
   });
 
-  it('exits blocking loader after 2 seconds even without state', async () => {
+  it('renders the remote shell after bootstrap hydration', async () => {
     renderRemoteControl();
 
     await act(async () => {
-      vi.advanceTimersByTime(2100);
+      vi.advanceTimersByTime(50);
     });
 
     await waitFor(() => {
@@ -68,14 +93,12 @@ describe('RemoteControl', () => {
 
   it('renders correctly after SSE connects', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState({
-        messages: [{ id: '1', text: 'Test Message', textStyle: 'scrolling-capitals' }],
-      }));
-    });
+
+    await pushRemoteState(createMockState({
+      messageTree: [
+        { type: 'message', id: '1', message: { id: '1', text: 'Test Message', textStyle: 'scrolling-capitals' } },
+      ],
+    }));
 
     await waitFor(() => {
       expect(screen.getByText('Remote')).toBeInTheDocument();
@@ -89,12 +112,8 @@ describe('RemoteControl', () => {
 
   it('shows live connection indicator when connected', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState());
-    });
+
+    await pushRemoteState(createMockState());
 
     await waitFor(() => {
       expect(screen.getByText('Live')).toBeInTheDocument();
@@ -103,12 +122,8 @@ describe('RemoteControl', () => {
 
   it('sends set-active-visualization-preset command when a preset button is clicked', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState());
-    });
+
+    await pushRemoteState(createMockState());
 
     await waitFor(() => {
       expect(screen.getByText('Techno Default')).toBeInTheDocument();
@@ -131,11 +146,7 @@ describe('RemoteControl', () => {
   it('keeps optimistic highlight while waiting for SSE confirmation', async () => {
     renderRemoteControl();
 
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState({ activeVisualizationPreset: 'preset-1' }));
-    });
+    await pushRemoteState(createMockState({ activeVisualizationPreset: 'preset-1' }));
 
     await waitFor(() => {
       expect(screen.getByText('Techno Default')).toBeInTheDocument();
@@ -143,8 +154,10 @@ describe('RemoteControl', () => {
 
     const fireplaceButton = screen.getByText('Fireplace Default').closest('button');
     const technoButton = screen.getByText('Techno Default').closest('button');
-    expect(fireplaceButton?.className).toContain('bg-orange-500');
-    expect(technoButton?.className).not.toContain('bg-orange-500');
+    await waitFor(() => {
+      expect(fireplaceButton?.className).toContain('bg-orange-500');
+      expect(technoButton?.className).not.toContain('bg-orange-500');
+    });
 
     fireEvent.click(technoButton!);
 
@@ -164,14 +177,12 @@ describe('RemoteControl', () => {
 
   it('sends trigger-message command when a message button is clicked', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState({
-        messages: [{ id: '1', text: 'Hello World', textStyle: 'scrolling-capitals' }],
-      }));
-    });
+
+    await pushRemoteState(createMockState({
+      messageTree: [
+        { type: 'message', id: '1', message: { id: '1', text: 'Hello World', textStyle: 'scrolling-capitals' } },
+      ],
+    }));
 
     await waitFor(() => {
       expect(screen.getByText('Hello World')).toBeInTheDocument();
@@ -193,44 +204,69 @@ describe('RemoteControl', () => {
 
   it('updates UI when SSE receives new state', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState({
-        messages: [{ id: '1', text: 'Initial', textStyle: 'scrolling-capitals' }],
-      }));
-    });
+
+    await pushRemoteState(createMockState({
+      messageTree: [
+        { type: 'message', id: '1', message: { id: '1', text: 'Initial', textStyle: 'scrolling-capitals' } },
+      ],
+    }));
 
     await waitFor(() => {
       expect(screen.getByText('Initial')).toBeInTheDocument();
     });
 
     // Simulate state update from SSE (e.g., from another client changing mode)
-    await act(async () => {
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState({
-        activeVisualization: 'techno',
-        messages: [
-          { id: '1', text: 'Initial', textStyle: 'scrolling-capitals' },
-          { id: '2', text: 'New Message', textStyle: 'scrolling-capitals' },
-        ],
-      }));
-    });
+    await pushRemoteState(createMockState({
+      activeVisualization: 'techno',
+      messageTree: [
+        { type: 'message', id: '1', message: { id: '1', text: 'Initial', textStyle: 'scrolling-capitals' } },
+        { type: 'message', id: '2', message: { id: '2', text: 'New Message', textStyle: 'scrolling-capitals' } },
+      ],
+    }));
 
     await waitFor(() => {
       expect(screen.getByText('New Message')).toBeInTheDocument();
     });
   });
 
+  it('shows queued folder state without marking the first message as playing', async () => {
+    renderRemoteControl();
+
+    await pushRemoteState(createMockState({
+      messageTree: [
+        {
+          type: 'folder',
+          id: 'folder-1',
+          name: 'Showtime',
+          children: [
+            { type: 'message', id: 'message-1', message: { id: 'message-1', text: 'First', textStyle: 'scrolling-capitals' } },
+            { type: 'message', id: 'message-2', message: { id: 'message-2', text: 'Second', textStyle: 'scrolling-capitals' } },
+          ],
+        },
+      ],
+      folderPlaybackQueue: {
+        folderId: 'folder-1',
+        messageIds: ['message-1', 'message-2'],
+        currentIndex: 0,
+      },
+      triggeredMessage: null,
+      playbackControl: null,
+    }));
+
+    await waitFor(() => {
+      const cancelButton = screen.getByTestId('folder-cancel-folder-1');
+      expect(cancelButton).toBeInTheDocument();
+      expect(cancelButton.parentElement?.textContent).toContain('Queued 1/2');
+      expect(screen.getByText('First')).toBeInTheDocument();
+      expect(screen.queryByTestId('message-stop-message-1')).not.toBeInTheDocument();
+      expect(screen.queryAllByText('Playing')).toHaveLength(0);
+    });
+  });
+
   it('shows reconnecting status when SSE disconnects', async () => {
     renderRemoteControl();
-    
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      const sse = MockEventSource.getLatest();
-      sse?.simulateEvent('state', createMockState());
-    });
+
+    await pushRemoteState(createMockState());
 
     await waitFor(() => {
       expect(screen.getByText('Live')).toBeInTheDocument();

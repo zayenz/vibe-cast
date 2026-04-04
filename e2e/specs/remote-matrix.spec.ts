@@ -144,6 +144,11 @@ test('folder playback progresses and clears cleanly', async ({ appSession }, tes
 
   await appSession.waitForEvent(
     'visualizer_message_rendered',
+    (event) => event.payload.messageId === 'message-1',
+    15_000,
+  );
+  await appSession.waitForEvent(
+    'visualizer_message_rendered',
     (event) => event.payload.messageId === 'message-2',
     15_000,
   );
