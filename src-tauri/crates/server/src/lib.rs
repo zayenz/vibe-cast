@@ -336,25 +336,38 @@ fn update_message_stats(app_state_sync: &AppStateSync, msg: &MessageConfig) {
     }
 }
 
+struct FolderAdvanceResult {
+    matched_current: bool,
+    next_message: Option<MessageConfig>,
+    missing_next_message_id: Option<String>,
+}
+
 fn resolve_next_folder_message(
     app_state_sync: &AppStateSync,
     message_id: &str,
-) -> (bool, Option<MessageConfig>) {
+) -> FolderAdvanceResult {
     let mut matched_current = false;
     let mut should_clear_queue = false;
     let mut next_message: Option<MessageConfig> = None;
+    let mut missing_next_message_id: Option<String> = None;
 
     if let Ok(mut queue) = app_state_sync.folder_playback_queue.lock() {
         if let Some(ref mut q) = *queue {
             if let Some(current_id) = q.message_ids.get(q.current_index) {
                 if current_id == message_id {
                     matched_current = true;
-                    q.current_index += 1;
+                    let next_index = q.current_index + 1;
 
-                    if q.current_index < q.message_ids.len() {
-                        if let Some(next_id) = q.message_ids.get(q.current_index) {
+                    if next_index < q.message_ids.len() {
+                        if let Some(next_id) = q.message_ids.get(next_index) {
                             if let Ok(messages) = app_state_sync.messages.lock() {
                                 next_message = messages.iter().find(|m| &m.id == next_id).cloned();
+                            }
+                            if next_message.is_some() {
+                                q.current_index = next_index;
+                            } else {
+                                should_clear_queue = true;
+                                missing_next_message_id = Some(next_id.clone());
                             }
                         }
                     } else {
@@ -371,7 +384,11 @@ fn resolve_next_folder_message(
         }
     }
 
-    (matched_current, next_message)
+    FolderAdvanceResult {
+        matched_current,
+        next_message,
+        missing_next_message_id,
+    }
 }
 
 fn emit_playback_control_event<R: Runtime>(
@@ -414,8 +431,17 @@ fn schedule_playback_timeout<R: Runtime>(
         if current_state.is_playing
             && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id)
         {
-            let (matched_current, next_message) =
+            let advance_result =
                 resolve_next_folder_message(state.app_state_sync.as_ref(), &message_id);
+            let matched_current = advance_result.matched_current;
+            let next_message = advance_result.next_message;
+
+            if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
+                eprintln!(
+                    "[Server] [folder-playback] Clearing queue after timeout; missing message '{}'",
+                    missing_next_message_id
+                );
+            }
 
             state
                 .app_state_sync
@@ -435,6 +461,7 @@ fn schedule_playback_timeout<R: Runtime>(
 
             if let Some(next_message) = next_message {
                 start_message_with_side_effects(&state, next_message, DeviceType::System, true);
+                state.app_state_sync.broadcast_current_state();
             } else if matched_current {
                 emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
             }
@@ -1343,8 +1370,17 @@ async fn handle_command<R: Runtime>(
                         .current_message
                         .as_ref()
                         .map(|message| message.id.clone());
-                    let (matched_current, next_message) =
+                    let advance_result =
                         resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
+                    let matched_current = advance_result.matched_current;
+                    let next_message = advance_result.next_message;
+
+                    if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
+                        eprintln!(
+                            "[Server] [folder-playback] Clearing queue after manual stop; missing message '{}'",
+                            missing_next_message_id
+                        );
+                    }
 
                     // Trigger next message if any
                     if let Some(msg) = next_message {
@@ -1375,8 +1411,17 @@ async fn handle_command<R: Runtime>(
                         .current_message
                         .as_ref()
                         .map(|message| message.id.clone());
-                    let (matched_current, next_message) =
+                    let advance_result =
                         resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
+                    let matched_current = advance_result.matched_current;
+                    let next_message = advance_result.next_message;
+
+                    if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
+                        eprintln!(
+                            "[Server] [folder-playback] Clearing queue after completion; missing message '{}'",
+                            missing_next_message_id
+                        );
+                    }
 
                     // Trigger next message if any; otherwise clear playback so all views show stopped
                     if let Some(msg) = next_message {
@@ -2189,6 +2234,163 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(!state.app_state_sync.get_playback_control().is_playing);
+    }
+
+    #[test]
+    fn message_complete_clears_queue_when_next_message_cannot_be_resolved() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_app, state) = test_app_state();
+        let first_message = test_message("message-1", "First");
+
+        if let Ok(mut messages) = state.app_state_sync.messages.lock() {
+            *messages = vec![first_message.clone()];
+        }
+        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+            *queue = Some(FolderPlaybackQueue {
+                folder_id: "folder-1".to_string(),
+                message_ids: vec!["message-1".to_string(), "missing-message".to_string()],
+                current_index: 0,
+            });
+        }
+        state
+            .app_state_sync
+            .start_message_playback_with_message(first_message, DeviceType::System);
+
+        runtime.block_on(async {
+            let response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "message-complete".to_string(),
+                    payload: Some(serde_json::json!({ "messageId": "message-1" })),
+                    device_type: Some(DeviceType::System),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+
+            let response = response_json(response).await;
+            assert_eq!(response["status"], 200);
+        });
+
+        assert!(state
+            .app_state_sync
+            .folder_playback_queue
+            .lock()
+            .unwrap()
+            .is_none());
+        assert!(!state.app_state_sync.get_playback_control().is_playing);
+    }
+
+    #[test]
+    fn timeout_advances_folder_queue_and_broadcasts_remote_state_for_next_message() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_app, state) = test_app_state();
+        let first_message = MessageConfig {
+            id: "message-1".to_string(),
+            text: "A".to_string(),
+            text_file: None,
+            text_style: "scrolling-capitals".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(1),
+            speed: Some(1000.0),
+            split_enabled: None,
+            split_separator: None,
+        };
+        let second_message = MessageConfig {
+            id: "message-2".to_string(),
+            text: "This second message should remain active".to_string(),
+            text_file: None,
+            text_style: "scrolling-capitals".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(1),
+            speed: Some(1.0),
+            split_enabled: None,
+            split_separator: None,
+        };
+
+        if let Ok(mut messages) = state.app_state_sync.messages.lock() {
+            *messages = vec![first_message.clone(), second_message.clone()];
+        }
+        if let Ok(mut tree) = state.app_state_sync.message_tree.lock() {
+            *tree = serde_json::json!([
+                {
+                    "type": "folder",
+                    "id": "folder-1",
+                    "name": "Folder 1",
+                    "children": [
+                        {
+                            "type": "message",
+                            "id": "message-1",
+                            "message": first_message
+                        },
+                        {
+                            "type": "message",
+                            "id": "message-2",
+                            "message": second_message
+                        }
+                    ]
+                }
+            ]);
+        }
+
+        let mut remote_states = state.app_state_sync.remote_state_tx.subscribe();
+
+        runtime.block_on(async {
+            let response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "play-folder".to_string(),
+                    payload: Some(serde_json::json!({ "folderId": "folder-1" })),
+                    device_type: Some(DeviceType::MobileRemote),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+
+            let response = response_json(response).await;
+            assert_eq!(response["status"], 200);
+
+            let advanced_state = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let next_state = remote_states.recv().await.unwrap();
+                    if next_state
+                        .playback_control
+                        .current_message
+                        .as_ref()
+                        .map(|message| message.id.as_str())
+                        == Some("message-2")
+                    {
+                        break next_state;
+                    }
+                }
+            })
+            .await
+            .expect("expected a remote state broadcast for the second queued message");
+
+            assert_eq!(
+                advanced_state
+                    .playback_control
+                    .current_message
+                    .as_ref()
+                    .map(|message| message.id.as_str()),
+                Some("message-2")
+            );
+            assert_eq!(
+                advanced_state
+                    .folder_playback_queue
+                    .as_ref()
+                    .map(|queue| queue.current_index),
+                Some(1)
+            );
+        });
     }
 
     #[test]
