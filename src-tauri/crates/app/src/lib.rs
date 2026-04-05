@@ -661,11 +661,7 @@ async fn start_message_playback(
         }),
     );
 
-    if let Some(duration) = playback_control
-        .current_message
-        .as_ref()
-        .and_then(|m| m.duration)
-    {
+    if let Some(duration) = state.calculate_safety_timeout_duration(&message) {
         let state_clone = state.inner().clone();
         let handle_clone = handle.clone();
         let message_id_clone = message_id.clone();

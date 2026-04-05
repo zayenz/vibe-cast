@@ -480,8 +480,6 @@ fn start_message_with_side_effects<R: Runtime>(
         .app_state_sync
         .start_message_playback_with_message(msg.clone(), device_type);
 
-    let playback_control = state.app_state_sync.get_playback_control();
-
     emit_playback_control_event(
         state,
         "MESSAGE_STARTED",
@@ -498,11 +496,7 @@ fn start_message_with_side_effects<R: Runtime>(
         let _ = state.app_handle.emit("remote-command", trigger_cmd);
     }
 
-    if let Some(duration) = playback_control
-        .current_message
-        .as_ref()
-        .and_then(|m| m.duration)
-    {
+    if let Some(duration) = state.app_state_sync.calculate_safety_timeout_duration(&msg) {
         schedule_playback_timeout(state.clone(), message_id, duration);
     }
 }
@@ -2292,9 +2286,9 @@ mod tests {
             id: "message-1".to_string(),
             text: "A".to_string(),
             text_file: None,
-            text_style: "scrolling-capitals".to_string(),
+            text_style: "typewriter".to_string(),
             text_style_preset: None,
-            style_overrides: None,
+            style_overrides: Some(serde_json::json!({ "holdDuration": 0.0 })),
             repeat_count: Some(1),
             speed: Some(1000.0),
             split_enabled: None,

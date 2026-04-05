@@ -1485,21 +1485,196 @@ impl AppStateSync {
         self.resolve_message_style_id(message) != "credits"
     }
 
-    /// Calculate estimated duration for a message based on text length and speed
-    fn calculate_message_duration(&self, message: &MessageConfig) -> Option<std::time::Duration> {
-        if self.uses_visualizer_split_sequence(message) {
-            return None;
+    fn merged_text_style_settings(
+        &self,
+        message: &MessageConfig,
+        style_id: &str,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut settings = if let Some(preset_id) = &message.text_style_preset {
+            self.text_style_presets
+                .lock()
+                .ok()
+                .and_then(|presets| {
+                    presets
+                        .iter()
+                        .find(|preset| &preset.id == preset_id)
+                        .and_then(|preset| preset.settings.as_object().cloned())
+                })
+                .unwrap_or_default()
+        } else {
+            self.text_style_settings
+                .lock()
+                .ok()
+                .and_then(|all_settings| {
+                    all_settings
+                        .get(style_id)
+                        .and_then(|value| value.as_object().cloned())
+                })
+                .unwrap_or_default()
+        };
+
+        if let Some(overrides) = message
+            .style_overrides
+            .as_ref()
+            .and_then(|value| value.as_object())
+        {
+            for (key, value) in overrides {
+                settings.insert(key.clone(), value.clone());
+            }
         }
 
-        let text_length = message.text.len() as f64;
         let speed = message.speed.unwrap_or(1.0);
+        if speed != 1.0 && speed.is_finite() && speed > 0.0 {
+            for key in [
+                "duration",
+                "displayDuration",
+                "fadeInDuration",
+                "fadeOutDuration",
+                "typingSpeed",
+            ] {
+                if let Some(value) = settings.get_mut(key) {
+                    if let Some(number) = value.as_f64() {
+                        *value = serde_json::json!(number / speed);
+                    }
+                }
+            }
+        }
 
-        // Rough estimation: assume 5 characters per second at normal speed
-        let base_chars_per_second = 5.0;
-        let adjusted_chars_per_second = base_chars_per_second * speed;
+        settings
+    }
 
-        if adjusted_chars_per_second > 0.0 {
-            let duration_seconds = text_length / adjusted_chars_per_second;
+    fn number_setting(
+        settings: &serde_json::Map<String, serde_json::Value>,
+        key: &str,
+        default: f64,
+    ) -> f64 {
+        settings
+            .get(key)
+            .and_then(|value| value.as_f64())
+            .filter(|value| value.is_finite())
+            .unwrap_or(default)
+    }
+
+    fn effective_repeat_count(message: &MessageConfig) -> u32 {
+        message.repeat_count.unwrap_or(1).max(1)
+    }
+
+    fn estimated_viewport_char_count(style_id: &str) -> f64 {
+        match style_id {
+            "dot-matrix" => 18.0,
+            "scrolling-capitals" => 24.0,
+            "credits" => 24.0,
+            _ => 24.0,
+        }
+    }
+
+    fn estimate_single_pass_duration_seconds(
+        &self,
+        style_id: &str,
+        text: &str,
+        settings: &serde_json::Map<String, serde_json::Value>,
+    ) -> f64 {
+        match style_id {
+            "typewriter" => {
+                let typing_speed_ms = Self::number_setting(settings, "typingSpeed", 80.0);
+                let hold_duration = Self::number_setting(settings, "holdDuration", 1.0);
+                ((text.chars().count() as f64) * typing_speed_ms / 1000.0) + hold_duration
+            }
+            "bounce" => {
+                let display_duration = Self::number_setting(settings, "displayDuration", 4.0);
+                let fade_out_duration = Self::number_setting(settings, "fadeOutDuration", 0.8);
+                1.0 + display_duration + fade_out_duration
+            }
+            "fade" => {
+                let fade_in_duration = Self::number_setting(settings, "fadeInDuration", 0.5);
+                let display_duration = Self::number_setting(settings, "displayDuration", 5.0);
+                let fade_out_duration = Self::number_setting(settings, "fadeOutDuration", 0.5);
+                fade_in_duration + display_duration + fade_out_duration
+            }
+            "scrolling-capitals" => {
+                let char_duration = Self::number_setting(settings, "charDuration", 0.3);
+                let total_chars =
+                    Self::estimated_viewport_char_count(style_id) + text.chars().count() as f64;
+                (total_chars * char_duration) + 0.3
+            }
+            "dot-matrix" => {
+                let fade_in_duration = Self::number_setting(settings, "fadeInDuration", 1.0);
+                let scroll_speed = Self::number_setting(settings, "scrollSpeed", 3.0).max(0.1);
+                let total_chars =
+                    Self::estimated_viewport_char_count(style_id) + text.chars().count() as f64;
+                fade_in_duration + (total_chars / scroll_speed)
+            }
+            "credits" => {
+                let scroll_speed = Self::number_setting(settings, "scrollSpeed", 100.0).max(1.0);
+                let font_size_rem = Self::number_setting(settings, "fontSize", 8.0);
+                let line_spacing = Self::number_setting(settings, "lineSpacing", 1.5);
+                let line_count = text.lines().count().max(1) as f64;
+                let font_size_px = font_size_rem * 16.0;
+                let line_height_px = font_size_px;
+                let spacing_px = font_size_px * line_spacing;
+                let total_text_height = if line_count <= 0.0 {
+                    0.0
+                } else {
+                    (line_count * line_height_px) + (spacing_px * (line_count - 1.0))
+                };
+                let viewport_height = 1080.0;
+                let edge_padding = font_size_px.max(24.0);
+                let travel_distance = viewport_height + total_text_height + (2.0 * edge_padding);
+                (travel_distance / scroll_speed) + 0.3
+            }
+            _ => {
+                let text_length = text.chars().count() as f64;
+                text_length / 5.0
+            }
+        }
+    }
+
+    fn estimate_message_duration_seconds(&self, message: &MessageConfig) -> f64 {
+        let style_id = self.resolve_message_style_id(message);
+        let settings = self.merged_text_style_settings(message, &style_id);
+
+        if self.uses_visualizer_split_sequence(message) {
+            let separator = message.split_separator.as_deref().unwrap_or("");
+            let raw_parts: Vec<String> = message
+                .text
+                .split(separator)
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect();
+            let normalized_parts = if raw_parts.is_empty() {
+                vec![message.text.trim().to_string()]
+            } else {
+                raw_parts
+            };
+            let repeat_count = Self::effective_repeat_count(message) as f64;
+
+            normalized_parts
+                .iter()
+                .map(|part| self.estimate_single_pass_duration_seconds(&style_id, part, &settings))
+                .sum::<f64>()
+                * repeat_count
+        } else {
+            let repeat_count = Self::effective_repeat_count(message) as f64;
+            self.estimate_single_pass_duration_seconds(&style_id, &message.text, &settings)
+                * repeat_count
+        }
+    }
+
+    pub fn calculate_safety_timeout_duration(
+        &self,
+        message: &MessageConfig,
+    ) -> Option<std::time::Duration> {
+        if self.uses_visualizer_split_sequence(message) {
+            None
+        } else {
+            self.calculate_message_duration(message)
+        }
+    }
+
+    /// Calculate estimated duration for a message based on text length and speed
+    fn calculate_message_duration(&self, message: &MessageConfig) -> Option<std::time::Duration> {
+        let duration_seconds = self.estimate_message_duration_seconds(message);
+        if duration_seconds.is_finite() && duration_seconds > 0.0 {
             Some(std::time::Duration::from_secs_f64(duration_seconds))
         } else {
             None
@@ -1935,7 +2110,13 @@ mod legacy_tests {
             split_separator: Some(",".to_string()),
         };
 
-        assert_eq!(app_state.calculate_message_duration(&split_message), None);
+        let duration = app_state.calculate_message_duration(&split_message);
+        assert!(duration.is_some());
+        assert!(duration.unwrap().as_secs_f64() > 30.0);
+        assert_eq!(
+            app_state.calculate_safety_timeout_duration(&split_message),
+            None
+        );
 
         let credits_message = MessageConfig {
             text_style: "credits".to_string(),
@@ -1944,6 +2125,9 @@ mod legacy_tests {
 
         assert!(app_state
             .calculate_message_duration(&credits_message)
+            .is_some());
+        assert!(app_state
+            .calculate_safety_timeout_duration(&credits_message)
             .is_some());
     }
 
