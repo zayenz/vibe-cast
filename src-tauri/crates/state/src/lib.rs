@@ -208,7 +208,9 @@ impl AppStateSync {
                 text_file: None,
                 text_style: "bounce".to_string(),
                 text_style_preset: None,
-                style_overrides: None,
+                style_overrides: Some(serde_json::json!({
+                    "displayDuration": 1.5
+                })),
                 repeat_count: None,
                 speed: Some(1.0),
                 split_enabled: Some(true),
@@ -251,6 +253,9 @@ impl AppStateSync {
                             "id": "msg-2",
                             "text": "3, 2, 1",
                             "textStyle": "bounce",
+                            "styleOverrides": {
+                                "displayDuration": 1.5
+                            },
                             "splitEnabled": true,
                             "splitSeparator": ",",
                             "speed": 1.0

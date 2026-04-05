@@ -91,6 +91,7 @@ describe('Default Presets', () => {
 
     expect(msg2.message.text).toBe('3, 2, 1');
     expect(msg2.message.textStyle).toBe('bounce');
+    expect(msg2.message.styleOverrides).toMatchObject({ displayDuration: 1.5 });
     expect(msg2.message.splitEnabled).toBe(true);
     expect(msg2.message.splitSeparator).toBe(',');
     

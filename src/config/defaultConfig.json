@@ -120,6 +120,9 @@
         "id": "msg-2",
         "text": "3, 2, 1",
         "textStyle": "bounce",
+        "styleOverrides": {
+            "displayDuration": 1.5
+        },
         "splitEnabled": true,
         "splitSeparator": ",",
         "speed": 1.0
@@ -153,6 +156,9 @@
                     "id": "msg-2",
                     "text": "3, 2, 1",
                     "textStyle": "bounce",
+                    "styleOverrides": {
+                        "displayDuration": 1.5
+                    },
                     "splitEnabled": true,
                     "splitSeparator": ",",
                     "speed": 1.0
