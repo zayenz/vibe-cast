@@ -1458,8 +1458,39 @@ impl AppStateSync {
         }
     }
 
+    fn resolve_message_style_id(&self, message: &MessageConfig) -> String {
+        if let Some(preset_id) = &message.text_style_preset {
+            if let Ok(presets) = self.text_style_presets.lock() {
+                if let Some(preset) = presets.iter().find(|preset| &preset.id == preset_id) {
+                    return preset.text_style_id.clone();
+                }
+            }
+        }
+
+        message.text_style.clone()
+    }
+
+    fn uses_visualizer_split_sequence(&self, message: &MessageConfig) -> bool {
+        let split_active = message.split_enabled.unwrap_or(false)
+            && message
+                .split_separator
+                .as_ref()
+                .map(|separator| !separator.is_empty())
+                .unwrap_or(false);
+
+        if !split_active {
+            return false;
+        }
+
+        self.resolve_message_style_id(message) != "credits"
+    }
+
     /// Calculate estimated duration for a message based on text length and speed
     fn calculate_message_duration(&self, message: &MessageConfig) -> Option<std::time::Duration> {
+        if self.uses_visualizer_split_sequence(message) {
+            return None;
+        }
+
         let text_length = message.text.len() as f64;
         let speed = message.speed.unwrap_or(1.0);
 
@@ -1885,6 +1916,35 @@ mod legacy_tests {
         // Should be approximately 11 chars / 5 chars per second = 2.2 seconds
         let duration = duration.unwrap();
         assert!(duration.as_secs_f64() > 2.0 && duration.as_secs_f64() < 3.0);
+    }
+
+    #[test]
+    fn test_calculate_message_duration_disables_server_timeout_for_split_sequences() {
+        let app_state = AppStateSync::new();
+
+        let split_message = MessageConfig {
+            id: "split".to_string(),
+            text: "3, 2, 1".to_string(),
+            text_file: None,
+            text_style: "bounce".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(2),
+            speed: Some(1.0),
+            split_enabled: Some(true),
+            split_separator: Some(",".to_string()),
+        };
+
+        assert_eq!(app_state.calculate_message_duration(&split_message), None);
+
+        let credits_message = MessageConfig {
+            text_style: "credits".to_string(),
+            ..split_message
+        };
+
+        assert!(app_state
+            .calculate_message_duration(&credits_message)
+            .is_some());
     }
 
     #[test]

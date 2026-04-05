@@ -2394,6 +2394,146 @@ mod tests {
     }
 
     #[test]
+    fn split_sequence_messages_do_not_timeout_advance_to_the_next_folder_item() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_app, state) = test_app_state();
+        let first_message = MessageConfig {
+            id: "message-1".to_string(),
+            text: "Ready".to_string(),
+            text_file: None,
+            text_style: "typewriter".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(1),
+            speed: Some(1000.0),
+            split_enabled: None,
+            split_separator: None,
+        };
+        let split_message = MessageConfig {
+            id: "message-2".to_string(),
+            text: "3, 2, 1".to_string(),
+            text_file: None,
+            text_style: "bounce".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(2),
+            speed: Some(1.0),
+            split_enabled: Some(true),
+            split_separator: Some(",".to_string()),
+        };
+        let third_message = MessageConfig {
+            id: "message-3".to_string(),
+            text: "Party".to_string(),
+            text_file: None,
+            text_style: "scrolling-capitals".to_string(),
+            text_style_preset: None,
+            style_overrides: None,
+            repeat_count: Some(1),
+            speed: Some(1.0),
+            split_enabled: None,
+            split_separator: None,
+        };
+
+        if let Ok(mut messages) = state.app_state_sync.messages.lock() {
+            *messages = vec![
+                first_message.clone(),
+                split_message.clone(),
+                third_message.clone(),
+            ];
+        }
+        if let Ok(mut tree) = state.app_state_sync.message_tree.lock() {
+            *tree = serde_json::json!([
+                {
+                    "type": "folder",
+                    "id": "folder-1",
+                    "name": "Folder 1",
+                    "children": [
+                        {
+                            "type": "message",
+                            "id": "message-1",
+                            "message": first_message
+                        },
+                        {
+                            "type": "message",
+                            "id": "message-2",
+                            "message": split_message
+                        },
+                        {
+                            "type": "message",
+                            "id": "message-3",
+                            "message": third_message
+                        }
+                    ]
+                }
+            ]);
+        }
+
+        runtime.block_on(async {
+            let play_response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "play-folder".to_string(),
+                    payload: Some(serde_json::json!({ "folderId": "folder-1" })),
+                    device_type: Some(DeviceType::MobileRemote),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+            let play_response = response_json(play_response).await;
+            assert_eq!(play_response["status"], 200);
+
+            tokio::time::sleep(Duration::from_millis(600)).await;
+
+            let complete_first_response = handle_command(
+                State(state.clone()),
+                Json(RemoteCommand {
+                    command: "message-complete".to_string(),
+                    payload: Some(serde_json::json!({ "messageId": "message-1" })),
+                    device_type: Some(DeviceType::System),
+                    session_id: None,
+                    client_id: None,
+                    client_label: None,
+                    client_kind: None,
+                }),
+            )
+            .await;
+            let complete_first_response = response_json(complete_first_response).await;
+            assert_eq!(complete_first_response["status"], 200);
+
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let playback_control = state.app_state_sync.get_playback_control();
+        assert_eq!(
+            playback_control
+                .current_message
+                .as_ref()
+                .map(|message| message.id.as_str()),
+            Some("message-2")
+        );
+
+        let queue = state
+            .app_state_sync
+            .folder_playback_queue
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(queue.current_index, 1);
+        assert_eq!(
+            queue.message_ids,
+            vec![
+                "message-1".to_string(),
+                "message-2".to_string(),
+                "message-3".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn test_api_error_response_serialization() {
         let error = ApiErrorResponse::new("Test error".to_string(), "TEST_ERROR".to_string());
 
