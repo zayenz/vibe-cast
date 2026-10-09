@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { getIcon } from '../utils/iconSet';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { useAppState, useSendCommand, DeviceType, PlaybackControlState } from '../hooks/useAppState';
+import { useAppState, useSendCommand, DeviceType, AppState } from '../hooks/useAppState';
 import {
   buildE2EStateSnapshot,
   discoverE2EContext,
@@ -71,8 +71,8 @@ export const ControlPlane: React.FC = () => {
   // SSE-based state - single source of truth
   const { state, isConnected, connectionPhase } = useAppState({ apiBase });
   
-  // Local override for playback control state from Tauri events (more immediate than SSE)
-  const [playbackControlOverride, setPlaybackControlOverride] = useState<PlaybackControlState | null>(null);
+  // Tauri can deliver playback before SSE, so retain its snapshot revision too.
+  const [tauriPlaybackState, setTauriPlaybackState] = useState<AppState | null>(null);
   
   // Command sender
   const { sendCommand: sendCommandRaw, isPending } = useSendCommand({ apiBase });
@@ -226,8 +226,10 @@ export const ControlPlane: React.FC = () => {
 
   // Listen for enhanced playback control events from backend
   useEffect(() => {
-    const unlistenPlaybackControl = listen<{ type: string; playbackControl: PlaybackControlState }>('playback-control-changed', (event) => {
-      const { type, playbackControl } = event.payload;
+    const unlistenPlaybackControl = listen<{ type: string; state: AppState }>('playback-control-changed', (event) => {
+      const { type, state: snapshot } = event.payload;
+      const playbackControl = snapshot.playbackControl;
+      if (!playbackControl) return;
       
       console.log('[ControlPlane] Received playback-control-changed event:', type, {
         isPlaying: playbackControl.isPlaying,
@@ -237,8 +239,8 @@ export const ControlPlane: React.FC = () => {
         currentMessageId: playbackControl.currentMessage?.id
       });
       
-      // Update local playback control override for immediate UI updates
-      setPlaybackControlOverride(playbackControl);
+      setTauriPlaybackState((previous) =>
+        previous && previous.runtimeRevision >= snapshot.runtimeRevision ? previous : snapshot);
       
       // Handle specific event types for additional UI updates
       switch (type) {
@@ -364,15 +366,10 @@ export const ControlPlane: React.FC = () => {
   const effectiveMessageTree = (state?.messageTree as MessageTreeNode[] | undefined) ?? storeMessageTree;
   const effectiveMessages = state?.messages ?? storeMessages;
   
-  // Get playback control state from SSE or Tauri event override (Tauri events are more immediate)
-  const playbackControl = playbackControlOverride || state?.playbackControl;
-
-  // When SSE state shows stopped, sync to override so CP updates when Remote stops (Tauri event may not reach CP from server)
-  useEffect(() => {
-    if (state?.playbackControl && !state.playbackControl.isPlaying) {
-      setPlaybackControlOverride(state.playbackControl);
-    }
-  }, [state?.playbackControl?.isPlaying, state?.playbackControl]);
+  const playbackControl = tauriPlaybackState &&
+    (!state || tauriPlaybackState.runtimeRevision > state.runtimeRevision)
+    ? tauriPlaybackState.playbackControl
+    : state?.playbackControl;
 
   const [messageTreeLocal, setMessageTreeLocal] = useState<MessageTreeNode[]>([]);
   

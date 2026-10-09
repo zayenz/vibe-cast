@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
@@ -45,13 +44,9 @@ pub fn resolve_config_path(path: &str, base_path: Option<&str>) -> String {
     }
 }
 
-static NEXT_PLAYBACK_SESSION: AtomicU64 = AtomicU64::new(1);
-
+// IDs are opaque on the wire and must not repeat when the backend restarts.
 fn next_playback_session_id() -> String {
-    format!(
-        "session_{}",
-        NEXT_PLAYBACK_SESSION.fetch_add(1, Ordering::Relaxed)
-    )
+    format!("session_{}", uuid::Uuid::new_v4())
 }
 
 const MAX_E2E_SESSIONS: usize = 8;
@@ -130,6 +125,22 @@ fn compact_message_stats_map(
         .collect()
 }
 
+#[derive(Clone, Default)]
+struct PlaybackRuntime {
+    control: PlaybackControlState,
+    triggered_message: Option<MessageConfig>,
+    folder_queue: Option<FolderPlaybackQueue>,
+}
+
+/// The committed result of completing the current playback session.
+/// A next message has already started; a missing queue item has stopped playback.
+#[derive(Debug)]
+pub struct PlaybackCompletion {
+    pub control: PlaybackControlState,
+    pub next_message: Option<MessageConfig>,
+    pub missing_next_message_id: Option<String>,
+}
+
 /// Shared application state for syncing between windows and the remote
 pub struct AppStateSync {
     pub config_revision: Mutex<u64>,
@@ -146,17 +157,14 @@ pub struct AppStateSync {
     pub text_style_settings: Mutex<serde_json::Value>,
     pub text_style_presets: Mutex<Vec<TextStylePreset>>,
     pub message_stats: Mutex<serde_json::Value>,
-    pub folder_playback_queue: Mutex<Option<FolderPlaybackQueue>>,
     pub config_base_path: Mutex<Option<String>>,
     pub server_port: Mutex<u16>,
-    /// Last triggered message - persists until cleared
-    pub triggered_message: Mutex<Option<MessageConfig>>,
     /// Last E2E report received from frontend
     pub last_e2e_report: Mutex<Option<E2EReport>>,
     e2e_enabled: bool,
     e2e_sessions: Mutex<E2ESessionRegistry>,
-    /// Playback control state for message synchronization
-    pub playback_control: Mutex<PlaybackControlState>,
+    /// Playback transitions own all related fields until the revision is committed.
+    playback: Mutex<PlaybackRuntime>,
     /// Broadcast channel for SSE - sends full state on every change
     pub state_tx: broadcast::Sender<BroadcastState>,
     /// Broadcast channel for the lightweight remote contract.
@@ -396,10 +404,8 @@ impl AppStateSync {
             text_style_settings: Mutex::new(serde_json::json!({})),
             text_style_presets: Mutex::new(default_text_style_presets),
             message_stats: Mutex::new(serde_json::json!({})),
-            folder_playback_queue: Mutex::new(None),
             config_base_path: Mutex::new(None),
             server_port: Mutex::new(0), // 0 indicates not yet bound
-            triggered_message: Mutex::new(None),
             last_e2e_report: Mutex::new(None),
             e2e_enabled: std::env::var("VIBECAST_E2E")
                 .map(|value| {
@@ -408,17 +414,24 @@ impl AppStateSync {
                 })
                 .unwrap_or(false),
             e2e_sessions: Mutex::new(E2ESessionRegistry::default()),
-            playback_control: Mutex::new(PlaybackControlState::default()),
+            playback: Mutex::new(PlaybackRuntime::default()),
             state_tx,
             remote_state_tx,
             command_tx,
         }
     }
 
-    fn set_triggered_message_value(&self, message: Option<MessageConfig>) {
-        if let Ok(mut triggered_message) = self.triggered_message.lock() {
-            *triggered_message = message;
-        }
+    fn playback_snapshot(&self) -> (PlaybackRuntime, u64) {
+        let playback = self
+            .playback
+            .lock()
+            .expect("playback runtime lock poisoned");
+        let revision = self
+            .runtime_revision
+            .lock()
+            .map(|value| *value)
+            .unwrap_or(0);
+        (playback.clone(), revision)
     }
 
     fn bump_revision(revision: &Mutex<u64>) -> u64 {
@@ -638,12 +651,8 @@ impl AppStateSync {
     }
 
     pub fn get_e2e_state_snapshot(&self, connection_phase: Option<String>) -> E2EStateSnapshot {
+        let (playback, runtime_revision) = self.playback_snapshot();
         let config_revision = self.config_revision.lock().map(|value| *value).unwrap_or(0);
-        let runtime_revision = self
-            .runtime_revision
-            .lock()
-            .map(|value| *value)
-            .unwrap_or(0);
         let active_visualization = self
             .active_visualization
             .lock()
@@ -654,21 +663,12 @@ impl AppStateSync {
             .lock()
             .ok()
             .and_then(|value| value.clone());
-        let triggered_message_id = self
+        let triggered_message_id = playback
             .triggered_message
-            .lock()
-            .ok()
-            .and_then(|message| message.clone().map(|value| value.id));
-        let playback_control = self
-            .playback_control
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or_default();
-        let folder_playback_queue = self
-            .folder_playback_queue
-            .lock()
-            .ok()
-            .and_then(|queue| queue.clone());
+            .as_ref()
+            .map(|message| message.id.clone());
+        let playback_control = playback.control;
+        let folder_playback_queue = playback.folder_queue;
         let message_trigger_counts = self
             .message_stats
             .lock()
@@ -707,16 +707,13 @@ impl AppStateSync {
 
     /// Get current state snapshot
     pub fn get_state(&self) -> BroadcastState {
+        let (playback, runtime_revision) = self.playback_snapshot();
         let config_revision = self
             .config_revision
             .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let runtime_revision = self
-            .runtime_revision
-            .lock()
-            .map(|revision| *revision)
-            .unwrap_or(0);
+
         let active_visualization = self
             .active_visualization
             .lock()
@@ -773,21 +770,9 @@ impl AppStateSync {
             .lock()
             .map(|m| m.clone())
             .unwrap_or_else(|_| serde_json::json!({}));
-        let folder_playback_queue = self
-            .folder_playback_queue
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or(None);
-        let triggered_message = self
-            .triggered_message
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or(None);
-        let playback_control = self
-            .playback_control
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
+        let folder_playback_queue = playback.folder_queue;
+        let triggered_message = playback.triggered_message;
+        let playback_control = playback.control;
 
         // Legacy mode field
         let mode = active_visualization.clone();
@@ -816,16 +801,13 @@ impl AppStateSync {
 
     /// Get the compact remote-only state snapshot without cloning desktop-only fields.
     pub fn get_remote_state(&self) -> RemoteStateV2 {
+        let (playback, runtime_revision) = self.playback_snapshot();
         let config_revision = self
             .config_revision
             .lock()
             .map(|revision| *revision)
             .unwrap_or(0);
-        let runtime_revision = self
-            .runtime_revision
-            .lock()
-            .map(|revision| *revision)
-            .unwrap_or(0);
+
         let active_visualization = self
             .active_visualization
             .lock()
@@ -881,21 +863,9 @@ impl AppStateSync {
             .lock()
             .map(|value| compact_message_stats_map(&value))
             .unwrap_or_default();
-        let triggered_message = self
-            .triggered_message
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or(None);
-        let playback_control = self
-            .playback_control
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or_default();
-        let folder_playback_queue = self
-            .folder_playback_queue
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or(None);
+        let triggered_message = playback.triggered_message;
+        let playback_control = playback.control;
+        let folder_playback_queue = playback.folder_queue;
 
         RemoteStateV2 {
             schema_version: 2,
@@ -942,12 +912,6 @@ impl AppStateSync {
     /// Broadcast a transient command to all SSE subscribers
     pub fn broadcast_command(&self, command: RemoteCommand) {
         let _ = self.command_tx.send(command);
-    }
-
-    /// Clear the triggered message (called when message completes)
-    pub fn clear_triggered_message(&self) {
-        self.set_triggered_message_value(None);
-        self.mark_runtime_changed();
     }
 
     /// Apply configuration fields without incrementing revisions or broadcasting.
@@ -1074,339 +1038,322 @@ impl AppStateSync {
         Ok(())
     }
 
-    /// Update playback control state without broadcasting.
-    pub fn update_playback_control(&self, new_state: PlaybackControlState) {
-        {
-            if let Ok(mut state) = self.playback_control.lock() {
-                *state = new_state;
-            }
-        }
-        self.mark_runtime_changed();
-    }
-
-    /// Get current playback control state
+    /// Read the current control state without exposing playback mutation.
     pub fn get_playback_control(&self) -> PlaybackControlState {
-        self.playback_control
+        self.playback
             .lock()
-            .map(|state| state.clone())
-            .unwrap_or_default()
+            .expect("playback runtime lock poisoned")
+            .control
+            .clone()
     }
 
-    /// Start message playback and update control state
+    /// Read the current folder queue without exposing playback mutation.
+    pub fn get_folder_playback_queue(&self) -> Option<FolderPlaybackQueue> {
+        self.playback
+            .lock()
+            .expect("playback runtime lock poisoned")
+            .folder_queue
+            .clone()
+    }
+
+    /// Start a configured message, replacing playback and clearing any folder queue.
+    /// Returns the committed session so callers can schedule its completion.
+    ///
+    /// # Errors
+    /// Returns an error if the message is absent or the message lock is poisoned.
     pub fn start_message_playback(
         &self,
         message_id: &str,
         device_type: DeviceType,
-    ) -> Result<(), String> {
-        // Find the message
-        let message = {
-            let messages = self
-                .messages
-                .lock()
-                .map_err(|_| "Failed to lock messages")?;
-            messages
-                .iter()
-                .find(|msg| msg.id == message_id)
-                .cloned()
-                .ok_or_else(|| format!("Message not found: {}", message_id))?
-        };
-
-        // Create message info
-        let message_info = MessageInfo {
-            id: message.id.clone(),
-            title: message.text.clone(),
-            duration: self.calculate_message_duration(&message),
-            folder_path: self.get_message_folder_path(&message.id),
-        };
-
-        // Generate session ID
-        let session_id = next_playback_session_id();
-
-        // Update playback control state
-        let new_state = PlaybackControlState {
-            session_id: Some(session_id),
-            current_message: Some(message_info),
-            is_playing: true,
-            playback_position: std::time::Duration::from_secs(0),
-            can_stop: true,
-            can_start: false,
-            initiated_by: device_type,
-            last_updated: SystemTime::now(),
-        };
-
-        self.update_playback_control(new_state);
-        self.set_triggered_message_value(Some(message));
-
-        Ok(())
+    ) -> Result<PlaybackControlState, PlaybackError> {
+        let message = self
+            .messages
+            .lock()
+            .map_err(|_| PlaybackError::StateCorruption("Failed to lock messages".to_owned()))?
+            .iter()
+            .find(|message| message.id == message_id)
+            .cloned()
+            .ok_or_else(|| PlaybackError::MessageNotFound(message_id.to_owned()))?;
+        Ok(self.start_message_playback_with_message(message, device_type))
     }
 
-    /// Start message playback using a provided message (no lookup).
-    /// Use when the frontend sends the full message and it may not yet be in state.messages.
+    /// Start a supplied message, replacing playback and clearing any folder queue.
+    /// The message need not be present in the configuration.
     pub fn start_message_playback_with_message(
         &self,
         message: MessageConfig,
         device_type: DeviceType,
-    ) {
+    ) -> PlaybackControlState {
+        let mut playback = self
+            .playback
+            .lock()
+            .expect("playback runtime lock poisoned");
+        playback.folder_queue = None;
+        self.start_playback(&mut playback, message, device_type, SystemTime::now())
+    }
+
+    /// Install a folder queue and start its first message in one transition.
+    /// The caller supplies the queue with its current index pointing to this message.
+    pub fn start_folder_playback(
+        &self,
+        first_message: MessageConfig,
+        queue: FolderPlaybackQueue,
+        device_type: DeviceType,
+    ) -> PlaybackControlState {
+        let mut playback = self
+            .playback
+            .lock()
+            .expect("playback runtime lock poisoned");
+        playback.folder_queue = Some(queue);
+        self.start_playback(&mut playback, first_message, device_type, SystemTime::now())
+    }
+
+    /// Stop playback and clear the triggered message and folder queue atomically.
+    pub fn stop_message_playback(&self, device_type: DeviceType) -> PlaybackControlState {
+        let mut playback = self
+            .playback
+            .lock()
+            .expect("playback runtime lock poisoned");
+        self.stop_playback(&mut playback, device_type, SystemTime::now())
+    }
+
+    /// Complete only the playing message and session identified by the caller.
+    /// Stale or duplicate completions return `None` without changing the revision.
+    /// A valid completion advances the folder queue and starts its next configured
+    /// message as System, or stops and clears the queue using the supplied device.
+    pub fn finish_message_playback(
+        &self,
+        message_id: &str,
+        session_id: &str,
+        device_type: DeviceType,
+    ) -> Option<PlaybackCompletion> {
+        self.finish_message_playback_inner(message_id, session_id, device_type, || {})
+    }
+
+    fn finish_message_playback_inner(
+        &self,
+        message_id: &str,
+        session_id: &str,
+        device_type: DeviceType,
+        after_validation: impl FnOnce(),
+    ) -> Option<PlaybackCompletion> {
+        let mut playback = self
+            .playback
+            .lock()
+            .expect("playback runtime lock poisoned");
+        let control = &playback.control;
+        if !control.is_playing
+            || control.session_id.as_deref() != Some(session_id)
+            || control
+                .current_message
+                .as_ref()
+                .map(|message| message.id.as_str())
+                != Some(message_id)
+        {
+            return None;
+        }
+        // Kept inside ownership: tests can park here to force a competing start.
+        after_validation();
+
+        let next_message_id = playback
+            .folder_queue
+            .as_ref()
+            .filter(|queue| {
+                queue
+                    .message_ids
+                    .get(queue.current_index)
+                    .map(String::as_str)
+                    == Some(message_id)
+            })
+            .and_then(|queue| queue.message_ids.get(queue.current_index + 1))
+            .cloned();
+        let next_message = next_message_id.as_ref().and_then(|next_id| {
+            self.messages.lock().ok().and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| &message.id == next_id)
+                    .cloned()
+            })
+        });
+        let missing_next_message_id = next_message_id.filter(|_| next_message.is_none());
+        let control = match next_message.as_ref() {
+            Some(message) => {
+                if let Some(queue) = playback.folder_queue.as_mut() {
+                    queue.current_index += 1;
+                }
+                self.start_playback(
+                    &mut playback,
+                    message.clone(),
+                    DeviceType::System,
+                    SystemTime::now(),
+                )
+            }
+            None => self.stop_playback(&mut playback, device_type, SystemTime::now()),
+        };
+        Some(PlaybackCompletion {
+            control,
+            next_message,
+            missing_next_message_id,
+        })
+    }
+
+    fn start_playback(
+        &self,
+        playback: &mut PlaybackRuntime,
+        message: MessageConfig,
+        device_type: DeviceType,
+        timestamp: SystemTime,
+    ) -> PlaybackControlState {
         let message_info = MessageInfo {
             id: message.id.clone(),
             title: message.text.clone(),
             duration: self.calculate_message_duration(&message),
             folder_path: self.get_message_folder_path(&message.id),
         };
-
-        let session_id = next_playback_session_id();
-
-        let new_state = PlaybackControlState {
-            session_id: Some(session_id),
+        playback.control = PlaybackControlState {
+            session_id: Some(next_playback_session_id()),
             current_message: Some(message_info),
             is_playing: true,
-            playback_position: std::time::Duration::from_secs(0),
+            playback_position: std::time::Duration::ZERO,
             can_stop: true,
             can_start: false,
             initiated_by: device_type,
-            last_updated: SystemTime::now(),
+            last_updated: timestamp,
         };
-
-        self.update_playback_control(new_state);
-        self.set_triggered_message_value(Some(message));
+        playback.triggered_message = Some(message);
+        self.mark_runtime_changed();
+        playback.control.clone()
     }
 
-    /// Stop message playback and update control state
-    pub fn stop_message_playback(&self, device_type: DeviceType) {
-        let new_state = PlaybackControlState {
+    fn stop_playback(
+        &self,
+        playback: &mut PlaybackRuntime,
+        device_type: DeviceType,
+        timestamp: SystemTime,
+    ) -> PlaybackControlState {
+        playback.control = PlaybackControlState {
             session_id: None,
             current_message: None,
             is_playing: false,
-            playback_position: std::time::Duration::from_secs(0),
+            playback_position: std::time::Duration::ZERO,
             can_stop: false,
             can_start: true,
             initiated_by: device_type,
-            last_updated: SystemTime::now(),
+            last_updated: timestamp,
         };
-
-        self.update_playback_control(new_state);
-        self.set_triggered_message_value(None);
+        playback.triggered_message = None;
+        playback.folder_queue = None;
+        self.mark_runtime_changed();
+        playback.control.clone()
     }
 
-    /// Process a playback command with validation and error handling
-    /// This is the main entry point for all playback control commands
+    /// Validate and commit a playback command under playback ownership, then broadcast.
+    ///
+    /// # Errors
+    /// Returns an error for missing messages, invalid transitions, or poisoned locks.
     pub fn process_playback_command(
         &self,
         command: PlaybackCommand,
     ) -> Result<PlaybackControlState, PlaybackError> {
-        match command {
-            PlaybackCommand::Start {
-                message_id,
-                device_id,
-                timestamp,
-            } => self.process_start_command(&message_id, &device_id, timestamp),
-            PlaybackCommand::Stop {
-                device_id,
-                timestamp,
-            } => self.process_stop_command(&device_id, timestamp),
-            PlaybackCommand::Pause {
-                device_id,
-                timestamp,
-            } => self.process_pause_command(&device_id, timestamp),
-            PlaybackCommand::Resume {
-                device_id,
-                timestamp,
-            } => self.process_resume_command(&device_id, timestamp),
-        }
-    }
-
-    /// Process a start command with validation
-    fn process_start_command(
-        &self,
-        message_id: &str,
-        device_id: &str,
-        timestamp: SystemTime,
-    ) -> Result<PlaybackControlState, PlaybackError> {
-        // Validate message exists
-        let message = {
-            let messages = self.messages.lock().map_err(|_| {
-                PlaybackError::StateCorruption("Failed to lock messages".to_string())
+        let control = {
+            let mut playback = self.playback.lock().map_err(|_| {
+                PlaybackError::StateCorruption("Failed to lock playback runtime".to_owned())
             })?;
-            messages
-                .iter()
-                .find(|msg| msg.id == message_id)
-                .cloned()
-                .ok_or_else(|| PlaybackError::MessageNotFound(message_id.to_string()))?
-        };
-
-        // Check current state to ensure we can start
-        let current_state = self.get_playback_control();
-        if current_state.is_playing {
-            return Err(PlaybackError::InvalidCommand(
-                "Cannot start playback: another message is already playing".to_string(),
-            ));
-        }
-
-        // Determine device type from device_id
-        let device_type = self.parse_device_type(device_id)?;
-
-        // Create message info
-        let message_info = MessageInfo {
-            id: message.id.clone(),
-            title: message.text.clone(),
-            duration: self.calculate_message_duration(&message),
-            folder_path: self.get_message_folder_path(&message.id),
-        };
-
-        // Generate session ID
-        let session_id = next_playback_session_id();
-
-        // Create new playback state
-        let new_state = PlaybackControlState {
-            session_id: Some(session_id),
-            current_message: Some(message_info),
-            is_playing: true,
-            playback_position: std::time::Duration::from_secs(0),
-            can_stop: true,
-            can_start: false,
-            initiated_by: device_type,
-            last_updated: timestamp,
-        };
-
-        // Update state and broadcast once after all mutations are applied.
-        self.update_playback_control(new_state.clone());
-        self.set_triggered_message_value(Some(message));
-        self.broadcast_current_state();
-
-        Ok(new_state)
-    }
-
-    /// Process a stop command
-    fn process_stop_command(
-        &self,
-        device_id: &str,
-        timestamp: SystemTime,
-    ) -> Result<PlaybackControlState, PlaybackError> {
-        let current_state = self.get_playback_control();
-
-        // Validate that we can stop (must be playing or paused)
-        if !current_state.is_playing && current_state.current_message.is_none() {
-            return Err(PlaybackError::InvalidCommand(
-                "Cannot stop playback: no active playback session".to_string(),
-            ));
-        }
-
-        let device_type = self.parse_device_type(device_id)?;
-
-        // Create stopped state
-        let new_state = PlaybackControlState {
-            session_id: None,
-            current_message: None,
-            is_playing: false,
-            playback_position: std::time::Duration::from_secs(0),
-            can_stop: false,
-            can_start: true,
-            initiated_by: device_type,
-            last_updated: timestamp,
-        };
-
-        // Update state and broadcast once after all mutations are applied.
-        self.update_playback_control(new_state.clone());
-        self.set_triggered_message_value(None);
-        self.broadcast_current_state();
-
-        Ok(new_state)
-    }
-
-    /// Process a pause command
-    fn process_pause_command(
-        &self,
-        device_id: &str,
-        timestamp: SystemTime,
-    ) -> Result<PlaybackControlState, PlaybackError> {
-        let current_state = self.get_playback_control();
-
-        // Validate that we can pause (must be playing)
-        if !current_state.is_playing {
-            return Err(PlaybackError::InvalidCommand(
-                "Cannot pause playback: no active playback".to_string(),
-            ));
-        }
-
-        let device_type = self.parse_device_type(device_id)?;
-
-        // Create paused state (keep message and session, but not playing)
-        let new_state = PlaybackControlState {
-            session_id: current_state.session_id,
-            current_message: current_state.current_message,
-            is_playing: false,
-            playback_position: current_state.playback_position, // Preserve position
-            can_stop: true,                                     // Can still stop when paused
-            can_start: true,                                    // Can resume when paused
-            initiated_by: device_type,
-            last_updated: timestamp,
-        };
-
-        // Update state and broadcast once after all mutations are applied.
-        self.update_playback_control(new_state.clone());
-        self.broadcast_current_state();
-
-        Ok(new_state)
-    }
-
-    /// Process a resume command
-    fn process_resume_command(
-        &self,
-        device_id: &str,
-        timestamp: SystemTime,
-    ) -> Result<PlaybackControlState, PlaybackError> {
-        let current_state = self.get_playback_control();
-
-        // Validate that we can resume (must be paused - has message but not playing)
-        if current_state.is_playing {
-            return Err(PlaybackError::InvalidCommand(
-                "Cannot resume playback: already playing".to_string(),
-            ));
-        }
-
-        if current_state.current_message.is_none() {
-            return Err(PlaybackError::InvalidCommand(
-                "Cannot resume playback: no paused session".to_string(),
-            ));
-        }
-
-        let device_type = self.parse_device_type(device_id)?;
-
-        // Find the full message config for backward compatibility BEFORE updating state
-        let message_to_broadcast = if let Some(ref message_info) = current_state.current_message {
-            if let Ok(messages) = self.messages.lock() {
-                messages
-                    .iter()
-                    .find(|msg| msg.id == message_info.id)
-                    .cloned()
-            } else {
-                None
+            match command {
+                PlaybackCommand::Start {
+                    message_id,
+                    device_id,
+                    timestamp,
+                } => {
+                    let message = self
+                        .messages
+                        .lock()
+                        .map_err(|_| {
+                            PlaybackError::StateCorruption("Failed to lock messages".to_owned())
+                        })?
+                        .iter()
+                        .find(|message| message.id == message_id)
+                        .cloned()
+                        .ok_or(PlaybackError::MessageNotFound(message_id))?;
+                    if playback.control.is_playing {
+                        return Err(PlaybackError::InvalidCommand(
+                            "Cannot start playback: another message is already playing".to_owned(),
+                        ));
+                    }
+                    let device_type = self.parse_device_type(&device_id)?;
+                    playback.folder_queue = None;
+                    self.start_playback(&mut playback, message, device_type, timestamp)
+                }
+                PlaybackCommand::Stop {
+                    device_id,
+                    timestamp,
+                } => {
+                    if !playback.control.is_playing && playback.control.current_message.is_none() {
+                        return Err(PlaybackError::InvalidCommand(
+                            "Cannot stop playback: no active playback session".to_owned(),
+                        ));
+                    }
+                    let device_type = self.parse_device_type(&device_id)?;
+                    self.stop_playback(&mut playback, device_type, timestamp)
+                }
+                PlaybackCommand::Pause {
+                    device_id,
+                    timestamp,
+                } => {
+                    if !playback.control.is_playing {
+                        return Err(PlaybackError::InvalidCommand(
+                            "Cannot pause playback: no active playback".to_owned(),
+                        ));
+                    }
+                    let device_type = self.parse_device_type(&device_id)?;
+                    playback.control.is_playing = false;
+                    playback.control.can_start = true;
+                    playback.control.initiated_by = device_type;
+                    playback.control.last_updated = timestamp;
+                    self.mark_runtime_changed();
+                    playback.control.clone()
+                }
+                PlaybackCommand::Resume {
+                    device_id,
+                    timestamp,
+                } => {
+                    if playback.control.is_playing {
+                        return Err(PlaybackError::InvalidCommand(
+                            "Cannot resume playback: already playing".to_owned(),
+                        ));
+                    }
+                    if playback.control.current_message.is_none() {
+                        return Err(PlaybackError::InvalidCommand(
+                            "Cannot resume playback: no paused session".to_owned(),
+                        ));
+                    }
+                    let device_type = self.parse_device_type(&device_id)?;
+                    let message = playback
+                        .control
+                        .current_message
+                        .as_ref()
+                        .and_then(|current| {
+                            self.messages.lock().ok().and_then(|messages| {
+                                messages
+                                    .iter()
+                                    .find(|message| message.id == current.id)
+                                    .cloned()
+                            })
+                        });
+                    if let Some(message) = message {
+                        playback.triggered_message = Some(message);
+                    }
+                    playback.control.is_playing = true;
+                    playback.control.can_start = false;
+                    playback.control.initiated_by = device_type;
+                    playback.control.last_updated = timestamp;
+                    self.mark_runtime_changed();
+                    playback.control.clone()
+                }
             }
-        } else {
-            None
         };
-
-        // Create resumed state
-        let new_state = PlaybackControlState {
-            session_id: current_state.session_id,
-            current_message: current_state.current_message,
-            is_playing: true,
-            playback_position: current_state.playback_position, // Resume from where we paused
-            can_stop: true,
-            can_start: false,
-            initiated_by: device_type,
-            last_updated: timestamp,
-        };
-
-        // Update state and broadcast once after all mutations are applied.
-        self.update_playback_control(new_state.clone());
-
-        if let Some(message) = message_to_broadcast {
-            self.set_triggered_message_value(Some(message));
-        }
         self.broadcast_current_state();
-
-        Ok(new_state)
+        Ok(control)
     }
 
     /// Parse device type from device ID string
@@ -1744,22 +1691,29 @@ impl AppStateSync {
     }
 }
 
-/// Error types for playback command processing
-#[derive(Debug, Clone)]
+/// Errors returned when validating or committing playback commands.
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PlaybackError {
+    #[error("Message not found: {0}")]
     MessageNotFound(String),
+    #[error("{0}")]
     InvalidCommand(String),
+    #[error("{0}")]
     StateCorruption(String),
+    #[error("Playback sync failed for {device_id} after {retry_count} retries: {error}")]
     SyncFailure {
         device_id: String,
         error: String,
         retry_count: u32,
     },
+    #[error("Playback changed: expected version {expected_version}, got {actual_version}")]
     ConcurrentModification {
         expected_version: u64,
         actual_version: u64,
     },
+    #[error("Playback network error: {0}")]
     NetworkError(String),
+    #[error("Playback device disconnected: {0}")]
     DeviceDisconnected(String),
 }
 

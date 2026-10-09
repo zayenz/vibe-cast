@@ -306,6 +306,75 @@ describe('useAppState', () => {
     });
   });
 
+  it.each([true, false])('keeps bootstrap runtime revision 2 after late initial SSE revision 1 (playing=%s)', async (isPlaying) => {
+    const currentMessage = { id: 'current', text: 'Current', textStyle: 'scrolling-capitals' };
+    const currentQueue = { folderId: 'folder', messageIds: ['current'], currentIndex: 0 };
+    const currentStats = { current: { messageId: 'current', triggerCount: 2, lastTriggered: 20, history: [] } };
+    const newer = {
+      activeVisualization: 'fireplace',
+      configRevision: 1,
+      runtimeRevision: 2,
+      playbackControl: { isPlaying, currentMessage: isPlaying ? { id: 'current', title: 'Current' } : null },
+      triggeredMessage: isPlaying ? currentMessage : null,
+      folderPlaybackQueue: isPlaying ? currentQueue : null,
+      messageStats: currentStats,
+    };
+    mockFetch.mockResolvedValue({ ok: true, json: async () => newer });
+    const { result } = renderHook(() => useAppState());
+    await act(async () => { vi.advanceTimersByTime(600); });
+    expect(result.current.hydrationSource).toBe('bootstrap');
+    const stream = MockEventSource.getLatest()!;
+    const acceptedPlayback = result.current.state?.playbackControl;
+    act(() => stream.simulateEvent('state', {
+      ...newer,
+      activeVisualization: 'techno',
+      configRevision: 2,
+      runtimeRevision: 1,
+      playbackControl: { isPlaying: !isPlaying },
+      triggeredMessage: isPlaying ? null : currentMessage,
+      folderPlaybackQueue: isPlaying ? null : currentQueue,
+      messageStats: {},
+    }));
+
+    expect(result.current.state).toMatchObject({
+      configRevision: 2,
+      activeVisualization: 'techno',
+      runtimeRevision: 2,
+      playbackControl: acceptedPlayback,
+      triggeredMessage: newer.triggeredMessage,
+      folderPlaybackQueue: newer.folderPlaybackQueue,
+      messageStats: currentStats,
+    });
+    expect(result.current.connectionPhase).toBe('live');
+  });
+
+  it('accepts reset revisions when EventSource reopens after a backend restart', async () => {
+    const { result } = renderHook(() => useAppState());
+    await act(async () => { vi.advanceTimersByTime(600); });
+    const stream = MockEventSource.getLatest()!;
+    const previous = {
+      activeVisualization: 'fireplace',
+      runtimeRevision: 20,
+      playbackControl: { isPlaying: true },
+    };
+    act(() => stream.simulateEvent('state', previous));
+    act(() => stream.simulateError());
+    expect(result.current.state?.playbackControl?.isPlaying).toBe(true);
+    expect(result.current.connectionPhase).toBe('degraded');
+
+    act(() => stream.onopen?.(new Event('open')));
+    const restarted = { ...previous, runtimeRevision: 0, playbackControl: { isPlaying: false } };
+    act(() => stream.simulateEvent('state', restarted));
+    expect(result.current.state?.runtimeRevision).toBe(0);
+    expect(result.current.state?.playbackControl?.isPlaying).toBe(false);
+    expect(result.current.connectionPhase).toBe('live');
+
+    act(() => stream.simulateEvent('state', { ...previous, runtimeRevision: 1 }));
+    act(() => stream.simulateEvent('state', restarted));
+    expect(result.current.state?.runtimeRevision).toBe(1);
+    expect(result.current.state?.playbackControl?.isPlaying).toBe(true);
+  });
+
   it('enters degraded phase after 2 seconds without state', async () => {
     const { result } = renderHook(() => useAppState());
 

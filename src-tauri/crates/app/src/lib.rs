@@ -52,96 +52,7 @@ async fn check_server_ready(state: tauri::State<'_, Arc<AppStateSync>>) -> Resul
 /// This bypasses HTTP/SSE entirely for desktop windows
 #[tauri::command]
 fn get_app_state(state: tauri::State<'_, Arc<AppStateSync>>) -> Result<serde_json::Value, String> {
-    // Build state object similar to what SSE would return
-    let active_visualization = state
-        .active_visualization
-        .lock()
-        .map(|v| v.clone())
-        .unwrap_or_else(|_| "fireplace".to_string());
-    let enabled_visualizations = state
-        .enabled_visualizations
-        .lock()
-        .map(|v| v.clone())
-        .unwrap_or_else(|_| vec![]);
-    let active_visualization_preset: Option<String> = state
-        .active_visualization_preset
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-    let messages = state
-        .messages
-        .lock()
-        .map(|m| m.clone())
-        .unwrap_or_else(|_| vec![]);
-    let message_tree = state
-        .message_tree
-        .lock()
-        .map(|t| t.clone())
-        .unwrap_or_else(|_| serde_json::Value::Null);
-    let visualization_presets = state
-        .visualization_presets
-        .lock()
-        .map(|p| p.clone())
-        .unwrap_or_else(|_| vec![]);
-    let text_style_presets = state
-        .text_style_presets
-        .lock()
-        .map(|p| p.clone())
-        .unwrap_or_else(|_| vec![]);
-    let default_text_style = state
-        .default_text_style
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| "scrolling-capitals".to_string());
-    let text_style_settings = state
-        .text_style_settings
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    let common_settings = state
-        .common_settings
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| CommonSettings::default());
-    let visualization_settings = state
-        .visualization_settings
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    let message_stats = state
-        .message_stats
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    // triggered_message is Mutex<Option<T>>, need to clone the inner Option
-    let triggered_message: Option<MessageConfig> = state
-        .triggered_message
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-    // playback_control is Mutex<T> (not Option), directly clone it
-    let playback_control = state
-        .playback_control
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    Ok(serde_json::json!({
-        "activeVisualization": active_visualization,
-        "enabledVisualizations": enabled_visualizations,
-        "activeVisualizationPreset": active_visualization_preset,
-        "messages": messages,
-        "messageTree": message_tree,
-        "visualizationPresets": visualization_presets,
-        "textStylePresets": text_style_presets,
-        "defaultTextStyle": default_text_style,
-        "textStyleSettings": text_style_settings,
-        "commonSettings": common_settings,
-        "visualizationSettings": visualization_settings,
-        "messageStats": message_stats,
-        "triggeredMessage": triggered_message,
-        "playbackControl": playback_control
-    }))
+    serde_json::to_value(state.get_state()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -452,7 +363,7 @@ fn process_playback_command(
                 "playback-control-changed",
                 serde_json::json!({
                     "type": "PLAYBACK_CONTROL_UPDATE",
-                    "playbackControl": new_state,
+                    "playbackControl": complete_state.playback_control,
                     "state": complete_state
                 }),
             );
@@ -492,30 +403,21 @@ async fn start_message_playback(
         ));
     }
 
-    let result = state.start_message_playback(&message_id, device_type.clone());
-
-    if let Err(ref error) = result {
-        if error.contains("Message not found") {
-            state.start_message_playback_with_message(message.clone(), device_type);
-        } else {
-            return Err(error.clone());
+    let playback_control = match state.start_message_playback(&message_id, device_type.clone()) {
+        Ok(playback) => playback,
+        Err(vibe_cast_state::PlaybackError::MessageNotFound(_)) => {
+            state.start_message_playback_with_message(message.clone(), device_type)
         }
-    }
-
-    if let Ok(mut queue) = state.folder_playback_queue.lock() {
-        *queue = None;
-    }
+        Err(error) => return Err(format!("Playback command failed: {error:?}")),
+    };
     state.broadcast_current_state();
-
-    // Get the updated state and emit enhanced events (same path for lookup and with-message)
     let complete_state = state.get_state();
-    let playback_control = state.get_playback_control();
 
     let _ = handle.emit(
         "playback-control-changed",
         serde_json::json!({
             "type": "MESSAGE_STARTED",
-            "playbackControl": playback_control,
+            "playbackControl": complete_state.playback_control,
             "state": complete_state
         }),
     );
@@ -539,22 +441,20 @@ async fn start_message_playback(
         tokio::spawn(async move {
             tokio::time::sleep(timeout_duration).await;
 
-            let current_state = state_clone.get_playback_control();
-            if current_state.is_playing
-                && current_state.session_id == session_id
-                && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone)
+            let Some(session_id) = session_id else {
+                return;
+            };
+            if state_clone
+                .finish_message_playback(&message_id_clone, &session_id, DeviceType::System)
+                .is_some()
             {
-                state_clone.stop_message_playback(DeviceType::System);
                 state_clone.broadcast_current_state();
-
                 let updated_state = state_clone.get_state();
-                let updated_playback_control = state_clone.get_playback_control();
-
                 let _ = handle_clone.emit(
                     "playback-control-changed",
                     serde_json::json!({
                         "type": "MESSAGE_TIMEOUT",
-                        "playbackControl": updated_playback_control,
+                        "playbackControl": updated_state.playback_control,
                         "state": updated_state
                     }),
                 );
@@ -572,15 +472,11 @@ fn stop_message_playback(
     state: tauri::State<'_, Arc<AppStateSync>>,
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
-    if let Ok(mut queue) = state.folder_playback_queue.lock() {
-        *queue = None;
-    }
-    state.stop_message_playback(device_type);
+    let playback_control = state.stop_message_playback(device_type);
     state.broadcast_current_state();
 
     // Get the updated state and emit enhanced events
     let complete_state = state.get_state();
-    let playback_control = state.get_playback_control();
 
     // Emit specific playback control event to all windows
     // emit() broadcasts globally to all windows in Tauri v2
@@ -588,7 +484,7 @@ fn stop_message_playback(
         "playback-control-changed",
         serde_json::json!({
             "type": "MESSAGE_STOPPED",
-            "playbackControl": playback_control,
+            "playbackControl": complete_state.playback_control,
             "state": complete_state
         }),
     );

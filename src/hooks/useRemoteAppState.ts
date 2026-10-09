@@ -12,7 +12,7 @@ import {
 } from '../e2e/client';
 import type { MessageConfig, MessageTreeNode } from '../plugins/types';
 import type { AppState, ConnectionPhase, FolderPlaybackQueue, PlaybackControlState } from './useAppState';
-import { DeviceType } from './useAppState';
+import { DeviceType, mergePlaybackSnapshot } from './useAppState';
 
 interface UseRemoteAppStateOptions {
   apiBase?: string;
@@ -159,6 +159,7 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     let reportTimer: ReturnType<typeof setTimeout> | null = null;
     const bootstrapController = new AbortController();
     let bootstrapTimeout: ReturnType<typeof setTimeout> | null = null;
+    let currentState: AppState | null = null;
 
     const maybeReportPerf = () => {
       if (!perfEnabled || hasReportedPerfRef.current || perfRef.current.firstUsableRenderMs === undefined) {
@@ -203,23 +204,25 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
 
     const applyState = (nextState: AppState, source: 'bootstrap' | 'sse') => {
       hasAnyStateRef.current = true;
-      setState(nextState);
+      currentState = mergePlaybackSnapshot(currentState, nextState);
+      setState(currentState);
       setError(null);
       const nextPhase: ConnectionPhase = source === 'bootstrap' ? 'degraded' : 'live';
-      const snapshot = buildE2EStateSnapshot(nextState, nextPhase);
+      const snapshot = buildE2EStateSnapshot(currentState, nextPhase);
       publishE2EWindowSnapshot(snapshot);
       void postE2EProbe(effectiveBase, 'remote_dom_snapshot', {
         source,
         snapshot,
       });
       setConnectionPhase(nextPhase);
-      markUsable(source, nextState, nextPhase);
+      markUsable(source, currentState, nextPhase);
     };
 
     const connectSse = (attempt: number) => {
       if (!isMounted) {
         return;
       }
+      let awaitingInitialState = true;
 
       const sseUrl = new URL(`${effectiveBase}/api/remote/events`);
       sseUrl.searchParams.set('clientId', clientIdRef.current);
@@ -234,6 +237,7 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
         if (!isMounted) {
           return;
         }
+        awaitingInitialState = true;
 
         setIsConnected(true);
         setConnectionPhase(hasAnyStateRef.current ? 'live' : 'connecting');
@@ -254,6 +258,11 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
 
         try {
           const parsed = parseRemoteState(JSON.parse(event.data));
+          if (awaitingInitialState) {
+            // Each stream starts with a fresh snapshot; a restarted server resets revisions.
+            currentState = null;
+            awaitingInitialState = false;
+          }
           setIsConnected(true);
           applyState(parsed, 'sse');
         } catch (stateError) {

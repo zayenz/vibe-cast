@@ -87,6 +87,22 @@ export interface AppState {
   mode?: 'fireplace' | 'techno';
 }
 
+export function mergePlaybackSnapshot(previous: AppState | null, incoming: AppState): AppState {
+  if (!previous || incoming.runtimeRevision >= previous.runtimeRevision) {
+    return incoming;
+  }
+
+  // Config updates have their own revision and can arrive with older playback.
+  return {
+    ...incoming,
+    runtimeRevision: previous.runtimeRevision,
+    playbackControl: previous.playbackControl,
+    triggeredMessage: previous.triggeredMessage,
+    folderPlaybackQueue: previous.folderPlaybackQueue,
+    messageStats: previous.messageStats,
+  };
+}
+
 export type ConnectionPhase = 'connecting' | 'degraded' | 'live';
 export type HydrationSource = 'sse' | 'bootstrap' | null;
 
@@ -433,7 +449,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
         }
 
         const parsedState = parseSSEState(data);
-        setState(parsedState);
+        setState((previous) => mergePlaybackSnapshot(previous, parsedState));
         setError(null);
         hasReceivedState.current = true;
         if (!hasReceivedSSEState.current) {
@@ -505,6 +521,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
         console.log('[useAppState] Component unmounted, skipping connect');
         return;
       }
+      let awaitingInitialState = true;
 
       connectAttempt += 1;
       console.log(`[useAppState] SSE connect attempt #${connectAttempt} to: ${sseUrl}`);
@@ -526,7 +543,11 @@ export function useAppState(options: UseAppStateOptions = {}) {
           const isFirstSSEState = !hasReceivedSSEState.current;
           const data = JSON.parse(event.data);
           const parsedState = parseSSEState(data);
-          setState(parsedState);
+          // A reopened stream starts fresh even if the backend reset its revisions.
+          // The first connection still guards against concurrent bootstrap responses.
+          const resetsRuntime = awaitingInitialState && !isFirstSSEState;
+          awaitingInitialState = false;
+          setState((previous) => resetsRuntime ? parsedState : mergePlaybackSnapshot(previous, parsedState));
           setError(null);
           setIsConnected(true);
           setConnectionPhase('live');
@@ -619,6 +640,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
 
       eventSource.onopen = () => {
         if (!isMounted) return;
+        awaitingInitialState = true;
         markTiming('sseOpenMs', 'sse_open');
         console.log('[useAppState] SSE connection opened successfully');
         setIsConnected(true);

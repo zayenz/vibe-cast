@@ -4,6 +4,7 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { ControlPlane } from '../ControlPlane';
 import { MockEventSource } from '../../test/mocks/sse';
 import { commandAction } from '../../router';
+import { listen } from '@tauri-apps/api/event';
 
 // Mock fetch for command sending
 const mockFetch = vi.fn();
@@ -73,6 +74,67 @@ describe('ControlPlane Playback Controls Enhancement', () => {
     vi.useRealTimers();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).__TAURI_INTERNALS__;
+  });
+
+  it.each([
+    { tauriRevision: 2, sseRevision: 1, isPlaying: true },
+    { tauriRevision: 2, sseRevision: 1, isPlaying: false },
+    { tauriRevision: 1, sseRevision: 2, isPlaying: true },
+    { tauriRevision: 1, sseRevision: 2, isPlaying: false },
+  ])('shows newest playback across Tauri/SSE ($tauriRevision/$sseRevision, playing=$isPlaying)', async ({ tauriRevision, sseRevision, isPlaying }) => {
+    const message = { id: 'msg1', text: 'Test Message', textStyle: 'scrolling-capitals' };
+    const snapshot = (runtimeRevision: number, playing: boolean) => ({
+      configRevision: 1,
+      runtimeRevision,
+      activeVisualization: 'fireplace',
+      enabledVisualizations: ['fireplace'],
+      commonSettings: { intensity: 1.0, dim: 1.0 },
+      messages: [message],
+      messageTree: [{ type: 'message', id: 'msg1', message }],
+      playbackControl: {
+        sessionId: playing ? 'session1' : null,
+        currentMessage: playing ? { id: 'msg1', title: 'Test Message' } : null,
+        isPlaying: playing,
+        playbackPosition: 0,
+        canStop: playing,
+        canStart: !playing,
+        initiatedBy: 'control_plane',
+        lastUpdated: 0,
+      },
+      defaultTextStyle: 'scrolling-capitals',
+    });
+    const sse = await renderAndInjectState(snapshot(0, false));
+    const listener = vi.mocked(listen).mock.calls.find(([name]) => name === 'playback-control-changed')?.[1];
+    expect(listener).toBeDefined();
+    const deliverTauri = (state: ReturnType<typeof snapshot>) => {
+      act(() => listener!({
+        event: 'playback-control-changed',
+        id: 0,
+        payload: { type: 'PLAYBACK_CONTROL_UPDATE', playbackControl: state.playbackControl, state },
+      }));
+    };
+    const tauriState = snapshot(tauriRevision, tauriRevision > sseRevision ? isPlaying : !isPlaying);
+    const sseState = snapshot(sseRevision, sseRevision > tauriRevision ? isPlaying : !isPlaying);
+
+    if (tauriRevision > sseRevision) {
+      deliverTauri(tauriState);
+      act(() => sse.simulateEvent('state', sseState));
+    } else {
+      act(() => sse.simulateEvent('state', sseState));
+      deliverTauri(tauriState);
+    }
+    const expectPlaybackControls = () => {
+      if (isPlaying) {
+        expect(screen.getAllByTitle(/Stop message.*Control Plane/).length).toBeGreaterThan(0);
+        expect(screen.queryAllByTitle('Play message')).toHaveLength(0);
+      } else {
+        expect(screen.getAllByTitle('Play message').length).toBeGreaterThan(0);
+        expect(screen.queryAllByTitle(/Stop message.*Control Plane/)).toHaveLength(0);
+      }
+    };
+    expectPlaybackControls();
+    deliverTauri(snapshot(0, !isPlaying));
+    expectPlaybackControls();
   });
 
   it('shows stop button when message is playing from Control Plane', async () => {

@@ -28,10 +28,10 @@ use tower_http::{
 use vibe_cast_models::{
     build_flat_message_tree_value, flatten_message_tree_value, BroadcastState, CommonSettings,
     DeviceType, E2EClientKind, E2EProbeEvent, E2EReport, E2ESessionEndRequest,
-    E2ESessionStartRequest, FolderPlaybackQueue, MessageConfig, RemoteCommand,
-    RemoteStartupPerfReport, TextStylePreset, VisualizationPreset,
+    E2ESessionStartRequest, FolderPlaybackQueue, MessageConfig, PlaybackControlState,
+    RemoteCommand, RemoteStartupPerfReport, TextStylePreset, VisualizationPreset,
 };
-use vibe_cast_state::{resolve_config_path, AppStateSync};
+use vibe_cast_state::{resolve_config_path, AppStateSync, PlaybackCompletion};
 
 const MAX_COMMAND_BODY_BYTES: usize = 32 * 1024 * 1024;
 
@@ -269,68 +269,13 @@ fn update_message_stats(app_state_sync: &AppStateSync, msg: &MessageConfig) {
     }
 }
 
-struct FolderAdvanceResult {
-    matched_current: bool,
-    next_message: Option<MessageConfig>,
-    missing_next_message_id: Option<String>,
-}
-
-fn resolve_next_folder_message(
-    app_state_sync: &AppStateSync,
-    message_id: &str,
-) -> FolderAdvanceResult {
-    let mut matched_current = false;
-    let mut should_clear_queue = false;
-    let mut next_message: Option<MessageConfig> = None;
-    let mut missing_next_message_id: Option<String> = None;
-
-    if let Ok(mut queue) = app_state_sync.folder_playback_queue.lock() {
-        if let Some(ref mut q) = *queue {
-            if let Some(current_id) = q.message_ids.get(q.current_index) {
-                if current_id == message_id {
-                    matched_current = true;
-                    let next_index = q.current_index + 1;
-
-                    if next_index < q.message_ids.len() {
-                        if let Some(next_id) = q.message_ids.get(next_index) {
-                            if let Ok(messages) = app_state_sync.messages.lock() {
-                                next_message = messages.iter().find(|m| &m.id == next_id).cloned();
-                            }
-                            if next_message.is_some() {
-                                q.current_index = next_index;
-                            } else {
-                                should_clear_queue = true;
-                                missing_next_message_id = Some(next_id.clone());
-                            }
-                        }
-                    } else {
-                        should_clear_queue = true;
-                    }
-                }
-            }
-        }
-    }
-
-    if should_clear_queue {
-        if let Ok(mut queue) = app_state_sync.folder_playback_queue.lock() {
-            *queue = None;
-        }
-    }
-
-    FolderAdvanceResult {
-        matched_current,
-        next_message,
-        missing_next_message_id,
-    }
-}
-
 fn emit_playback_control_event<R: Runtime>(
     state: &AppState<R>,
     event_type: &str,
     payload: serde_json::Value,
 ) {
     let complete_state = state.app_state_sync.get_state();
-    let playback_control = state.app_state_sync.get_playback_control();
+    let playback_control = &complete_state.playback_control;
 
     let _ = state.app_handle.emit(
         "playback-control-changed",
@@ -361,41 +306,42 @@ fn schedule_playback_timeout<R: Runtime>(
     tokio::spawn(async move {
         tokio::time::sleep(timeout_duration).await;
 
-        let current_state = state.app_state_sync.get_playback_control();
-        if current_state.is_playing
-            && current_state.session_id == session_id
-            && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id)
-        {
-            let advance_result =
-                resolve_next_folder_message(state.app_state_sync.as_ref(), &message_id);
-            let matched_current = advance_result.matched_current;
-            let next_message = advance_result.next_message;
-
-            if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
-                eprintln!(
-                    "[Server] [folder-playback] Clearing queue after timeout; missing message '{}'",
-                    missing_next_message_id
-                );
-            }
-
-            state
-                .app_state_sync
-                .stop_message_playback(DeviceType::System);
-            state.app_state_sync.broadcast_current_state();
-            emit_playback_control_event(
-                &state,
-                "MESSAGE_TIMEOUT",
-                serde_json::json!({ "messageId": message_id }),
-            );
-
-            if let Some(next_message) = next_message {
-                start_message_with_side_effects(&state, next_message, DeviceType::System);
-                state.app_state_sync.broadcast_current_state();
-            } else if matched_current {
-                emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
-            }
-        }
+        let Some(session_id) = session_id else {
+            return;
+        };
+        let Some(completion) = state.app_state_sync.finish_message_playback(
+            &message_id,
+            &session_id,
+            DeviceType::System,
+        ) else {
+            return;
+        };
+        publish_playback_completion(&state, completion, "MESSAGE_TIMEOUT");
+        state.app_state_sync.broadcast_current_state();
     });
+}
+
+// Playback transitions are committed by the state owner before transport effects run.
+// A timer must retain the returned session rather than reread concurrent state.
+fn publish_message_started<R: Runtime>(
+    state: &AppState<R>,
+    msg: &MessageConfig,
+    playback: &PlaybackControlState,
+) {
+    emit_playback_control_event(
+        state,
+        "MESSAGE_STARTED",
+        serde_json::json!({ "messageId": msg.id }),
+    );
+    update_message_stats(state.app_state_sync.as_ref(), msg);
+    if let Some(duration) = state.app_state_sync.calculate_safety_timeout_duration(msg) {
+        schedule_playback_timeout(
+            state.clone(),
+            msg.id.clone(),
+            duration,
+            playback.session_id.clone(),
+        );
+    }
 }
 
 fn start_message_with_side_effects<R: Runtime>(
@@ -403,22 +349,27 @@ fn start_message_with_side_effects<R: Runtime>(
     msg: MessageConfig,
     device_type: DeviceType,
 ) {
-    let message_id = msg.id.clone();
-    state
+    let playback = state
         .app_state_sync
         .start_message_playback_with_message(msg.clone(), device_type);
+    publish_message_started(state, &msg, &playback);
+}
 
-    let session_id = state.app_state_sync.get_playback_control().session_id;
-    emit_playback_control_event(
-        state,
-        "MESSAGE_STARTED",
-        serde_json::json!({ "messageId": msg.id }),
-    );
-
-    update_message_stats(state.app_state_sync.as_ref(), &msg);
-
-    if let Some(duration) = state.app_state_sync.calculate_safety_timeout_duration(&msg) {
-        schedule_playback_timeout(state.clone(), message_id, duration, session_id);
+fn publish_playback_completion<R: Runtime>(
+    state: &AppState<R>,
+    completion: PlaybackCompletion,
+    stopped_event: &str,
+) {
+    if let Some(missing_id) = completion.missing_next_message_id {
+        eprintln!(
+            "[Server] [folder-playback] Clearing queue; missing message '{}'",
+            missing_id
+        );
+    }
+    if let Some(next_message) = completion.next_message {
+        publish_message_started(state, &next_message, &completion.control);
+    } else {
+        emit_playback_control_event(state, stopped_event, serde_json::Value::Null);
     }
 }
 
@@ -1128,39 +1079,15 @@ async fn handle_command<R: Runtime>(
                 };
 
                 if let Some(msg) = msg {
-                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                        *queue = None;
-                    }
                     start_message_with_side_effects(&state, msg, device_type.clone());
                 }
             }
         }
         "stop-message" => {
-            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                *queue = None;
-            }
-            // Unified stop from any device — update playback_control and notify all views
             state
                 .app_state_sync
                 .stop_message_playback(device_type.clone());
-            let complete_state = state.app_state_sync.get_state();
-            let playback_control = state.app_state_sync.get_playback_control();
-            let _ = state.app_handle.emit(
-                "playback-control-changed",
-                serde_json::json!({
-                    "type": "MESSAGE_STOPPED",
-                    "playbackControl": playback_control,
-                    "state": complete_state
-                }),
-            );
-            let _ = state.app_handle.emit(
-                "state-changed",
-                serde_json::json!({
-                    "type": "MESSAGE_STOPPED",
-                    "payload": serde_json::Value::Null,
-                    "state": complete_state
-                }),
-            );
+            emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
         }
         "set-messages" => {
             if let Some(p) = &payload.payload {
@@ -1293,36 +1220,19 @@ async fn handle_command<R: Runtime>(
             else {
                 return ApiErrorResponse::bad_request("Missing playbackSessionId").into_response();
             };
-            let playback = state.app_state_sync.get_playback_control();
-            if !playback.is_playing
-                || playback
-                    .current_message
-                    .as_ref()
-                    .map(|message| message.id.as_str())
-                    != Some(message_id)
-                || playback.session_id.as_deref() != Some(playback_session_id)
-            {
-                return Json(serde_json::json!({ "status": "ok" })).into_response();
-            }
-            let advance_result =
-                resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
-            if let Some(missing_id) = advance_result.missing_next_message_id {
-                eprintln!(
-                    "[Server] [folder-playback] Clearing queue after {}; missing message '{}'",
-                    payload.command, missing_id
-                );
-            }
-            if let Some(next_message) = advance_result.next_message {
-                start_message_with_side_effects(&state, next_message, DeviceType::System);
+            let completion_device = if payload.command == "clear-active-message" {
+                device_type.clone()
             } else {
-                let device_type = if payload.command == "clear-active-message" {
-                    DeviceType::MobileRemote
-                } else {
-                    DeviceType::System
-                };
-                state.app_state_sync.stop_message_playback(device_type);
-                emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
-            }
+                DeviceType::System
+            };
+            let Some(completion) = state.app_state_sync.finish_message_playback(
+                message_id,
+                playback_session_id,
+                completion_device,
+            ) else {
+                return Json(serde_json::json!({ "status": "ok" })).into_response();
+            };
+            publish_playback_completion(&state, completion, "MESSAGE_STOPPED");
         }
         "play-folder" => {
             let Some(p) = &payload.payload else {
@@ -1363,26 +1273,21 @@ async fn handle_command<R: Runtime>(
                     .into_response();
             };
 
-            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                *queue = Some(FolderPlaybackQueue {
+            let playback = state.app_state_sync.start_folder_playback(
+                first_message.clone(),
+                FolderPlaybackQueue {
                     folder_id: folder_id.to_string(),
-                    message_ids: message_ids.clone(),
+                    message_ids,
                     current_index: 0,
-                });
-            }
-
-            start_message_with_side_effects(&state, first_message, device_type.clone());
+                },
+                device_type.clone(),
+            );
+            publish_message_started(&state, &first_message, &playback);
         }
         "cancel-folder-playback" => {
-            // Clear the folder playback queue and stop current message
-            // Clear the queue
-            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-                *queue = None;
-            }
             state
                 .app_state_sync
                 .stop_message_playback(device_type.clone());
-
             emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
         }
         "reset-message-stats" => {
@@ -1955,9 +1860,7 @@ mod tests {
                 assert_eq!(
                     state
                         .app_state_sync
-                        .folder_playback_queue
-                        .lock()
-                        .unwrap()
+                        .get_folder_playback_queue()
                         .as_ref()
                         .unwrap()
                         .current_index,
@@ -2001,9 +1904,7 @@ mod tests {
                 assert_eq!(
                     state
                         .app_state_sync
-                        .folder_playback_queue
-                        .lock()
-                        .unwrap()
+                        .get_folder_playback_queue()
                         .as_ref()
                         .unwrap()
                         .current_index,
@@ -2057,9 +1958,7 @@ mod tests {
                 assert!(!state.app_state_sync.get_playback_control().is_playing);
                 assert!(state
                     .app_state_sync
-                    .folder_playback_queue
-                    .lock()
-                    .unwrap()
+                    .get_folder_playback_queue()
                     .is_none());
 
                 handle_command(
@@ -2098,9 +1997,7 @@ mod tests {
                 );
                 assert!(state
                     .app_state_sync
-                    .folder_playback_queue
-                    .lock()
-                    .unwrap()
+                    .get_folder_playback_queue()
                     .is_none());
             }
         });
@@ -2195,13 +2092,7 @@ mod tests {
             assert_eq!(response["body"]["status"], "ok");
         });
 
-        let queue = state
-            .app_state_sync
-            .folder_playback_queue
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
+        let queue = state.app_state_sync.get_folder_playback_queue().unwrap();
         assert_eq!(queue.folder_id, "folder-1");
         assert_eq!(queue.current_index, 0);
         assert_eq!(queue.message_ids, vec!["message-1"]);
@@ -2280,12 +2171,7 @@ mod tests {
             );
         });
 
-        assert!(state
-            .app_state_sync
-            .folder_playback_queue
-            .lock()
-            .unwrap()
-            .is_none());
+        assert!(state.app_state_sync.get_folder_playback_queue().is_none());
         assert!(!state.app_state_sync.get_playback_control().is_playing);
     }
 
@@ -2298,16 +2184,15 @@ mod tests {
         if let Ok(mut messages) = state.app_state_sync.messages.lock() {
             *messages = vec![first_message.clone()];
         }
-        if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
-            *queue = Some(FolderPlaybackQueue {
+        state.app_state_sync.start_folder_playback(
+            first_message,
+            FolderPlaybackQueue {
                 folder_id: "folder-1".to_string(),
                 message_ids: vec!["message-1".to_string(), "missing-message".to_string()],
                 current_index: 0,
-            });
-        }
-        state
-            .app_state_sync
-            .start_message_playback_with_message(first_message, DeviceType::System);
+            },
+            DeviceType::System,
+        );
 
         runtime.block_on(async {
             let response = handle_command(
@@ -2328,12 +2213,7 @@ mod tests {
             assert_eq!(response["status"], 200);
         });
 
-        assert!(state
-            .app_state_sync
-            .folder_playback_queue
-            .lock()
-            .unwrap()
-            .is_none());
+        assert!(state.app_state_sync.get_folder_playback_queue().is_none());
         assert!(!state.app_state_sync.get_playback_control().is_playing);
     }
 
@@ -2568,13 +2448,7 @@ mod tests {
             Some("message-2")
         );
 
-        let queue = state
-            .app_state_sync
-            .folder_playback_queue
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
+        let queue = state.app_state_sync.get_folder_playback_queue().unwrap();
         assert_eq!(queue.current_index, 1);
         assert_eq!(
             queue.message_ids,
