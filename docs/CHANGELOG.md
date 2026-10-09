@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-09
+
+- Make playback session checks, folder advancement, starts, and stops atomic across HTTP, IPC, and safety timers. Delayed or duplicate completions leave newer playback alone.
+- Keep playback snapshots ordered across SSE and Tauri, recover after reconnects and backend restarts, and use session IDs that remain distinct across restarts.
+- Consolidate configuration loading. Unreadable or invalid configuration files preserve the current settings and base directory.
+- Load WebGL renderers on demand, reducing the shared desktop bundle from about 1.14 MB to 202 KB. Remove unused components, helpers, and unnecessary production animation callbacks.
+- Keep the app running when audio capture fails, support device sample formats and multiple channels, and reuse FFT scratch storage.
+- Recover from mobile remote startup failures, skip slideshow images that fail to load, and apply YouTube sound changes without reloading the player.
+
 ## Features
 
 ### Photo Slideshow & Albums
