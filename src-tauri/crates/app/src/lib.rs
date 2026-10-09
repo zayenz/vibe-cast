@@ -6,7 +6,7 @@ use vibe_cast_models::{
     flatten_message_tree_value, CommonSettings, DeviceType, MessageConfig, PlaybackCommand,
     TextStylePreset, VisualizationPreset,
 };
-use vibe_cast_state::AppStateSync;
+use vibe_cast_state::{resolve_config_path, AppStateSync};
 
 #[tauri::command]
 async fn get_server_info(
@@ -152,27 +152,6 @@ fn get_audio_data(state: tauri::State<'_, AudioState>) -> Vec<f32> {
     }
 }
 
-/// Helper function to resolve paths relative to config base path
-fn resolve_path(path: &str, base_path: Option<&str>) -> String {
-    use std::path::Path;
-    let p = Path::new(path);
-
-    // If absolute, return as-is
-    if p.is_absolute() {
-        return path.to_string();
-    }
-
-    // If relative and we have a base path, resolve it
-    if let Some(base) = base_path {
-        let base_path = Path::new(base);
-        let resolved = base_path.join(path);
-        return resolved.to_string_lossy().to_string();
-    }
-
-    // No base path, return as-is
-    path.to_string()
-}
-
 #[tauri::command]
 fn set_config_base_path(
     state: tauri::State<'_, Arc<AppStateSync>>,
@@ -221,7 +200,7 @@ fn load_message_text_file(
     eprintln!("[Rust]   file_path: {}", file_path);
     eprintln!("[Rust]   base_path: {:?}", base_path_opt);
 
-    let resolved = resolve_path(&file_path, base_path_opt.as_deref());
+    let resolved = resolve_config_path(&file_path, base_path_opt.as_deref());
     eprintln!("[Rust]   resolved path: {}", resolved);
 
     match fs::read_to_string(&resolved) {
@@ -278,7 +257,6 @@ fn emit_state_change(
     event_type: String,
     payload: String, // JSON string from frontend
 ) {
-    let mut triggered_message: Option<MessageConfig> = None;
     let mut config_changed = false;
     let mut runtime_changed = false;
 
@@ -348,12 +326,6 @@ fn emit_state_change(
             }
             runtime_changed = true;
         }
-        "TRIGGER_MESSAGE" => {
-            if let Ok(msg) = serde_json::from_value::<MessageConfig>(payload_value.clone()) {
-                triggered_message = Some(msg);
-                runtime_changed = true;
-            }
-        }
         "SET_DEFAULT_TEXT_STYLE" => {
             if let Some(style) = payload_value.as_str() {
                 if let Ok(mut m) = state.default_text_style.lock() {
@@ -421,108 +393,9 @@ fn emit_state_change(
                 config_changed = true;
             }
         }
-        "CLEAR_ACTIVE_MESSAGE" => {
-            // This is handled on the frontend, but we can acknowledge it
-            // The actual clearing happens in the VisualizerWindow
-        }
         "LOAD_CONFIGURATION" => {
-            // Full configuration load
             if let Some(obj) = payload_value.as_object() {
-                if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
-                    if let Ok(mut m) = state.active_visualization.lock() {
-                        *m = viz.to_string();
-                    }
-                }
-                if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
-                    if let Ok(mut m) = state.enabled_visualizations.lock() {
-                        *m = vizs
-                            .iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect();
-                    }
-                }
-                if let Some(settings) = obj.get("commonSettings") {
-                    if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
-                        if let Ok(mut m) = state.common_settings.lock() {
-                            *m = s;
-                        }
-                    }
-                }
-                if let Some(settings) = obj.get("visualizationSettings") {
-                    if let Ok(mut m) = state.visualization_settings.lock() {
-                        *m = settings.clone();
-                    }
-                }
-                if let Some(msgs) = obj.get("messages") {
-                    if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone())
-                    {
-                        if let Ok(mut m) = state.messages.lock() {
-                            *m = messages;
-                        }
-                    }
-                }
-                // Message tree (folders) - canonical ordering/structure if present
-                if let Some(tree) = obj.get("messageTree") {
-                    if let Ok(mut t) = state.message_tree.lock() {
-                        *t = tree.clone();
-                    }
-                    // Ensure flattened messages match tree
-                    let flat = flatten_message_tree_value(tree);
-                    if let Ok(mut m) = state.messages.lock() {
-                        *m = flat;
-                    }
-                } else {
-                    // If no tree was provided, keep a flat tree representation of messages
-                    if let Ok(m) = state.messages.lock() {
-                        if let Ok(mut t) = state.message_tree.lock() {
-                            *t = serde_json::json!(m
-                                .iter()
-                                .map(|msg| serde_json::json!({
-                                    "type": "message",
-                                    "id": msg.id,
-                                    "message": msg
-                                }))
-                                .collect::<Vec<serde_json::Value>>());
-                        }
-                    }
-                }
-                if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
-                    if let Ok(mut m) = state.default_text_style.lock() {
-                        *m = style.to_string();
-                    }
-                }
-                if let Some(settings) = obj.get("textStyleSettings") {
-                    if let Ok(mut m) = state.text_style_settings.lock() {
-                        *m = settings.clone();
-                    }
-                }
-                if let Some(presets) = obj.get("visualizationPresets") {
-                    if let Ok(p) =
-                        serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone())
-                    {
-                        if let Ok(mut m) = state.visualization_presets.lock() {
-                            *m = p;
-                        }
-                    }
-                }
-                if let Ok(mut active_preset) = state.active_visualization_preset.lock() {
-                    *active_preset = obj
-                        .get("activeVisualizationPreset")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_owned);
-                }
-                if let Some(presets) = obj.get("textStylePresets") {
-                    if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
-                        if let Ok(mut m) = state.text_style_presets.lock() {
-                            *m = p;
-                        }
-                    }
-                }
-                if let Some(stats) = obj.get("messageStats") {
-                    if let Ok(mut m) = state.message_stats.lock() {
-                        *m = stats.clone();
-                    }
-                }
+                state.apply_configuration(obj);
                 config_changed = true;
             }
         }
@@ -545,11 +418,7 @@ fn emit_state_change(
         state.mark_runtime_changed();
     }
 
-    if let Some(message) = triggered_message {
-        state.broadcast(Some(message));
-    } else {
-        state.broadcast_current_state();
-    }
+    state.broadcast_current_state();
 
     // Also emit to all Tauri windows (for VibeCast which uses Tauri events for audio sync)
     // Include complete state information including playback control state for bidirectional control
@@ -641,8 +510,6 @@ async fn start_message_playback(
     // Get the updated state and emit enhanced events (same path for lookup and with-message)
     let complete_state = state.get_state();
     let playback_control = state.get_playback_control();
-
-    let _ = handle.emit("triggered-message", &message);
 
     let _ = handle.emit(
         "playback-control-changed",
@@ -765,7 +632,7 @@ fn list_images_in_folder(
     } else {
         // Resolve path relative to config base path
         let base_path_opt = state.config_base_path.lock().ok().and_then(|p| p.clone());
-        resolve_path(&folder_path, base_path_opt.as_deref())
+        resolve_config_path(&folder_path, base_path_opt.as_deref())
     };
 
     eprintln!("Resolved path: {}", resolved);

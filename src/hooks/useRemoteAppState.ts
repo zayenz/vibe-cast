@@ -111,7 +111,8 @@ function parseRemoteState(data: any): AppState {
 
 export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
   const { apiBase = '' } = options;
-  const clientIdRef = useRef(generateClientId());
+  const clientIdRef = useRef('');
+  if (!clientIdRef.current) clientIdRef.current = generateClientId();
   const hasReportedPerfRef = useRef(false);
   const hasAnyStateRef = useRef(false);
   const perfRef = useRef<RemoteStartupPerfReport>({

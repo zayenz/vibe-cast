@@ -224,43 +224,6 @@ export const ControlPlane: React.FC = () => {
     }, false);
   }, [state]);
 
-  // Listen for state-changed events from VisualizerWindow (e.g., when messages complete)
-  useEffect(() => {
-    const unlistenState = listen<{ type: string; payload: unknown }>('state-changed', (event) => {
-      const { type, payload } = event.payload;
-      
-      console.log('[ControlPlane] Received state-changed event:', type, payload ? 'with payload' : 'no payload');
-      
-      switch (type) {
-        case 'CLEAR_MESSAGE': {
-          // Message completed in VisualizerWindow - update local store
-          // Payload is now { timestamp, messageId } to handle cross-window timestamp differences
-          if (payload && typeof payload === 'object' && 'timestamp' in payload) {
-            const { timestamp, messageId } = payload as { timestamp: number; messageId?: string };
-            // Only clear locally; backend queue advancement is handled by `message-complete`.
-            useStore.getState().clearMessage(timestamp, false, messageId);
-          } else if (typeof payload === 'number') {
-            // Legacy: just timestamp
-            useStore.getState().clearMessage(payload, false);
-          }
-          break;
-        }
-        case 'CLEAR_ACTIVE_MESSAGE': {
-          // Message explicitly cleared - update local store
-          if (payload && typeof payload === 'object' && 'messageId' in payload && 'timestamp' in payload) {
-            const { messageId, timestamp } = payload as { messageId: string; timestamp: number };
-            useStore.getState().clearActiveMessage(messageId, timestamp, false);
-          }
-          break;
-        }
-      }
-    });
-
-    return () => {
-      unlistenState.then((u) => u());
-    };
-  }, []);
-
   // Listen for enhanced playback control events from backend
   useEffect(() => {
     const unlistenPlaybackControl = listen<{ type: string; playbackControl: PlaybackControlState }>('playback-control-changed', (event) => {

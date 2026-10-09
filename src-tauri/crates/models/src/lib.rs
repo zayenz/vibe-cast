@@ -493,6 +493,22 @@ pub fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig
     out
 }
 
+/// Build message nodes in the input message order.
+pub fn build_flat_message_tree_value(messages: &[MessageConfig]) -> serde_json::Value {
+    serde_json::Value::Array(
+        messages
+            .iter()
+            .map(|message| {
+                serde_json::json!({
+                    "type": "message",
+                    "id": message.id,
+                    "message": message,
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

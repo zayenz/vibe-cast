@@ -231,7 +231,7 @@ function parseSSEState(data: any): AppState {
 export function useAppState(options: UseAppStateOptions = {}) {
   const { apiBase = '', onCommand } = options;
 
-  const clientIdRef = useRef<string>(generateClientId());
+  const [clientId] = useState(generateClientId);
   const sessionStartMsRef = useRef<number>(Date.now());
   const spinnerExitLoggedRef = useRef(false);
 
@@ -274,7 +274,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
     const logMetric = (name: string, extra?: Record<string, unknown>) => {
       const now = Date.now();
       console.log('[useAppState][metrics]', name, {
-        clientId: clientIdRef.current,
+        clientId,
         atMs: now,
         elapsedMs: now - remoteLoadStartMs,
         ...extra,
@@ -337,7 +337,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
     const stateSnapshotUrl = `${effectiveBase}/api/state${isTauri ? '' : '?compact=1'}`;
 
     const sseParams = new URLSearchParams({
-      clientId: clientIdRef.current,
+      clientId,
       sessionStartMs: String(remoteLoadStartMs),
     });
     if (!isTauri) {
@@ -522,7 +522,6 @@ export function useAppState(options: UseAppStateOptions = {}) {
 
       eventSource.addEventListener('state', (event) => {
         if (!isMounted) return;
-        console.log('[useAppState] Received state event, data length:', event.data?.length);
         try {
           const isFirstSSEState = !hasReceivedSSEState.current;
           const data = JSON.parse(event.data);
@@ -539,7 +538,6 @@ export function useAppState(options: UseAppStateOptions = {}) {
             markTiming('firstStateEventMs', 'first_state_event');
             markSpinnerExit('first-sse-state');
           }
-          console.log('[useAppState] State parsed and set successfully');
         } catch (e) {
           console.error('[useAppState] Failed to parse SSE state:', e);
         }
@@ -547,7 +545,6 @@ export function useAppState(options: UseAppStateOptions = {}) {
 
       eventSource.addEventListener('command', (event) => {
         if (!isMounted) return;
-        console.log('[useAppState] Received command event');
         try {
           const command = JSON.parse(event.data) as RemoteCommand;
 
@@ -684,7 +681,7 @@ export function useAppState(options: UseAppStateOptions = {}) {
         clearTimeout(hardResetTimer);
       }
     };
-  }, [apiBase, onCommand]);
+  }, [apiBase, clientId, onCommand]);
 
   return { state, error, isConnected, connectionPhase, hydrationSource, timing };
 }

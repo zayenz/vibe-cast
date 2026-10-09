@@ -32,7 +32,7 @@ export interface AppState {
   // Message state
   messages: MessageConfig[];
   messageTree: MessageTreeNode[];
-  activeMessages: Array<{ message: MessageConfig; timestamp: number }>;
+  activeMessages: Array<{ message: MessageConfig; timestamp: number; readonly playbackSessionId: string | null }>;
   activeMessage: MessageConfig | null; // Legacy - kept for compatibility
   messageTimestamp: number; // Legacy - kept for compatibility
   messageStats: Record<string, MessageStats>;
@@ -78,9 +78,9 @@ export interface AppState {
   addMessage: (text: string, sync?: boolean) => void;
   updateMessage: (id: string, updates: Partial<MessageConfig>, sync?: boolean) => void;
   removeMessage: (id: string, sync?: boolean) => void;
-  triggerMessage: (message: MessageConfig, sync?: boolean) => void;
-  clearMessage: (timestamp: number, sync?: boolean, messageId?: string) => void;
-  clearActiveMessage: (messageId: string, timestamp: number, sync?: boolean) => void;
+  triggerMessage: (message: MessageConfig, playbackSessionId?: string | null) => void;
+  clearPlaybackMessage: (playbackSessionId: string) => boolean;
+  clearMessage: (timestamp: number) => void;
   resetMessageStats: (sync?: boolean) => void;
   
   // Folder playback actions
@@ -484,11 +484,14 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  triggerMessage: (message, sync = true) => {
-    console.log(`Triggering message: ${message.text}, sync=${sync}`);
+  triggerMessage: (message, playbackSessionId = null) => {
+    console.log(`Displaying message: ${message.text}`);
     const timestamp = Date.now();
     
     set(state => {
+      if (playbackSessionId && state.activeMessages.some(active => active.playbackSessionId === playbackSessionId)) {
+        return state;
+      }
       // Update message stats
       const currentStats = state.messageStats[message.id] || {
         messageId: message.id,
@@ -506,7 +509,10 @@ export const useStore = create<AppState>((set, get) => ({
       
       // Limit to max 5 concurrent messages to prevent performance issues
       const maxMessages = 5;
-      const newActiveMessages = [...state.activeMessages, { message, timestamp }];
+      const previousMessages = playbackSessionId
+        ? state.activeMessages.filter(active => active.message.id !== message.id)
+        : state.activeMessages;
+      const newActiveMessages = [...previousMessages, { message, timestamp, playbackSessionId }];
       const trimmedMessages = newActiveMessages.slice(-maxMessages);
       
       return {
@@ -524,80 +530,20 @@ export const useStore = create<AppState>((set, get) => ({
     // Note: repeatCount is now handled by the text style plugins themselves
     // They will repeat the animation internally before calling onComplete
     
-    if (sync) {
-      syncState('TRIGGER_MESSAGE', message);
-    }
   },
 
-  clearMessage: (timestamp, sync = true, messageId) => {
-    const state = get();
-    // First try to find by timestamp, then fall back to messageId (cross-window case)
-    let clearedMessage = state.activeMessages.find(m => m.timestamp === timestamp);
-    if (!clearedMessage && messageId) {
-      clearedMessage = state.activeMessages.find(m => m.message.id === messageId);
-    }
-    
-    // If no message to remove, nothing to do
-    if (!clearedMessage) {
-      return;
-    }
-    
-    set(currentState => {
-      // Remove the specific message we found
-      const newActiveMessages = currentState.activeMessages.filter(
-        m => m.timestamp !== clearedMessage.timestamp
-      );
-      
-      // Legacy compatibility
-      const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
-      const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
-      
-      return {
-        activeMessages: newActiveMessages,
-        activeMessage: legacyMessage,
-        messageTimestamp: legacyTimestamp,
-      };
-    });
-    
-    if (sync) {
-      syncState('CLEAR_MESSAGE', { timestamp, messageId: clearedMessage.message.id });
-    }
+  clearPlaybackMessage: (playbackSessionId) => {
+    const activeMessages = get().activeMessages.filter(active => active.playbackSessionId !== playbackSessionId);
+    if (activeMessages.length === get().activeMessages.length) return false;
+    const lastMessage = activeMessages[activeMessages.length - 1];
+    set({ activeMessages, activeMessage: lastMessage?.message ?? null, messageTimestamp: lastMessage?.timestamp ?? 0 });
+    return true;
   },
 
-  clearActiveMessage: (messageId, timestamp, sync = true) => {
-    // Clear instances of this message that are currently active
-    // First try to match by both messageId and timestamp
-    // If no exact match, clear by messageId only (handles cross-window timestamp differences)
-    set(state => {
-      const exactMatch = state.activeMessages.find(
-        m => m.message.id === messageId && m.timestamp === timestamp
-      );
-      
-      let newActiveMessages: typeof state.activeMessages;
-      if (exactMatch) {
-        // Exact match found - remove just that one
-        newActiveMessages = state.activeMessages.filter(
-          m => !(m.message.id === messageId && m.timestamp === timestamp)
-        );
-      } else {
-        // No exact match - remove all with this messageId (cross-window case)
-        newActiveMessages = state.activeMessages.filter(
-          m => m.message.id !== messageId
-        );
-      }
-      
-      const legacyMessage = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].message : null;
-      const legacyTimestamp = newActiveMessages.length > 0 ? newActiveMessages[newActiveMessages.length - 1].timestamp : 0;
-      
-      return {
-        activeMessages: newActiveMessages,
-        activeMessage: legacyMessage,
-        messageTimestamp: legacyTimestamp,
-      };
-    });
-    if (sync) {
-      syncState('CLEAR_ACTIVE_MESSAGE', { messageId, timestamp });
-    }
+  clearMessage: (timestamp) => {
+    const activeMessages = get().activeMessages.filter(active => active.playbackSessionId !== null || active.timestamp !== timestamp);
+    const lastMessage = activeMessages[activeMessages.length - 1];
+    set({ activeMessages, activeMessage: lastMessage?.message ?? null, messageTimestamp: lastMessage?.timestamp ?? 0 });
   },
 
   resetMessageStats: (sync = true) => {

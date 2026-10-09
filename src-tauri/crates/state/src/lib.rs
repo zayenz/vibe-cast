@@ -6,12 +6,44 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
 use vibe_cast_models::{
-    BroadcastState, CommonSettings, DeviceType, E2EClientKind, E2EClientSnapshot,
-    E2EConfigResponse, E2EProbeEvent, E2EReport, E2ESessionStartResponse, E2ESessionSummary,
-    E2EStateSnapshot, FolderPlaybackQueue, MessageConfig, MessageInfo, PlaybackCommand,
-    PlaybackControlState, RemoteCommand, RemoteMessageStats, RemoteStateV2,
-    RemoteVisualizationPreset, TextStylePreset, VisualizationPreset,
+    build_flat_message_tree_value, flatten_message_tree_value, BroadcastState, CommonSettings,
+    DeviceType, E2EClientKind, E2EClientSnapshot, E2EConfigResponse, E2EProbeEvent, E2EReport,
+    E2ESessionStartResponse, E2ESessionSummary, E2EStateSnapshot, FolderPlaybackQueue,
+    MessageConfig, MessageInfo, PlaybackCommand, PlaybackControlState, RemoteCommand,
+    RemoteMessageStats, RemoteStateV2, RemoteVisualizationPreset, TextStylePreset,
+    VisualizationPreset,
 };
+
+/// A configuration file could not be loaded.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigurationError {
+    #[error("Failed to read configuration '{path}': {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to parse configuration '{path}': {source}")]
+    Parse {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("Configuration '{path}' must contain a JSON object")]
+    InvalidRoot { path: String },
+}
+
+/// Resolve a filesystem path against an optional configuration directory.
+/// Absolute paths and paths without a base directory are returned unchanged.
+pub fn resolve_config_path(path: &str, base_path: Option<&str>) -> String {
+    if Path::new(path).is_absolute() {
+        return path.to_owned();
+    }
+    match base_path {
+        Some(base) => Path::new(base).join(path).to_string_lossy().into_owned(),
+        None => path.to_owned(),
+    }
+}
 
 static NEXT_PLAYBACK_SESSION: AtomicU64 = AtomicU64::new(1);
 
@@ -65,59 +97,6 @@ struct E2ESessionRegistry {
     active_session_id: Option<String>,
     session_order: VecDeque<String>,
     sessions: HashMap<String, E2ESessionRecord>,
-}
-
-fn flatten_message_tree_value(tree: &serde_json::Value) -> Vec<MessageConfig> {
-    fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
-        match node {
-            serde_json::Value::Array(arr) => {
-                for n in arr {
-                    walk(n, out);
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                    match t {
-                        "message" => {
-                            if let Some(msg_val) = obj.get("message") {
-                                if let Ok(msg) =
-                                    serde_json::from_value::<MessageConfig>(msg_val.clone())
-                                {
-                                    out.push(msg);
-                                }
-                            }
-                        }
-                        "folder" => {
-                            if let Some(children) = obj.get("children") {
-                                walk(children, out);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut out = vec![];
-    walk(tree, &mut out);
-    out
-}
-
-fn build_flat_message_tree_value(messages: &[MessageConfig]) -> serde_json::Value {
-    serde_json::Value::Array(
-        messages
-            .iter()
-            .map(|message| {
-                serde_json::json!({
-                    "type": "message",
-                    "id": message.id,
-                    "message": message,
-                })
-            })
-            .collect(),
-    )
 }
 
 fn compact_message_stats_map(
@@ -934,12 +913,6 @@ impl AppStateSync {
         }
     }
 
-    /// Broadcast current state to all SSE subscribers
-    pub fn broadcast(&self, triggered_message: Option<MessageConfig>) {
-        self.set_triggered_message_value(triggered_message);
-        self.broadcast_current_state();
-    }
-
     /// Broadcast the current desktop and remote snapshots.
     pub fn broadcast_current_state(&self) {
         let state = self.get_state();
@@ -977,126 +950,127 @@ impl AppStateSync {
         self.mark_runtime_changed();
     }
 
-    /// Load configuration from a JSON file
-    pub fn load_config_from_file(&self, config_path: &str) -> Result<(), String> {
-        let path = Path::new(config_path);
-        if !path.exists() {
-            return Err(format!("Config file does not exist: {}", config_path));
-        }
-
-        // Extract and set the config base path (directory containing the config file)
-        if let Some(parent) = path.parent() {
-            let base_path = parent.to_string_lossy().to_string();
-            eprintln!("[Rust] Setting config base path from file: {}", base_path);
-            if let Ok(mut m) = self.config_base_path.lock() {
-                *m = Some(base_path);
+    /// Apply configuration fields without incrementing revisions or broadcasting.
+    /// Missing fields preserve their current values, except the active preset,
+    /// which is cleared when omitted or null, and the tree, which is rebuilt
+    /// from messages when omitted. A supplied tree takes precedence over messages.
+    /// Invalid typed fields are ignored for compatibility with existing loaders.
+    pub fn apply_configuration(&self, obj: &serde_json::Map<String, serde_json::Value>) {
+        if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
+            if let Ok(mut m) = self.active_visualization.lock() {
+                *m = viz.to_string();
             }
         }
-
-        let content =
-            fs::read_to_string(path).map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        let config: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config JSON: {}", e))?;
-
-        // Apply configuration similar to the "load-configuration" command handler
-        if let Some(obj) = config.as_object() {
-            if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
-                if let Ok(mut m) = self.active_visualization.lock() {
-                    *m = viz.to_string();
+        if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
+            if let Ok(mut m) = self.enabled_visualizations.lock() {
+                *m = vizs
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+            }
+        }
+        if let Some(settings) = obj.get("commonSettings") {
+            if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
+                if let Ok(mut m) = self.common_settings.lock() {
+                    *m = s;
                 }
             }
-            if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
-                if let Ok(mut m) = self.enabled_visualizations.lock() {
-                    *m = vizs
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect();
-                }
+        }
+        if let Some(settings) = obj.get("visualizationSettings") {
+            if let Ok(mut m) = self.visualization_settings.lock() {
+                *m = settings.clone();
             }
-            if let Some(settings) = obj.get("commonSettings") {
-                if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
-                    if let Ok(mut m) = self.common_settings.lock() {
-                        *m = s;
-                    }
-                }
-            }
-            if let Some(settings) = obj.get("visualizationSettings") {
-                if let Ok(mut m) = self.visualization_settings.lock() {
-                    *m = settings.clone();
-                }
-            }
-            if let Some(msgs) = obj.get("messages") {
-                if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
-                    if let Ok(mut m) = self.messages.lock() {
-                        *m = messages;
-                    }
-                }
-            }
-            if let Some(tree) = obj.get("messageTree") {
-                if let Ok(mut t) = self.message_tree.lock() {
-                    *t = tree.clone();
-                }
-                // Ensure flattened messages match tree
-                let flat = flatten_message_tree_value(tree);
+        }
+        if let Some(msgs) = obj.get("messages") {
+            if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone()) {
                 if let Ok(mut m) = self.messages.lock() {
-                    *m = flat;
-                }
-            } else {
-                // If no tree was provided, build a flat tree from messages
-                if let Ok(m) = self.messages.lock() {
-                    if let Ok(mut t) = self.message_tree.lock() {
-                        *t = serde_json::json!(m
-                            .iter()
-                            .map(|msg| serde_json::json!({
-                                "type": "message",
-                                "id": msg.id,
-                                "message": msg
-                            }))
-                            .collect::<Vec<serde_json::Value>>());
-                    }
-                }
-            }
-            if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
-                if let Ok(mut m) = self.default_text_style.lock() {
-                    *m = style.to_string();
-                }
-            }
-            if let Some(settings) = obj.get("textStyleSettings") {
-                if let Ok(mut m) = self.text_style_settings.lock() {
-                    *m = settings.clone();
-                }
-            }
-            if let Some(presets) = obj.get("visualizationPresets") {
-                if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
-                    if let Ok(mut m) = self.visualization_presets.lock() {
-                        *m = p;
-                    }
-                }
-            }
-            if let Ok(mut active_preset) = self.active_visualization_preset.lock() {
-                *active_preset = obj
-                    .get("activeVisualizationPreset")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned);
-            }
-            if let Some(presets) = obj.get("textStylePresets") {
-                if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
-                    if let Ok(mut m) = self.text_style_presets.lock() {
-                        *m = p;
-                    }
-                }
-            }
-            if let Some(stats) = obj.get("messageStats") {
-                if let Ok(mut m) = self.message_stats.lock() {
-                    *m = stats.clone();
+                    *m = messages;
                 }
             }
         }
+        if let Some(tree) = obj.get("messageTree") {
+            if let Ok(mut t) = self.message_tree.lock() {
+                *t = tree.clone();
+            }
+            // Ensure flattened messages match tree
+            let flat = flatten_message_tree_value(tree);
+            if let Ok(mut m) = self.messages.lock() {
+                *m = flat;
+            }
+        } else {
+            // If no tree was provided, build a flat tree from messages
+            if let Ok(m) = self.messages.lock() {
+                if let Ok(mut t) = self.message_tree.lock() {
+                    *t = build_flat_message_tree_value(m.as_slice());
+                }
+            }
+        }
+        if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
+            if let Ok(mut m) = self.default_text_style.lock() {
+                *m = style.to_string();
+            }
+        }
+        if let Some(settings) = obj.get("textStyleSettings") {
+            if let Ok(mut m) = self.text_style_settings.lock() {
+                *m = settings.clone();
+            }
+        }
+        if let Some(presets) = obj.get("visualizationPresets") {
+            if let Ok(p) = serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone()) {
+                if let Ok(mut m) = self.visualization_presets.lock() {
+                    *m = p;
+                }
+            }
+        }
+        if let Ok(mut active_preset) = self.active_visualization_preset.lock() {
+            *active_preset = obj
+                .get("activeVisualizationPreset")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+        }
+        if let Some(presets) = obj.get("textStylePresets") {
+            if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
+                if let Ok(mut m) = self.text_style_presets.lock() {
+                    *m = p;
+                }
+            }
+        }
+        if let Some(stats) = obj.get("messageStats") {
+            if let Ok(mut m) = self.message_stats.lock() {
+                *m = stats.clone();
+            }
+        }
+    }
 
+    /// Load configuration and its base path, then broadcast the updated state.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or parsed, or its JSON root
+    /// is not an object. These failures leave state and the base path unchanged.
+    pub fn load_config_from_file(&self, config_path: &str) -> Result<(), ConfigurationError> {
+        let path = Path::new(config_path);
+        let content = fs::read_to_string(path).map_err(|source| ConfigurationError::Read {
+            path: config_path.to_owned(),
+            source,
+        })?;
+        let config: serde_json::Value =
+            serde_json::from_str(&content).map_err(|source| ConfigurationError::Parse {
+                path: config_path.to_owned(),
+                source,
+            })?;
+        let obj = config
+            .as_object()
+            .ok_or_else(|| ConfigurationError::InvalidRoot {
+                path: config_path.to_owned(),
+            })?;
+        self.apply_configuration(obj);
+        if let Some(parent) = path.parent() {
+            if let Ok(mut base_path) = self.config_base_path.lock() {
+                *base_path = Some(parent.to_string_lossy().into_owned());
+            }
+        }
         self.mark_config_changed();
         self.broadcast_current_state();
-
         Ok(())
     }
 
@@ -1795,6 +1769,77 @@ mod tests;
 #[cfg(test)]
 mod remote_state_tests {
     use super::*;
+
+    #[test]
+    fn failed_configuration_file_load_preserves_state_and_base_path() {
+        let state = AppStateSync::new();
+        *state.config_base_path.lock().unwrap() = Some("existing-config-directory".to_owned());
+        let before = serde_json::to_value(state.get_state()).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "vibe-cast-invalid-config-{}-{}.json",
+            std::process::id(),
+            next_playback_session_id()
+        ));
+        let assert_unchanged = || {
+            assert_eq!(serde_json::to_value(state.get_state()).unwrap(), before);
+            assert_eq!(
+                state.config_base_path.lock().unwrap().as_deref(),
+                Some("existing-config-directory")
+            );
+        };
+
+        assert!(matches!(
+            state.load_config_from_file(path.to_str().unwrap()),
+            Err(ConfigurationError::Read { .. })
+        ));
+        assert_unchanged();
+        fs::write(&path, "{ invalid JSON").unwrap();
+        assert!(matches!(
+            state.load_config_from_file(path.to_str().unwrap()),
+            Err(ConfigurationError::Parse { .. })
+        ));
+        assert_unchanged();
+        fs::write(&path, "[]").unwrap();
+        assert!(matches!(
+            state.load_config_from_file(path.to_str().unwrap()),
+            Err(ConfigurationError::InvalidRoot { .. })
+        ));
+        fs::remove_file(&path).unwrap();
+        assert_unchanged();
+    }
+
+    #[test]
+    fn shared_configuration_preserves_tree_precedence_and_legacy_messages() {
+        let state = AppStateSync::new();
+        let messages = state.messages.lock().unwrap().clone();
+        let first = &messages[0];
+        let second = &messages[1];
+        let before_revision = state.get_state().config_revision;
+        let mut updates = state.state_tx.subscribe();
+        let tree = serde_json::json!([{
+            "type": "folder", "id": "folder", "name": "Folder", "children": [
+                { "type": "message", "id": second.id, "message": second }
+            ]
+        }]);
+        let config = serde_json::json!({ "messages": [first], "messageTree": tree });
+        state.apply_configuration(config.as_object().unwrap());
+        let snapshot = state.get_state();
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].id, second.id);
+        assert_eq!(snapshot.message_tree, tree);
+
+        let legacy_config = serde_json::json!({ "messages": [first] });
+        state.apply_configuration(legacy_config.as_object().unwrap());
+        let snapshot = state.get_state();
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].id, first.id);
+        assert_eq!(snapshot.message_tree[0]["message"]["id"], first.id);
+        assert_eq!(snapshot.config_revision, before_revision);
+        assert!(matches!(
+            updates.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
 
     #[test]
     fn playback_restarts_receive_unique_sessions() {

@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { listen, emit } from '@tauri-apps/api/event';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '../store';
 import { getVisualization } from '../plugins/visualizations';
@@ -7,7 +7,7 @@ import { getTextStyle } from '../plugins/textStyles';
 import { MessageConfig, CommonVisualizationSettings, RemoteCommand, getDefaultsFromSchema } from '../plugins/types';
 import { getDefaultsFromSchema as getDefaults } from '../plugins/types';
 import { computeSplitSequence } from '../utils/messageParts';
-import { useAppState, PlaybackControlState } from '../hooks/useAppState';
+import { useAppState, AppState, PlaybackControlState } from '../hooks/useAppState';
 import {
   buildE2EStateSnapshot,
   discoverE2EContext,
@@ -282,11 +282,13 @@ const VisualizationRenderer: React.FC<{
 
   return (
     <div className="absolute inset-0">
-      <VizComponent
-        audioData={audioData}
-        commonSettings={commonSettings}
-        customSettings={customSettings}
-      />
+      <Suspense fallback={<div className="absolute inset-0 bg-black" />}>
+        <VizComponent
+          audioData={audioData}
+          commonSettings={commonSettings}
+          customSettings={customSettings}
+        />
+      </Suspense>
     </div>
   );
 };
@@ -523,13 +525,27 @@ export const VisualizerWindow: React.FC = () => {
   const triggerMessage = useStore((state) => state.triggerMessage);
   const clearMessage = useStore((state) => state.clearMessage);
   const setCommonSettings = useStore((state) => state.setCommonSettings);
-  const setVisualizationSetting = useStore((state) => state.setVisualizationSetting);
   const setVisualizationSettings = useStore((state) => state.setVisualizationSettings);
   const setTextStyleSetting = useStore((state) => state.setTextStyleSetting);
   const loadConfiguration = useStore((state) => state.loadConfiguration);
   
   // Legacy compatibility
   const setMode = useStore((state) => state.setMode);
+
+  const lastPlaybackSnapshotRef = useRef<{ revision: number; sessionId: string | null }>({ revision: -1, sessionId: null });
+  const reconcilePlayback = useCallback((snapshot: AppState) => {
+    if (!snapshot.playbackControl) return;
+    const previous = lastPlaybackSnapshotRef.current;
+    if (snapshot.runtimeRevision <= previous.revision) return;
+    const sessionId = snapshot.playbackControl.sessionId;
+    lastPlaybackSnapshotRef.current = { revision: snapshot.runtimeRevision, sessionId };
+    if (sessionId === previous.sessionId) return;
+    if (sessionId && snapshot.triggeredMessage) {
+      triggerMessage(snapshot.triggeredMessage, sessionId);
+    } else if (!sessionId) {
+      useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
+    }
+  }, [triggerMessage]);
 
   // Helper to handle remote commands (from both Tauri events and SSE)
   const handleRemoteCommand = useCallback((command: string, payload: unknown) => {
@@ -567,23 +583,6 @@ export const VisualizerWindow: React.FC = () => {
           useStore.setState({ visualizationPresets: payload as any[] });
         }
         break;
-      case 'trigger-message': {
-        // Handle both legacy string and new MessageConfig formats
-        const msg =
-          typeof payload === 'string'
-            ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
-            : (payload as MessageConfig);
-        console.log('[VisualizerWindow] Received trigger-message:', { id: msg.id, text: msg.text?.substring(0, 50) });
-        // Avoid duplicate triggers if already active
-        const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
-        if (!isActive) {
-          console.log('[VisualizerWindow] Triggering message');
-          triggerMessage(msg, false);
-        } else {
-          console.log('[VisualizerWindow] Message already active, skipping trigger');
-        }
-        break;
-      }
       case 'set-common-settings':
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         setCommonSettings(payload as any, false);
@@ -601,25 +600,6 @@ export const VisualizerWindow: React.FC = () => {
       case 'toggle-debug-overlay':
         // Enable debug overlay via remote command (useful when keyboard shortcuts don't work)
         setShowDevOverlay((v) => !v);
-        break;
-      case 'clear-active-message': {
-        if (payload && typeof payload === 'object' && 'messageId' in payload) {
-          const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
-          const ts = typeof timestamp === 'number' ? timestamp : 0;
-          useStore.getState().clearActiveMessage(messageId, ts, false);
-        }
-        break;
-      }
-      case 'play-folder':
-        // Folder playback handled by ControlPlane, visualizer just needs to display triggered messages
-        break;
-      case 'cancel-folder-playback':
-        // Cancel folder queue and clear current message
-        useStore.getState().cancelFolderPlayback(false);
-        break;
-      case 'clear-message':
-        // Clear all active messages (used by folder cancellation)
-        useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
         break;
       case 'report-status': {
         console.log('[VisualizerWindow] Generating E2E report...');
@@ -647,7 +627,6 @@ export const VisualizerWindow: React.FC = () => {
     setCommonSettings, 
     setVisualizationSettings, 
     loadConfiguration, 
-    triggerMessage,
     apiBase
   ]);
 
@@ -721,11 +700,13 @@ export const VisualizerWindow: React.FC = () => {
   useEffect(() => {
     if (!serverReady) return;
     
+    let cancelled = false;
     const loadStateViaTauri = async () => {
       try {
         addDebugLog('log', 'Attempting to load state via Tauri IPC...');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const state = await invoke<any>('get_app_state');
+        const state = await invoke<AppState>('get_app_state');
+        if (cancelled) return;
+        reconcilePlayback(state);
         addDebugLog('log', 'Got state via Tauri IPC', {
           activeVisualization: state.activeVisualization,
           activeVisualizationPreset: state.activeVisualizationPreset,
@@ -761,7 +742,8 @@ export const VisualizerWindow: React.FC = () => {
     
     // Try to load state via Tauri IPC immediately when server is ready
     loadStateViaTauri();
-  }, [serverReady, loadConfiguration]);
+    return () => { cancelled = true; };
+  }, [serverReady, loadConfiguration, reconcilePlayback]);
 
   // Track whether initial SSE state has been loaded
   // This is critical for production builds where the window is recreated
@@ -810,22 +792,8 @@ export const VisualizerWindow: React.FC = () => {
       }, false); // sync=false to avoid broadcasting back
     }
     
-    // Fallback: Clear active messages if playback has stopped according to SSE state
-    // This provides a safety net if the playback-control-changed event isn't received
-    const playbackControl = sseState.playbackControl;
-    const triggeredMessage = sseState.triggeredMessage;
-    if (playbackControl && !playbackControl.isPlaying && !triggeredMessage) {
-      const currentActiveMessages = useStore.getState().activeMessages;
-      if (currentActiveMessages.length > 0) {
-        addDebugLog('log', 'SSE state indicates playback stopped, clearing active messages', {
-          playbackControlIsPlaying: playbackControl.isPlaying,
-          triggeredMessage: triggeredMessage ? 'exists' : 'null',
-          activeMessagesCount: currentActiveMessages.length
-        });
-        useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
-      }
-    }
-    
+    reconcilePlayback(sseState);
+
     // Mark state as loaded once we have textStylePresets (even if empty array)
     // This ensures messages can render safely with proper text style plugins
     // Also ensure we have at least received SSE state once
@@ -837,7 +805,7 @@ export const VisualizerWindow: React.FC = () => {
       hasTextStylePresets: Array.isArray(sseState.textStylePresets),
       hasReceivedSSEState,
     });
-  }, [sseState, sseConnected, loadConfiguration, hasReceivedSSEState]);
+  }, [sseState, sseConnected, loadConfiguration, hasReceivedSSEState, reconcilePlayback]);
 
   useEffect(() => {
     const localActiveMessageId = activeMessages[0]?.message.id ?? null;
@@ -918,57 +886,6 @@ export const VisualizerWindow: React.FC = () => {
     }
   }, [sseState?.folderPlaybackQueue]);
 
-  // Sync triggeredMessage from SSE to activeMessages store
-  // This is critical for production builds where Tauri events may not work
-  // Use a ref to track the last processed triggered message to avoid duplicates
-  const lastTriggeredMessageRef = useRef<{ id: string; timestamp: number } | null>(null);
-  
-  useEffect(() => {
-    if (!sseState?.triggeredMessage) {
-      // Clear ref when triggeredMessage is cleared (so we can process new ones)
-      if (lastTriggeredMessageRef.current) {
-        lastTriggeredMessageRef.current = null;
-      }
-      return;
-    }
-    
-    const triggeredMsg = sseState.triggeredMessage;
-    const now = Date.now();
-    
-    // Check if we've already processed this exact message
-    if (lastTriggeredMessageRef.current?.id === triggeredMsg.id) {
-      const timeSinceLastProcess = now - lastTriggeredMessageRef.current.timestamp;
-      if (timeSinceLastProcess < 3000) {
-        // Already processed this message recently, skip
-        return;
-      }
-    }
-    
-    const currentActiveMessages = useStore.getState().activeMessages;
-    
-    // Check if this message is already active (avoid duplicates)
-    const isAlreadyActive = currentActiveMessages.some(
-      am => am.message.id === triggeredMsg.id
-    );
-    
-    if (!isAlreadyActive) {
-      addDebugLog('log', 'Syncing triggeredMessage from SSE (fallback when Tauri events fail)', {
-        id: triggeredMsg.id,
-        text: triggeredMsg.text?.substring(0, 50),
-        textStyle: triggeredMsg.textStyle,
-      });
-      console.log('[VisualizerWindow] Syncing triggeredMessage from SSE to store (SSE fallback):', {
-        id: triggeredMsg.id,
-        text: triggeredMsg.text,
-        textStyle: triggeredMsg.textStyle,
-      });
-      triggerMessage(triggeredMsg, false);
-      lastTriggeredMessageRef.current = { id: triggeredMsg.id, timestamp: now };
-    } else {
-      addDebugLog('log', 'triggeredMessage already active, skipping SSE sync', { id: triggeredMsg.id });
-    }
-  }, [sseState?.triggeredMessage, triggerMessage]);
-
   // Debug: Log current state after store updates
   useEffect(() => {
     console.log('[VisualizerWindow] Store state:', {
@@ -1041,80 +958,16 @@ export const VisualizerWindow: React.FC = () => {
       addDebugLog('warn', 'Failed to listen to audio-data (expected in production if Tauri API is missing)', { err });
     });
 
-    // Listen for triggered-message events from Tauri commands (Control Plane)
-    // This is the PRIMARY event for message triggering from Control Plane
-    const unlistenTriggeredPromise = listen<MessageConfig>('triggered-message', (event) => {
-      const msg = event.payload;
-      addDebugLog('log', 'Received triggered-message event', { id: msg.id, text: msg.text?.substring(0, 50) });
-      console.log('[VisualizerWindow] Received triggered-message event:', { id: msg.id, text: msg.text?.substring(0, 50) });
-      
-      // Check if message is already active to avoid duplicates
-      const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
-      if (!isActive) {
-        addDebugLog('log', 'Triggering message from triggered-message event', { id: msg.id });
-        console.log('[VisualizerWindow] Triggering message from triggered-message event');
-        triggerMessage(msg, false);
-      } else {
-        addDebugLog('log', 'Message already active, skipping triggered-message event', { id: msg.id });
-        console.log('[VisualizerWindow] Message already active, skipping triggered-message event');
-      }
-    });
-    
-    // Catch errors for triggered-message listener
-    unlistenTriggeredPromise.catch(err => {
-      addDebugLog('warn', 'Failed to listen to triggered-message (expected in production)', { err });
-    });
-
-    // Listen for playback control changes to handle stop events
-    // This is critical for message cancellation - when stop_message_playback is called,
-    // the backend emits playback-control-changed with MESSAGE_STOPPED, and we need to clear active messages
-    const unlistenPlaybackControlPromise = listen<{ 
-      type: string; 
+    // IPC and SSE carry the same complete playback snapshot.
+    const unlistenPlaybackControlPromise = listen<{
+      type: string;
       playbackControl: PlaybackControlState;
-      state?: unknown;
+      state: AppState;
     }>('playback-control-changed', (event) => {
-      const { type, playbackControl } = event.payload;
-      addDebugLog('log', 'Received playback-control-changed event', { 
-        type, 
-        isPlaying: playbackControl.isPlaying,
-        currentMessageId: playbackControl.currentMessage?.id 
-      });
-      console.log('[VisualizerWindow] Received playback-control-changed event:', {
-        type,
-        isPlaying: playbackControl.isPlaying,
-        currentMessageId: playbackControl.currentMessage?.id,
-        canStop: playbackControl.canStop
-      });
-      
-      if (type === 'MESSAGE_STOPPED') {
-        // Clear all active messages when playback is stopped
-        const currentActiveMessages = useStore.getState().activeMessages;
-        if (currentActiveMessages.length > 0) {
-          addDebugLog('log', 'Clearing active messages due to MESSAGE_STOPPED event', {
-            count: currentActiveMessages.length,
-            messageIds: currentActiveMessages.map(am => am.message.id)
-          });
-          console.log('[VisualizerWindow] Clearing active messages due to MESSAGE_STOPPED event:', {
-            count: currentActiveMessages.length,
-            messageIds: currentActiveMessages.map(am => am.message.id)
-          });
-          // Clear all active messages
-          useStore.setState({ activeMessages: [], activeMessage: null, messageTimestamp: 0 });
-        } else {
-          addDebugLog('log', 'MESSAGE_STOPPED received but no active messages to clear');
-        }
-      } else if (type === 'MESSAGE_STARTED') {
-        // Log when playback starts for debugging
-        addDebugLog('log', 'MESSAGE_STARTED event received', {
-          currentMessageId: playbackControl.currentMessage?.id,
-          isPlaying: playbackControl.isPlaying
-        });
-      }
+      reconcilePlayback(event.payload.state);
     });
-    
-    // Catch errors for playback-control-changed listener
     unlistenPlaybackControlPromise.catch(err => {
-      addDebugLog('warn', 'Failed to listen to playback-control-changed (expected in production)', { err });
+      addDebugLog('warn', 'Failed to listen to playback-control-changed', { err });
     });
 
     // Listen for remote commands
@@ -1145,22 +998,6 @@ export const VisualizerWindow: React.FC = () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           setMessages(payload as any[], false);
           break;
-        case 'TRIGGER_MESSAGE': {
-          // Handle both legacy string and new MessageConfig formats
-          const msg =
-            typeof payload === 'string'
-              ? { id: 'triggered', text: payload, textStyle: 'scrolling-capitals' }
-              : (payload as MessageConfig);
-          console.log('[VisualizerWindow] Received TRIGGER_MESSAGE via state-changed event:', { id: msg.id, text: msg.text?.substring(0, 50) });
-          const isActive = useStore.getState().activeMessages.some((am) => am.message.id === msg.id);
-          if (!isActive) {
-            console.log('[VisualizerWindow] Triggering message via state-changed event');
-            triggerMessage(msg, false);
-          } else {
-            console.log('[VisualizerWindow] Message already active, skipping state-changed trigger');
-          }
-          break;
-        }
         case 'SET_COMMON_SETTINGS':
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           setCommonSettings(payload as any, false);
@@ -1207,25 +1044,6 @@ export const VisualizerWindow: React.FC = () => {
           setRecoveryCount((c) => c + 1);
           setVizRemountKey((k) => k + 1);
           break;
-        case 'CLEAR_MESSAGE':
-          // Clear message by timestamp (handled locally, no sync needed)
-          // Payload can be { timestamp, messageId } or just timestamp (legacy)
-          if (payload && typeof payload === 'object' && 'timestamp' in payload) {
-            const { timestamp, messageId } = payload as { timestamp: number; messageId?: string };
-            clearMessage(timestamp, false, messageId);
-          } else if (typeof payload === 'number') {
-            clearMessage(payload, false);
-          }
-          break;
-        case 'CLEAR_ACTIVE_MESSAGE': {
-          // Clear specific active message; allow missing timestamp (clear by id)
-          if (payload && typeof payload === 'object' && 'messageId' in payload) {
-            const { messageId, timestamp } = payload as { messageId: string; timestamp?: number };
-            const ts = typeof timestamp === 'number' ? timestamp : 0;
-            useStore.getState().clearActiveMessage(messageId, ts, false);
-          }
-          break;
-        }
       }
     });
     
@@ -1237,7 +1055,6 @@ export const VisualizerWindow: React.FC = () => {
     return () => {
       // Clean up using the promise results if they resolved
       unlistenAudioPromise.then((u) => u && u()).catch(() => {});
-      unlistenTriggeredPromise.then((u) => u && u()).catch(() => {});
       unlistenPlaybackControlPromise.then((u) => u && u()).catch(() => {});
       unlistenRemotePromise.then((u) => u && u()).catch(() => {});
       unlistenStatePromise.then((u) => u && u()).catch(() => {});
@@ -1252,16 +1069,16 @@ export const VisualizerWindow: React.FC = () => {
     setActiveVisualization, 
     setMessages, 
     triggerMessage,
-    clearMessage,
     setCommonSettings,
-    setVisualizationSetting,
     setVisualizationSettings,
     setTextStyleSetting,
     loadConfiguration,
     handleRemoteCommand,
+    reconcilePlayback,
   ]);
 
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     let raf = 0;
     const tick = () => {
       lastRafRef.current = performance.now();
@@ -1420,7 +1237,7 @@ export const VisualizerWindow: React.FC = () => {
                   textStyle: 'scrolling-capitals'
                 };
                 addDebugLog('log', 'Testing local message trigger', { id: testMsg.id });
-                triggerMessage(testMsg as MessageConfig, false);
+                triggerMessage(testMsg as MessageConfig);
               }}
               style={{
                 background: 'rgba(74, 222, 128, 0.2)',
@@ -1509,7 +1326,7 @@ export const VisualizerWindow: React.FC = () => {
       <div className="absolute inset-0 pointer-events-none z-[100]" data-message-overlay="true">
         {isStateLoaded ? (
           <>
-            {activeMessages.map(({ message, timestamp }, index) => {
+            {activeMessages.map(({ message, timestamp, playbackSessionId }, index) => {
             // Calculate cumulative vertical offset based on heights of previous messages
             let cumulativeOffset = 0;
             for (let i = 0; i < index; i++) {
@@ -1522,7 +1339,7 @@ export const VisualizerWindow: React.FC = () => {
             
             return (
               <TextStyleRenderer
-                key={timestamp}
+                key={playbackSessionId ?? timestamp}
                 message={message}
                 messageTimestamp={timestamp}
                 textStyleSettings={textStyleSettings}
@@ -1531,17 +1348,13 @@ export const VisualizerWindow: React.FC = () => {
                 repeatCount={message.repeatCount ?? 1}
                 onComplete={() => {
                   console.log('[VisualizerWindow] Message completed:', message.id, 'timestamp:', timestamp);
-                  // 1) Clear local UI immediately
-                  clearMessage(timestamp, false, message.id);
-                  // 2) Notify ControlPlane immediately (hybrid model)
-                  emit('state-changed', {
-                    type: 'CLEAR_MESSAGE',
-                    payload: { timestamp, messageId: message.id },
-                  }).catch((err) => {
-                    console.warn('[VisualizerWindow] Failed to emit state-changed event:', err);
-                  });
-                  // 3) Notify Rust backend - it handles queue advancement + SSE canonical state
-                  sendCommand('message-complete', { messageId: message.id }).catch((err) => {
+                  if (!playbackSessionId) {
+                    clearMessage(timestamp);
+                    return;
+                  }
+                  // Identity belongs to this renderer, even if a new playback starts.
+                  if (!useStore.getState().clearPlaybackMessage(playbackSessionId)) return;
+                  sendCommand('message-complete', { messageId: message.id, playbackSessionId }).catch((err) => {
                     console.error('[VisualizerWindow] Failed to send message-complete command:', err);
                   });
                 }}

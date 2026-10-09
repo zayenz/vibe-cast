@@ -26,11 +26,12 @@ use tower_http::{
 };
 
 use vibe_cast_models::{
-    BroadcastState, CommonSettings, DeviceType, E2EClientKind, E2EProbeEvent, E2EReport,
-    E2ESessionEndRequest, E2ESessionStartRequest, FolderPlaybackQueue, MessageConfig,
-    RemoteCommand, RemoteStartupPerfReport, TextStylePreset, VisualizationPreset,
+    build_flat_message_tree_value, flatten_message_tree_value, BroadcastState, CommonSettings,
+    DeviceType, E2EClientKind, E2EProbeEvent, E2EReport, E2ESessionEndRequest,
+    E2ESessionStartRequest, FolderPlaybackQueue, MessageConfig, RemoteCommand,
+    RemoteStartupPerfReport, TextStylePreset, VisualizationPreset,
 };
-use vibe_cast_state::AppStateSync;
+use vibe_cast_state::{resolve_config_path, AppStateSync};
 
 const MAX_COMMAND_BODY_BYTES: usize = 32 * 1024 * 1024;
 
@@ -140,74 +141,6 @@ impl ApiErrorResponse {
             )),
         )
     }
-}
-
-fn resolve_path(path: &str, base_path: Option<&str>) -> String {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        return path.to_string();
-    }
-    if let Some(base) = base_path {
-        let base_path = Path::new(base);
-        let resolved = base_path.join(path);
-        return resolved.to_string_lossy().to_string();
-    }
-    path.to_string()
-}
-
-// ... (keep existing helper functions flatten_message_tree, build_flat_message_tree, collect_messages_from_folder) ...
-
-fn flatten_message_tree(tree: &serde_json::Value) -> Vec<MessageConfig> {
-    fn walk(node: &serde_json::Value, out: &mut Vec<MessageConfig>) {
-        match node {
-            serde_json::Value::Array(arr) => {
-                for n in arr {
-                    walk(n, out);
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                    match t {
-                        "message" => {
-                            if let Some(msg_val) = obj.get("message") {
-                                if let Ok(msg) =
-                                    serde_json::from_value::<MessageConfig>(msg_val.clone())
-                                {
-                                    out.push(msg);
-                                }
-                            }
-                        }
-                        "folder" => {
-                            if let Some(children) = obj.get("children") {
-                                walk(children, out);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut out: Vec<MessageConfig> = vec![];
-    walk(tree, &mut out);
-    out
-}
-
-fn build_flat_message_tree(messages: &[MessageConfig]) -> serde_json::Value {
-    serde_json::Value::Array(
-        messages
-            .iter()
-            .map(|m| {
-                serde_json::json!({
-                    "type": "message",
-                    "id": m.id,
-                    "message": m
-                })
-            })
-            .collect(),
-    )
 }
 
 /// Collect all message IDs from a folder in the message tree
@@ -455,14 +388,8 @@ fn schedule_playback_timeout<R: Runtime>(
                 serde_json::json!({ "messageId": message_id }),
             );
 
-            let clear_cmd = serde_json::json!({
-                "command": "clear-active-message",
-                "payload": { "messageId": message_id }
-            });
-            let _ = state.app_handle.emit("remote-command", clear_cmd);
-
             if let Some(next_message) = next_message {
-                start_message_with_side_effects(&state, next_message, DeviceType::System, true);
+                start_message_with_side_effects(&state, next_message, DeviceType::System);
                 state.app_state_sync.broadcast_current_state();
             } else if matched_current {
                 emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
@@ -475,7 +402,6 @@ fn start_message_with_side_effects<R: Runtime>(
     state: &AppState<R>,
     msg: MessageConfig,
     device_type: DeviceType,
-    emit_trigger_command: bool,
 ) {
     let message_id = msg.id.clone();
     state
@@ -490,14 +416,6 @@ fn start_message_with_side_effects<R: Runtime>(
     );
 
     update_message_stats(state.app_state_sync.as_ref(), &msg);
-
-    if emit_trigger_command {
-        let trigger_cmd = serde_json::json!({
-            "command": "trigger-message",
-            "payload": msg.clone()
-        });
-        let _ = state.app_handle.emit("remote-command", trigger_cmd);
-    }
 
     if let Some(duration) = state.app_state_sync.calculate_safety_timeout_duration(&msg) {
         schedule_playback_timeout(state.clone(), message_id, duration, session_id);
@@ -933,7 +851,7 @@ async fn list_images(
             }
         };
 
-        let resolved_path = resolve_path(&folder_path, base_path_opt.as_deref());
+        let resolved_path = resolve_config_path(&folder_path, base_path_opt.as_deref());
         eprintln!(
             "[Server] [list_images] Path '{}' resolved to: '{}'",
             folder_path, resolved_path
@@ -1213,7 +1131,7 @@ async fn handle_command<R: Runtime>(
                     if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
                         *queue = None;
                     }
-                    start_message_with_side_effects(&state, msg, device_type.clone(), false);
+                    start_message_with_side_effects(&state, msg, device_type.clone());
                 }
             }
         }
@@ -1254,7 +1172,7 @@ async fn handle_command<R: Runtime>(
                     // Keep a flat tree representation in sync
                     if let Ok(m) = state.app_state_sync.messages.lock() {
                         if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
-                            *t = build_flat_message_tree(m.as_slice());
+                            *t = build_flat_message_tree_value(m.as_slice());
                         }
                     }
                     state.app_state_sync.mark_config_changed();
@@ -1284,7 +1202,7 @@ async fn handle_command<R: Runtime>(
                     // Keep a flat tree representation in sync
                     if let Ok(m) = state.app_state_sync.messages.lock() {
                         if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
-                            *t = build_flat_message_tree(m.as_slice());
+                            *t = build_flat_message_tree_value(m.as_slice());
                         }
                     }
                     state.app_state_sync.mark_config_changed();
@@ -1297,7 +1215,7 @@ async fn handle_command<R: Runtime>(
                     *t = p.clone();
                 }
                 // Also update the flattened messages list for backward compatibility / remote UI.
-                let flat = flatten_message_tree(p);
+                let flat = flatten_message_tree_value(p);
                 if let Ok(mut m) = state.app_state_sync.messages.lock() {
                     *m = flat;
                 }
@@ -1363,89 +1281,47 @@ async fn handle_command<R: Runtime>(
                 }
             }
         }
-        "clear-active-message" => {
-            // Manual stop of a message - clear triggered message and handle queue
-            if let Some(p) = &payload.payload {
-                if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    let playback = state.app_state_sync.get_playback_control();
-                    let playback_current_id = playback
-                        .current_message
-                        .as_ref()
-                        .map(|message| message.id.clone());
-                    if !playback.is_playing || playback_current_id.as_deref() != Some(message_id) {
-                        return Json(serde_json::json!({ "status": "ok" })).into_response();
-                    }
-                    let advance_result =
-                        resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
-                    let matched_current = advance_result.matched_current;
-                    let next_message = advance_result.next_message;
-
-                    if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
-                        eprintln!(
-                            "[Server] [folder-playback] Clearing queue after manual stop; missing message '{}'",
-                            missing_next_message_id
-                        );
-                    }
-
-                    // Trigger next message if any
-                    if let Some(msg) = next_message {
-                        start_message_with_side_effects(&state, msg, DeviceType::System, true);
-                    } else if matched_current || playback_current_id.as_deref() == Some(message_id)
-                    {
-                        // Stopped current message with no next — sync playback_control and notify all views
-                        state
-                            .app_state_sync
-                            .stop_message_playback(DeviceType::MobileRemote);
-                        emit_playback_control_event(
-                            &state,
-                            "MESSAGE_STOPPED",
-                            serde_json::Value::Null,
-                        );
-                    }
-                }
+        "message-complete" | "clear-active-message" => {
+            let Some(p) = &payload.payload else {
+                return ApiErrorResponse::bad_request("Missing playback payload").into_response();
+            };
+            let Some(message_id) = p.get("messageId").and_then(|value| value.as_str()) else {
+                return ApiErrorResponse::bad_request("Missing messageId").into_response();
+            };
+            let Some(playback_session_id) =
+                p.get("playbackSessionId").and_then(|value| value.as_str())
+            else {
+                return ApiErrorResponse::bad_request("Missing playbackSessionId").into_response();
+            };
+            let playback = state.app_state_sync.get_playback_control();
+            if !playback.is_playing
+                || playback
+                    .current_message
+                    .as_ref()
+                    .map(|message| message.id.as_str())
+                    != Some(message_id)
+                || playback.session_id.as_deref() != Some(playback_session_id)
+            {
+                return Json(serde_json::json!({ "status": "ok" })).into_response();
             }
-        }
-        "message-complete" => {
-            // Message finished playing - handle queue advancement
-            // This is the single source of truth for queue advancement
-            if let Some(p) = &payload.payload {
-                if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    let playback = state.app_state_sync.get_playback_control();
-                    let playback_current_id = playback
-                        .current_message
-                        .as_ref()
-                        .map(|message| message.id.clone());
-                    if !playback.is_playing || playback_current_id.as_deref() != Some(message_id) {
-                        return Json(serde_json::json!({ "status": "ok" })).into_response();
-                    }
-                    let advance_result =
-                        resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
-                    let matched_current = advance_result.matched_current;
-                    let next_message = advance_result.next_message;
-
-                    if let Some(missing_next_message_id) = advance_result.missing_next_message_id {
-                        eprintln!(
-                            "[Server] [folder-playback] Clearing queue after completion; missing message '{}'",
-                            missing_next_message_id
-                        );
-                    }
-
-                    // Trigger next message if any; otherwise clear playback so all views show stopped
-                    if let Some(msg) = next_message {
-                        start_message_with_side_effects(&state, msg, DeviceType::System, true);
-                    } else if matched_current || playback_current_id.as_deref() == Some(message_id)
-                    {
-                        // Message completed with no next — clear playback_control and notify all views
-                        state
-                            .app_state_sync
-                            .stop_message_playback(DeviceType::System);
-                        emit_playback_control_event(
-                            &state,
-                            "MESSAGE_STOPPED",
-                            serde_json::Value::Null,
-                        );
-                    }
-                }
+            let advance_result =
+                resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
+            if let Some(missing_id) = advance_result.missing_next_message_id {
+                eprintln!(
+                    "[Server] [folder-playback] Clearing queue after {}; missing message '{}'",
+                    payload.command, missing_id
+                );
+            }
+            if let Some(next_message) = advance_result.next_message {
+                start_message_with_side_effects(&state, next_message, DeviceType::System);
+            } else {
+                let device_type = if payload.command == "clear-active-message" {
+                    DeviceType::MobileRemote
+                } else {
+                    DeviceType::System
+                };
+                state.app_state_sync.stop_message_playback(device_type);
+                emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
             }
         }
         "play-folder" => {
@@ -1495,7 +1371,7 @@ async fn handle_command<R: Runtime>(
                 });
             }
 
-            start_message_with_side_effects(&state, first_message, device_type.clone(), true);
+            start_message_with_side_effects(&state, first_message, device_type.clone());
         }
         "cancel-folder-playback" => {
             // Clear the folder playback queue and stop current message
@@ -1507,13 +1383,7 @@ async fn handle_command<R: Runtime>(
                 .app_state_sync
                 .stop_message_playback(device_type.clone());
 
-            // Emit clear-message to all Tauri windows to stop visualizer
-            let clear_cmd = serde_json::json!({
-                "command": "clear-message",
-                "payload": null
-            });
-            // AppHandle.emit() already broadcasts globally to all windows in Tauri v2
-            let _ = state.app_handle.emit("remote-command", clear_cmd);
+            emit_playback_control_event(&state, "MESSAGE_STOPPED", serde_json::Value::Null);
         }
         "reset-message-stats" => {
             if let Ok(mut m) = state.app_state_sync.message_stats.lock() {
@@ -1523,97 +1393,7 @@ async fn handle_command<R: Runtime>(
         }
         "load-configuration" => {
             if let Some(obj) = payload.payload.as_ref().and_then(|p| p.as_object()) {
-                // Full configuration load
-                if let Some(viz) = obj.get("activeVisualization").and_then(|v| v.as_str()) {
-                    if let Ok(mut m) = state.app_state_sync.active_visualization.lock() {
-                        *m = viz.to_string();
-                    }
-                }
-                if let Some(vizs) = obj.get("enabledVisualizations").and_then(|v| v.as_array()) {
-                    if let Ok(mut m) = state.app_state_sync.enabled_visualizations.lock() {
-                        *m = vizs
-                            .iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect();
-                    }
-                }
-                if let Some(settings) = obj.get("commonSettings") {
-                    if let Ok(s) = serde_json::from_value::<CommonSettings>(settings.clone()) {
-                        if let Ok(mut m) = state.app_state_sync.common_settings.lock() {
-                            *m = s;
-                        }
-                    }
-                }
-                if let Some(settings) = obj.get("visualizationSettings") {
-                    if let Ok(mut m) = state.app_state_sync.visualization_settings.lock() {
-                        *m = settings.clone();
-                    }
-                }
-                if let Some(msgs) = obj.get("messages") {
-                    if let Ok(messages) = serde_json::from_value::<Vec<MessageConfig>>(msgs.clone())
-                    {
-                        if let Ok(mut m) = state.app_state_sync.messages.lock() {
-                            *m = messages;
-                        }
-                    }
-                }
-                // Message tree (folders) - canonical ordering/structure if present
-                if let Some(tree) = obj.get("messageTree") {
-                    if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
-                        *t = tree.clone();
-                    }
-                    // Ensure flattened messages match tree
-                    let flat = flatten_message_tree(tree);
-                    if let Ok(mut m) = state.app_state_sync.messages.lock() {
-                        *m = flat;
-                    }
-                } else {
-                    // If no tree was provided, keep a flat tree representation of messages
-                    if let Ok(m) = state.app_state_sync.messages.lock() {
-                        if let Ok(mut t) = state.app_state_sync.message_tree.lock() {
-                            *t = build_flat_message_tree(m.as_slice());
-                        }
-                    }
-                }
-                if let Some(style) = obj.get("defaultTextStyle").and_then(|v| v.as_str()) {
-                    if let Ok(mut m) = state.app_state_sync.default_text_style.lock() {
-                        *m = style.to_string();
-                    }
-                }
-                if let Some(settings) = obj.get("textStyleSettings") {
-                    if let Ok(mut m) = state.app_state_sync.text_style_settings.lock() {
-                        *m = settings.clone();
-                    }
-                }
-                if let Some(presets) = obj.get("visualizationPresets") {
-                    if let Ok(p) =
-                        serde_json::from_value::<Vec<VisualizationPreset>>(presets.clone())
-                    {
-                        if let Ok(mut m) = state.app_state_sync.visualization_presets.lock() {
-                            *m = p;
-                        }
-                    }
-                }
-                if let Ok(mut active_preset) =
-                    state.app_state_sync.active_visualization_preset.lock()
-                {
-                    *active_preset = obj
-                        .get("activeVisualizationPreset")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_owned);
-                }
-                if let Some(presets) = obj.get("textStylePresets") {
-                    if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
-                        if let Ok(mut m) = state.app_state_sync.text_style_presets.lock() {
-                            *m = p;
-                        }
-                    }
-                }
-                if let Some(stats) = obj.get("messageStats") {
-                    if let Ok(mut m) = state.app_state_sync.message_stats.lock() {
-                        *m = stats.clone();
-                    }
-                }
+                state.app_state_sync.apply_configuration(obj);
                 state.app_state_sync.mark_config_changed();
             }
         }
@@ -2124,6 +1904,116 @@ mod tests {
     }
 
     #[test]
+    fn completion_matches_the_originating_session_before_advancing_a_folder() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_app, state) = test_app_state();
+        let first = test_message("first", "First");
+        let next = test_message("next", "Next");
+        *state.app_state_sync.messages.lock().unwrap() = vec![first.clone(), next.clone()];
+        *state.app_state_sync.message_tree.lock().unwrap() = serde_json::json!([{
+            "type": "folder", "id": "folder", "name": "Folder", "children": [
+                { "type": "message", "id": first.id, "message": first },
+                { "type": "message", "id": next.id, "message": next }
+            ]
+        }]);
+        runtime.block_on(async {
+            for command in ["message-complete", "clear-active-message"] {
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        "play-folder",
+                        serde_json::json!({"folderId": "folder"}),
+                    )),
+                )
+                .await;
+                let old_session = state.app_state_sync.get_playback_control().session_id;
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        "play-folder",
+                        serde_json::json!({"folderId": "folder"}),
+                    )),
+                )
+                .await;
+                let new_session = state.app_state_sync.get_playback_control().session_id;
+                assert_ne!(old_session, new_session);
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({"messageId": "first", "playbackSessionId": old_session}),
+                    )),
+                )
+                .await;
+                assert_eq!(
+                    state.app_state_sync.get_playback_control().session_id,
+                    new_session
+                );
+                assert_eq!(
+                    state
+                        .app_state_sync
+                        .folder_playback_queue
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .current_index,
+                    0
+                );
+                let missing_session = handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({"messageId": "first"}),
+                    )),
+                )
+                .await;
+                assert_eq!(missing_session.status(), StatusCode::BAD_REQUEST);
+                let missing_message = handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({"playbackSessionId": new_session}),
+                    )),
+                )
+                .await;
+                assert_eq!(missing_message.status(), StatusCode::BAD_REQUEST);
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({"messageId": "first", "playbackSessionId": new_session}),
+                    )),
+                )
+                .await;
+                assert_eq!(
+                    state
+                        .app_state_sync
+                        .get_playback_control()
+                        .current_message
+                        .unwrap()
+                        .id,
+                    "next"
+                );
+                assert_eq!(
+                    state
+                        .app_state_sync
+                        .folder_playback_queue
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .current_index,
+                    1
+                );
+            }
+        });
+    }
+
+    #[test]
     fn stopped_or_replaced_folder_ignores_stale_completion() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2150,6 +2040,7 @@ mod tests {
                     )),
                 )
                 .await;
+                let stopped_session = state.app_state_sync.get_playback_control().session_id;
                 handle_command(
                     State(state.clone()),
                     Json(test_command("stop-message", serde_json::json!({}))),
@@ -2159,7 +2050,7 @@ mod tests {
                     State(state.clone()),
                     Json(test_command(
                         command,
-                        serde_json::json!({ "messageId": "first" }),
+                        serde_json::json!({ "messageId": "first", "playbackSessionId": stopped_session }),
                     )),
                 )
                 .await;
@@ -2179,6 +2070,7 @@ mod tests {
                     )),
                 )
                 .await;
+                let replaced_session = state.app_state_sync.get_playback_control().session_id;
                 handle_command(
                     State(state.clone()),
                     Json(test_command(
@@ -2191,7 +2083,7 @@ mod tests {
                     State(state.clone()),
                     Json(test_command(
                         command,
-                        serde_json::json!({ "messageId": "first" }),
+                        serde_json::json!({ "messageId": "first", "playbackSessionId": replaced_session }),
                     )),
                 )
                 .await;
@@ -2246,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn play_folder_bootstraps_first_message_with_trigger_side_effects() {
+    fn play_folder_bootstraps_first_message_with_playback_snapshot() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (app, state) = test_app_state();
         let message = test_message("message-1", "Hello folder");
@@ -2271,18 +2163,8 @@ mod tests {
             ]);
         }
 
-        let emitted_remote_commands = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         let emitted_playback_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
 
-        {
-            let emitted_remote_commands = emitted_remote_commands.clone();
-            app.listen_any("remote-command", move |event: tauri::Event| {
-                emitted_remote_commands
-                    .lock()
-                    .unwrap()
-                    .push(serde_json::from_str(event.payload()).unwrap());
-            });
-        }
         {
             let emitted_playback_events = emitted_playback_events.clone();
             app.listen_any("playback-control-changed", move |event: tauri::Event| {
@@ -2340,15 +2222,13 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(trigger_count, 1);
 
-        let remote_commands = emitted_remote_commands.lock().unwrap();
-        assert!(remote_commands.iter().any(|payload| {
-            payload["command"] == "trigger-message" && payload["payload"]["id"] == "message-1"
-        }));
-
         let playback_events = emitted_playback_events.lock().unwrap();
         assert!(playback_events.iter().any(|payload| {
             payload["type"] == "MESSAGE_STARTED"
                 && payload["playbackControl"]["currentMessage"]["id"] == "message-1"
+                && payload["state"]["triggeredMessage"]["id"] == "message-1"
+                && payload["state"]["playbackControl"]["sessionId"]
+                    == payload["playbackControl"]["sessionId"]
         }));
     }
 
@@ -2434,7 +2314,7 @@ mod tests {
                 State(state.clone()),
                 Json(RemoteCommand {
                     command: "message-complete".to_string(),
-                    payload: Some(serde_json::json!({ "messageId": "message-1" })),
+                    payload: Some(serde_json::json!({ "messageId": "message-1", "playbackSessionId": state.app_state_sync.get_playback_control().session_id })),
                     device_type: Some(DeviceType::System),
                     session_id: None,
                     client_id: None,
@@ -2664,7 +2544,7 @@ mod tests {
                 State(state.clone()),
                 Json(RemoteCommand {
                     command: "message-complete".to_string(),
-                    payload: Some(serde_json::json!({ "messageId": "message-1" })),
+                    payload: Some(serde_json::json!({ "messageId": "message-1", "playbackSessionId": state.app_state_sync.get_playback_control().session_id })),
                     device_type: Some(DeviceType::System),
                     session_id: None,
                     client_id: None,
@@ -3100,7 +2980,7 @@ mod tests {
 
         // Test the core logic by directly calling the path resolution and validation
         let folder_path = temp_dir.path().to_string_lossy().to_string();
-        let resolved = resolve_path(&folder_path, None);
+        let resolved = resolve_config_path(&folder_path, None);
 
         // Verify path resolution works
         if resolved != folder_path {
@@ -3159,7 +3039,7 @@ mod tests {
         };
 
         let folder_path = temp_dir.path().to_string_lossy().to_string();
-        let resolved = resolve_path(&folder_path, None);
+        let resolved = resolve_config_path(&folder_path, None);
 
         // Property: Resolved path should point to an existing directory
         let path = std::path::Path::new(&resolved);
@@ -3173,7 +3053,7 @@ mod tests {
         let folder_path = temp_dir.path().to_string_lossy().to_string();
 
         // Test path resolution for empty folder
-        let resolved = resolve_path(&folder_path, None);
+        let resolved = resolve_config_path(&folder_path, None);
         let path = std::path::Path::new(&resolved);
 
         assert!(path.exists());
@@ -3216,7 +3096,7 @@ mod tests {
 
         // Test directory scanning
         let folder_path = temp_dir.path().to_string_lossy().to_string();
-        let resolved = resolve_path(&folder_path, None);
+        let resolved = resolve_config_path(&folder_path, None);
         let path = std::path::Path::new(&resolved);
 
         let image_extensions = [
