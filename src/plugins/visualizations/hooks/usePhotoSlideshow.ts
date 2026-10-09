@@ -74,6 +74,7 @@ export function usePhotoSlideshow(
   const [facePositions, setFacePositions] = useState<Map<string, FacePosition>>(new Map());
   // Map from media path to ready-to-display URL (blob for images, direct URL for videos)
   const [readyImages, setReadyImages] = useState<Map<string, string>>(new Map());
+  const [failedMedia, setFailedMedia] = useState<Set<string>>(new Set());
   // Track whether images are portrait (height > width)
   const [imageOrientations, setImageOrientations] = useState<Map<string, boolean>>(new Map());
   const [usingExamplePhotos, setUsingExamplePhotos] = useState(false);
@@ -261,6 +262,7 @@ export function usePhotoSlideshow(
         }
         console.error('[Photo Slideshow] Failed to preload:', path, err);
         loadingPromises.current.delete(path);
+        setFailedMedia(previous => new Set(previous).add(path));
         return null;
       }
     })();
@@ -292,6 +294,7 @@ export function usePhotoSlideshow(
     mediaUrls.current.clear();
     loadingPromises.current.clear();
     setReadyImages(new Map());
+    setFailedMedia(new Set());
     setImageOrientations(new Map());
     setFacePositions(new Map());
   }, []);
@@ -850,6 +853,18 @@ export function usePhotoSlideshow(
   // Auto-advance timer
   const currentPath = images[currentIndex];
   const isCurrentImageReady = currentPath ? readyImages.has(currentPath) : false;
+
+  useEffect(() => {
+    if (!currentPath || !failedMedia.has(currentPath)) return;
+    for (let offset = 1; offset < images.length; offset++) {
+      const candidateIndex = (currentIndex + offset) % images.length;
+      if (!failedMedia.has(images[candidateIndex])) {
+        setCurrentIndex(candidateIndex);
+        return;
+      }
+    }
+    setError('None of the slideshow media could be loaded. Check the files and try another folder.');
+  }, [currentPath, currentIndex, failedMedia, images]);
 
   useEffect(() => {
     if (images.length === 0 || isTransitioning || !isCurrentImageReady) return;

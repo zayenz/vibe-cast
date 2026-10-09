@@ -505,13 +505,11 @@ fn emit_state_change(
                         }
                     }
                 }
-                if let Some(preset_id) = obj
-                    .get("activeVisualizationPreset")
-                    .and_then(|v| v.as_str())
-                {
-                    if let Ok(mut m) = state.active_visualization_preset.lock() {
-                        *m = Some(preset_id.to_string());
-                    }
+                if let Ok(mut active_preset) = state.active_visualization_preset.lock() {
+                    *active_preset = obj
+                        .get("activeVisualizationPreset")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned);
                 }
                 if let Some(presets) = obj.get("textStylePresets") {
                     if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
@@ -635,6 +633,9 @@ async fn start_message_playback(
         }
     }
 
+    if let Ok(mut queue) = state.folder_playback_queue.lock() {
+        *queue = None;
+    }
     state.broadcast_current_state();
 
     // Get the updated state and emit enhanced events (same path for lookup and with-message)
@@ -665,6 +666,7 @@ async fn start_message_playback(
         let state_clone = state.inner().clone();
         let handle_clone = handle.clone();
         let message_id_clone = message_id.clone();
+        let session_id = playback_control.session_id.clone();
         let timeout_duration = duration + std::time::Duration::from_millis(500);
 
         tokio::spawn(async move {
@@ -672,6 +674,7 @@ async fn start_message_playback(
 
             let current_state = state_clone.get_playback_control();
             if current_state.is_playing
+                && current_state.session_id == session_id
                 && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id_clone)
             {
                 state_clone.stop_message_playback(DeviceType::System);
@@ -702,6 +705,9 @@ fn stop_message_playback(
     state: tauri::State<'_, Arc<AppStateSync>>,
 ) -> Result<serde_json::Value, String> {
     let device_type = DeviceType::ControlPlane;
+    if let Ok(mut queue) = state.folder_playback_queue.lock() {
+        *queue = None;
+    }
     state.stop_message_playback(device_type);
     state.broadcast_current_state();
 
@@ -745,8 +751,7 @@ fn list_images_in_folder(
 
     eprintln!("Listing media files in folder: {}", folder_path);
 
-    let resolved = if folder_path.starts_with("$RESOURCES/") {
-        let subpath = &folder_path["$RESOURCES/".len()..];
+    let resolved = if let Some(subpath) = folder_path.strip_prefix("$RESOURCES/") {
         match app.path().resolve(subpath, BaseDirectory::Resource) {
             Ok(p) => {
                 eprintln!("Resolved resource '{}' to: {:?}", subpath, p);
@@ -915,7 +920,13 @@ pub fn run() {
                 eprintln!("Skipping audio capture for E2E run");
                 vibe_cast_audio::silent_audio_state()
             } else {
-                vibe_cast_audio::start_audio_capture(handle)
+                match vibe_cast_audio::start_audio_capture(handle) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        eprintln!("Audio capture unavailable: {error}");
+                        vibe_cast_audio::silent_audio_state()
+                    }
+                }
             };
             app.manage(audio_state);
 

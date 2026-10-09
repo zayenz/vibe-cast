@@ -631,17 +631,13 @@ mod tests {
     /// Validates that the playback control state is internally consistent
     fn validate_state_consistency(state: &PlaybackControlState) -> bool {
         // Rule 1: If playing, must have a current message and session
-        if state.is_playing {
-            if state.current_message.is_none() || state.session_id.is_none() {
-                return false;
-            }
+        if state.is_playing && (state.current_message.is_none() || state.session_id.is_none()) {
+            return false;
         }
 
         // Rule 2: If not playing, session_id should be None (unless paused)
-        if !state.is_playing && state.current_message.is_none() {
-            if state.session_id.is_some() {
-                return false;
-            }
+        if !state.is_playing && state.current_message.is_none() && state.session_id.is_some() {
+            return false;
         }
 
         // Rule 3: Playback position should be reasonable

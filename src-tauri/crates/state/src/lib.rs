@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
@@ -11,6 +12,15 @@ use vibe_cast_models::{
     PlaybackControlState, RemoteCommand, RemoteMessageStats, RemoteStateV2,
     RemoteVisualizationPreset, TextStylePreset, VisualizationPreset,
 };
+
+static NEXT_PLAYBACK_SESSION: AtomicU64 = AtomicU64::new(1);
+
+fn next_playback_session_id() -> String {
+    format!(
+        "session_{}",
+        NEXT_PLAYBACK_SESSION.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 const MAX_E2E_SESSIONS: usize = 8;
 const MAX_E2E_EVENTS_PER_SESSION: usize = 4_000;
@@ -1064,13 +1074,11 @@ impl AppStateSync {
                     }
                 }
             }
-            if let Some(preset_id) = obj
-                .get("activeVisualizationPreset")
-                .and_then(|v| v.as_str())
-            {
-                if let Ok(mut m) = self.active_visualization_preset.lock() {
-                    *m = Some(preset_id.to_string());
-                }
+            if let Ok(mut active_preset) = self.active_visualization_preset.lock() {
+                *active_preset = obj
+                    .get("activeVisualizationPreset")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
             }
             if let Some(presets) = obj.get("textStylePresets") {
                 if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
@@ -1138,13 +1146,7 @@ impl AppStateSync {
         };
 
         // Generate session ID
-        let session_id = format!(
-            "session_{}",
-            SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
+        let session_id = next_playback_session_id();
 
         // Update playback control state
         let new_state = PlaybackControlState {
@@ -1178,13 +1180,7 @@ impl AppStateSync {
             folder_path: self.get_message_folder_path(&message.id),
         };
 
-        let session_id = format!(
-            "session_{}",
-            SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
+        let session_id = next_playback_session_id();
 
         let new_state = PlaybackControlState {
             session_id: Some(session_id),
@@ -1284,14 +1280,7 @@ impl AppStateSync {
         };
 
         // Generate session ID
-        let session_id = format!(
-            "session_{}_{}",
-            timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis(),
-            device_id
-        );
+        let session_id = next_playback_session_id();
 
         // Create new playback state
         let new_state = PlaybackControlState {
@@ -1808,6 +1797,40 @@ mod remote_state_tests {
     use super::*;
 
     #[test]
+    fn playback_restarts_receive_unique_sessions() {
+        let state = AppStateSync::new();
+        let mut sessions = std::collections::HashSet::new();
+        for _ in 0..100 {
+            state
+                .start_message_playback("msg-1", DeviceType::System)
+                .unwrap();
+            assert!(sessions.insert(state.get_playback_control().session_id.unwrap()));
+            state.stop_message_playback(DeviceType::System);
+        }
+    }
+
+    #[test]
+    fn configuration_file_clears_absent_or_null_active_preset() {
+        let state = AppStateSync::new();
+        let path = std::env::temp_dir().join(format!(
+            "vibe-cast-config-{}-{}.json",
+            std::process::id(),
+            next_playback_session_id()
+        ));
+        for config in [
+            serde_json::json!({}),
+            serde_json::json!({ "activeVisualizationPreset": null }),
+        ] {
+            *state.active_visualization_preset.lock().unwrap() = Some("old-preset".to_owned());
+            fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+            let result = state.load_config_from_file(path.to_str().unwrap());
+            fs::remove_file(&path).unwrap();
+            result.unwrap();
+            assert!(state.get_state().active_visualization_preset.is_none());
+        }
+    }
+
+    #[test]
     fn test_remote_state_uses_compact_contract() {
         let app_state = AppStateSync::new();
 
@@ -2212,7 +2235,7 @@ mod legacy_tests {
         let final_state = app_state.get_playback_control();
 
         // Check if the message exists in the default messages
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         let message_exists = default_message_ids.contains(&message_id.as_str());
 
         if message_exists {
@@ -2295,7 +2318,7 @@ mod legacy_tests {
             "unknown_device_123",
         ];
 
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         let message_exists = default_message_ids.contains(&message_id.as_str());
 
         // Test that validation behavior is consistent across all device types
@@ -2406,7 +2429,7 @@ mod legacy_tests {
         };
 
         // Check if this is a Start command with invalid message ID
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         let is_invalid_start = matches!(&base_command, PlaybackCommand::Start { message_id, .. }
             if !default_message_ids.contains(&message_id.as_str()));
 
@@ -2482,12 +2505,9 @@ mod legacy_tests {
         let first_result = &results[0];
 
         // Reset state to initial for should_process_command check
-        match &base_command {
-            PlaybackCommand::Start { .. } => {
-                // Reset to initial state for proper should_process_command evaluation
-                app_state.stop_message_playback(DeviceType::System);
-            }
-            _ => {}
+        if let PlaybackCommand::Start { .. } = &base_command {
+            // Reset to initial state for proper should_process_command evaluation
+            app_state.stop_message_playback(DeviceType::System);
         }
 
         match first_result {
@@ -2561,7 +2581,7 @@ mod legacy_tests {
         }
 
         // Only test with valid message IDs for this property
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         if !default_message_ids.contains(&message_id.as_str()) {
             return TestResult::discard();
         }
@@ -2698,7 +2718,7 @@ mod legacy_tests {
         }
 
         // Only test with valid message IDs
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         if !default_message_ids.contains(&message_id.as_str()) {
             return TestResult::discard();
         }
@@ -2814,7 +2834,7 @@ mod legacy_tests {
         }
 
         // Filter out valid message IDs and empty strings
-        let default_message_ids = vec!["msg-1", "msg-2", "msg-3"];
+        let default_message_ids = ["msg-1", "msg-2", "msg-3"];
         let truly_invalid_ids: Vec<String> = invalid_message_ids
             .into_iter()
             .filter(|id| {

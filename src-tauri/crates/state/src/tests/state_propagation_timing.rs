@@ -457,17 +457,12 @@ async fn test_rapid_state_changes_async(change_count: u8) -> TestResult {
         let mut last_update_time: Option<Instant> = None;
 
         // Drain all pending updates to get the latest
-        loop {
-            match mock_device
-                .try_receive_state_update(Duration::from_millis(10))
-                .await
-            {
-                Ok(state) => {
-                    latest_state = Some(state);
-                    last_update_time = mock_device.last_update_time;
-                }
-                Err(_) => break, // No more updates
-            }
+        while let Ok(state) = mock_device
+            .try_receive_state_update(Duration::from_millis(10))
+            .await
+        {
+            latest_state = Some(state);
+            last_update_time = mock_device.last_update_time;
         }
 
         if let Some(state) = latest_state {

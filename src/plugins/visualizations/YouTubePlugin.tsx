@@ -105,16 +105,20 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
 
   // Send updates to iframe
   useEffect(() => {
-    if (!iframeRef.current || !iframeRef.current.contentWindow) return;
-    
-    // We send these as individual messages because the iframe handles them imperatively
-    const win = iframeRef.current.contentWindow;
-    
-    win.postMessage({ type: 'setVolume', value: volume }, '*');
-    win.postMessage({ type: 'setMuted', value: muted }, '*');
-    
-    // Note: videoId and controls changes trigger a full reload via key/src prop
-  }, [volume, muted]);
+    const sendSettings = () => {
+      const win = iframeRef.current?.contentWindow;
+      win?.postMessage({ type: 'setVolume', value: volume }, '*');
+      win?.postMessage({ type: 'setMuted', value: muted }, '*');
+    };
+    const onPlayerReady = (event: MessageEvent) => {
+      if (event.source === iframeRef.current?.contentWindow && event.data?.type === 'youtube-ready') {
+        sendSettings();
+      }
+    };
+    sendSettings();
+    window.addEventListener('message', onPlayerReady);
+    return () => window.removeEventListener('message', onPlayerReady);
+  }, [volume, muted, serverUrl, videoId, showControls]);
 
   if (!videoId) {
     return (
@@ -132,7 +136,9 @@ const YouTubeVisualization: React.FC<VisualizationProps> = ({
     );
   }
 
-  const src = `${serverUrl}/youtube_player.html?videoId=${videoId}&controls=${showControls ? 1 : 0}&muted=${muted ? 1 : 0}&volume=${volume}`;
+  // Start muted until youtube-ready applies current settings. Live sound changes
+  // must not navigate the iframe and restart playback.
+  const src = `${serverUrl}/youtube_player.html?videoId=${videoId}&controls=${showControls ? 1 : 0}&muted=1`;
 
   return (
     <div 

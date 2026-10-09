@@ -1,8 +1,8 @@
 /**
  * Property-Based Tests for Photo Slideshow Default Fallback Behavior
- * 
+ *
  * **Validates: Requirements 2.1, 2.3**
- * 
+ *
  * These tests verify that the photo slideshow correctly falls back to default photos
  * when the primary folder fails to load, and provides appropriate error handling
  * when both primary and fallback attempts fail.
@@ -17,6 +17,12 @@ import { usePhotoSlideshow } from '../usePhotoSlideshow';
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
   convertFileSrc: (path: string) => `asset://localhost/${path}`
+}));
+
+vi.mock('../../faceDetection', () => ({
+  loadFaceDetectionModels: vi.fn().mockResolvedValue(undefined),
+  detectFacePosition: vi.fn().mockResolvedValue(undefined),
+  clearFacePositionCache: vi.fn(),
 }));
 
 // Get the mocked function
@@ -37,6 +43,18 @@ const consoleSpy = {
 describe('Photo Slideshow Default Fallback Behavior Properties', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetch.mockResolvedValue({ ok: true, blob: async () => new Blob(['image']) });
+    vi.stubGlobal('Image', class {
+      onload: (() => void) | null = null;
+      naturalHeight = 100;
+      naturalWidth = 200;
+      set src(_value: string) { window.queueMicrotask(() => this.onload?.()); }
+      decode = async () => {};
+    });
+    vi.stubGlobal('URL', Object.assign(class extends URL {}, {
+      createObjectURL: vi.fn(() => 'blob:healthy'),
+      revokeObjectURL: vi.fn(),
+    }));
     // Reset environment
     Object.defineProperty(window, 'location', {
       value: { protocol: 'tauri:' },
@@ -49,13 +67,14 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     Object.values(consoleSpy).forEach(spy => spy.mockClear());
   });
 
   /**
    * Property 4: Default Fallback Behavior - Core Fallback Logic
-   * 
+   *
    * When the primary folder fails to load, the system should:
    * 1. Attempt to load from the default fallback path ($RESOURCES/kittens)
    * 2. Set usingExamplePhotos to true when fallback is used successfully
@@ -84,7 +103,7 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
           mockInvoke.mockImplementation(async (command: string, args: any) => {
             if (command === 'list_images_in_folder') {
               const { folderPath: requestedPath } = args;
-              
+
               // Handle primary folder request
               if (requestedPath === folderPath && folderPath !== '') {
                 if (primaryShouldSucceed) {
@@ -93,82 +112,86 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
                   throw new Error(`Folder not found: ${requestedPath}`);
                 }
               }
-              
+
               // Handle fallback request
               if (requestedPath === '$RESOURCES/kittens') {
                 return fallbackImages;
               }
-              
+
               throw new Error(`Unexpected path: ${requestedPath}`);
             }
             throw new Error(`Unknown command: ${command}`);
           });
 
-          const { result } = renderHook(() => 
+          const { result, unmount } = renderHook(() =>
             usePhotoSlideshow({ folderPath }, undefined)
           );
 
-          // Wait for loading to complete
-          await waitFor(() => {
-            expect(result.current.loading).toBe(false);
-          }, { timeout: 5000 });
+          try {
+            // Wait for loading to complete
+            await waitFor(() => {
+              expect(result.current.loading).toBe(false);
+            }, { timeout: 5000 });
 
-          // Verify behavior based on scenario
-          if (!folderPath || folderPath === '') {
-            // Empty folder path should go directly to fallback
-            if (fallbackImages.length === 0) {
-              // Empty fallback should show error
-              expect(result.current.error).toBeTruthy();
-              expect(result.current.images).toHaveLength(0);
-            } else {
-              // Non-empty fallback should succeed
+            // Verify behavior based on scenario
+            if (!folderPath || folderPath === '') {
+              // Empty folder path should go directly to fallback
+              if (fallbackImages.length === 0) {
+                // Empty fallback should show error
+                expect(result.current.error).toBeTruthy();
+                expect(result.current.images).toHaveLength(0);
+              } else {
+                // Non-empty fallback should succeed
+                expect(result.current.error).toBeNull();
+                expect(result.current.usingExamplePhotos).toBe(true);
+                expect(result.current.images).toEqual(fallbackImages);
+              }
+            } else if (primaryShouldSucceed) {
+              // Primary succeeded - no fallback needed
               expect(result.current.error).toBeNull();
-              expect(result.current.usingExamplePhotos).toBe(true);
-              expect(result.current.images).toEqual(fallbackImages);
-            }
-          } else if (primaryShouldSucceed) {
-            // Primary succeeded - no fallback needed
-            expect(result.current.error).toBeNull();
-            expect(result.current.usingExamplePhotos).toBe(false);
-            expect(result.current.images).toEqual(['primary1.jpg', 'primary2.png']);
-          } else {
-            // Primary failed, should attempt fallback
-            if (fallbackImages.length === 0) {
-              // Both failed or fallback empty - should have error
-              expect(result.current.error).toBeTruthy();
-              expect(result.current.images).toHaveLength(0);
+              expect(result.current.usingExamplePhotos).toBe(false);
+              expect(result.current.images).toEqual(['primary1.jpg', 'primary2.png']);
             } else {
-              // Fallback succeeded
-              expect(result.current.error).toBeNull();
-              expect(result.current.usingExamplePhotos).toBe(true);
-              expect(result.current.images).toEqual(fallbackImages);
+              // Primary failed, should attempt fallback
+              if (fallbackImages.length === 0) {
+                // Both failed or fallback empty - should have error
+                expect(result.current.error).toBeTruthy();
+                expect(result.current.images).toHaveLength(0);
+              } else {
+                // Fallback succeeded
+                expect(result.current.error).toBeNull();
+                expect(result.current.usingExamplePhotos).toBe(true);
+                expect(result.current.images).toEqual(fallbackImages);
+              }
             }
-          }
 
-          // Verify invoke calls
-          const invokeCalls = mockInvoke.mock.calls.filter(call => call[0] === 'list_images_in_folder');
-          
-          if (!folderPath || folderPath === '') {
-            // Should only call fallback
-            expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const fallbackCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
-            expect(fallbackCall).toBeDefined();
-          } else if (primaryShouldSucceed) {
-            // Should only call primary
-            expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
-            expect(primaryCall).toBeDefined();
-          } else {
-            // Should call both primary and fallback
-            expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-            const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
-            expect(primaryCall).toBeDefined();
-            
-            if (fallbackImages.length > 0) {
-              // Only check for fallback call if it would succeed
+            // Verify invoke calls
+            const invokeCalls = mockInvoke.mock.calls.filter(call => call[0] === 'list_images_in_folder');
+
+            if (!folderPath || folderPath === '') {
+              // Should only call fallback
+              expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
               const fallbackCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
               expect(fallbackCall).toBeDefined();
+            } else if (primaryShouldSucceed) {
+              // Should only call primary
+              expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
+              const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
+              expect(primaryCall).toBeDefined();
+            } else {
+              // Should call both primary and fallback
+              expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
+              const primaryCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === folderPath);
+              expect(primaryCall).toBeDefined();
+
+              if (fallbackImages.length > 0) {
+                // Only check for fallback call if it would succeed
+                const fallbackCall = invokeCalls.find(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
+                expect(fallbackCall).toBeDefined();
+              }
             }
+          } finally {
+            unmount();
           }
         }
       ),
@@ -178,7 +201,7 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
 
   /**
    * Property 4: Default Fallback Behavior - Error Message Quality
-   * 
+   *
    * When both primary and fallback fail, error messages should be informative
    * and contain diagnostic information to help users understand the issue.
    */
@@ -205,7 +228,7 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
           mockInvoke.mockImplementation(async (command: string, args: any) => {
             if (command === 'list_images_in_folder') {
               const { folderPath: requestedPath } = args;
-              
+
               if (requestedPath === folderPath) {
                 switch (primaryErrorType) {
                   case 'not_found':
@@ -218,7 +241,7 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
                     throw new Error('Unknown error');
                 }
               }
-              
+
               if (requestedPath === '$RESOURCES/kittens') {
                 if (fallbackShouldFail) {
                   throw new Error('Default resources not found');
@@ -226,43 +249,47 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
                   return ['kitten1.jpg', 'kitten2.jpg'];
                 }
               }
-              
+
               throw new Error('Unexpected path');
             }
             throw new Error('Unknown command');
           });
 
-          const { result } = renderHook(() => 
+          const { result, unmount } = renderHook(() =>
             usePhotoSlideshow({ folderPath }, undefined)
           );
 
-          // Wait for loading to complete
-          await waitFor(() => {
-            expect(result.current.loading).toBe(false);
-          }, { timeout: 5000 });
+          try {
+            // Wait for loading to complete
+            await waitFor(() => {
+              expect(result.current.loading).toBe(false);
+            }, { timeout: 5000 });
 
-          // Verify behavior
-          if (fallbackShouldFail) {
-            // Both primary and fallback failed - should have comprehensive error
-            expect(result.current.error).toBeTruthy();
-            expect(result.current.images).toHaveLength(0);
-            
-            if (result.current.error) {
-              // Error should contain some diagnostic information
-              const errorLower = result.current.error.toLowerCase();
-              expect(
-                errorLower.includes('failed') || 
-                errorLower.includes('error') ||
-                errorLower.includes('not found') ||
-                errorLower.includes('diagnostic') || 
-                errorLower.includes('path')
-              ).toBe(true);
+            // Verify behavior
+            if (fallbackShouldFail) {
+              // Both primary and fallback failed - should have comprehensive error
+              expect(result.current.error).toBeTruthy();
+              expect(result.current.images).toHaveLength(0);
+
+              if (result.current.error) {
+                // Error should contain some diagnostic information
+                const errorLower = result.current.error.toLowerCase();
+                expect(
+                  errorLower.includes('failed') ||
+                  errorLower.includes('error') ||
+                  errorLower.includes('not found') ||
+                  errorLower.includes('diagnostic') ||
+                  errorLower.includes('path')
+                ).toBe(true);
+              }
+            } else {
+              // Fallback succeeded
+              expect(result.current.error).toBeNull();
+              expect(result.current.usingExamplePhotos).toBe(true);
+              expect(result.current.images).toEqual(['kitten1.jpg', 'kitten2.jpg']);
             }
-          } else {
-            // Fallback succeeded
-            expect(result.current.error).toBeNull();
-            expect(result.current.usingExamplePhotos).toBe(true);
-            expect(result.current.images).toEqual(['kitten1.jpg', 'kitten2.jpg']);
+          } finally {
+            unmount();
           }
         }
       ),
@@ -272,7 +299,7 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
 
   /**
    * Property 4: Default Fallback Behavior - Empty Folder Handling
-   * 
+   *
    * When no folder is specified (empty string), the system should go directly
    * to the fallback without attempting to load from an empty path.
    */
@@ -291,49 +318,53 @@ describe('Photo Slideshow Default Fallback Behavior Properties', () => {
           mockInvoke.mockImplementation(async (command: string, args: any) => {
             if (command === 'list_images_in_folder') {
               const { folderPath: requestedPath } = args;
-              
+
               if (requestedPath === '$RESOURCES/kittens') {
                 return fallbackImages;
               }
-              
+
               // Should not be called with empty path
               throw new Error(`Unexpected path: ${requestedPath}`);
             }
             throw new Error(`Unknown command: ${command}`);
           });
 
-          const { result } = renderHook(() => 
+          const { result, unmount } = renderHook(() =>
             usePhotoSlideshow({ folderPath: '' }, undefined)
           );
 
-          // Wait for loading to complete
-          await waitFor(() => {
-            expect(result.current.loading).toBe(false);
-          }, { timeout: 5000 });
+          try {
+            // Wait for loading to complete
+            await waitFor(() => {
+              expect(result.current.loading).toBe(false);
+            }, { timeout: 5000 });
 
-          // Verify direct fallback behavior
-          if (fallbackImages.length === 0) {
-            // Empty fallback should show appropriate message
-            expect(result.current.error).toBeTruthy();
-            expect(result.current.images).toHaveLength(0);
-          } else {
-            // Non-empty fallback should succeed
-            expect(result.current.error).toBeNull();
-            expect(result.current.usingExamplePhotos).toBe(true);
-            expect(result.current.images).toEqual(fallbackImages);
+            // Verify direct fallback behavior
+            if (fallbackImages.length === 0) {
+              // Empty fallback should show appropriate message
+              expect(result.current.error).toBeTruthy();
+              expect(result.current.images).toHaveLength(0);
+            } else {
+              // Non-empty fallback should succeed
+              expect(result.current.error).toBeNull();
+              expect(result.current.usingExamplePhotos).toBe(true);
+              expect(result.current.images).toEqual(fallbackImages);
+            }
+
+            // Verify only fallback was called
+            const invokeCalls = mockInvoke.mock.calls.filter(call => call[0] === 'list_images_in_folder');
+            expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
+
+            // All calls should be to the fallback path
+            const fallbackCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
+            expect(fallbackCalls.length).toBeGreaterThanOrEqual(1);
+
+            // No calls should be to empty path
+            const emptyCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '');
+            expect(emptyCalls.length).toBe(0);
+          } finally {
+            unmount();
           }
-
-          // Verify only fallback was called
-          const invokeCalls = mockInvoke.mock.calls.filter(call => call[0] === 'list_images_in_folder');
-          expect(invokeCalls.length).toBeGreaterThanOrEqual(1);
-          
-          // All calls should be to the fallback path
-          const fallbackCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '$RESOURCES/kittens');
-          expect(fallbackCalls.length).toBeGreaterThanOrEqual(1);
-          
-          // No calls should be to empty path
-          const emptyCalls = invokeCalls.filter(call => (call[1] as Record<string, unknown>)?.folderPath === '');
-          expect(emptyCalls.length).toBe(0);
         }
       ),
       { numRuns: 20, timeout: 10000 }

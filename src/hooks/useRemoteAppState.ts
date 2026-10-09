@@ -156,6 +156,8 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reportTimer: ReturnType<typeof setTimeout> | null = null;
+    const bootstrapController = new AbortController();
+    let bootstrapTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const maybeReportPerf = () => {
       if (!perfEnabled || hasReportedPerfRef.current || perfRef.current.firstUsableRenderMs === undefined) {
@@ -271,15 +273,15 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
           backoffMs,
         });
         reconnectTimer = setTimeout(() => connectSse(attempt + 1), backoffMs);
-        if (hasAnyStateRef.current) {
-          setConnectionPhase('degraded');
+        setConnectionPhase('degraded');
+        if (!hasAnyStateRef.current) {
+          setError('Unable to connect. Retrying…');
         }
       };
     };
 
     const bootstrap = async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      bootstrapTimeout = setTimeout(() => bootstrapController.abort(), 3000);
       const bootstrapUrl = new URL(`${effectiveBase}/api/remote/state`);
       if (perfEnabled) {
         bootstrapUrl.searchParams.set('perf', '1');
@@ -297,12 +299,15 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
           bootstrapUrl.toString(),
           {
             cache: 'no-store',
-            signal: controller.signal,
+            signal: bootstrapController.signal,
           },
         );
 
-        if (!response.ok || !isMounted) {
+        if (!isMounted) {
           return;
+        }
+        if (!response.ok) {
+          throw new Error(`Unable to load remote state (HTTP ${response.status}). Retrying…`);
         }
 
         if (perfEnabled) {
@@ -313,6 +318,9 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
         }
 
         const nextState = parseRemoteState(await response.json());
+        if (!isMounted) {
+          return;
+        }
         perfRef.current.bootstrapLatencyMs = Date.now() - remoteLoadStartedAt;
         void postE2EProbe(effectiveBase, 'remote_bootstrap_succeeded', {
           bootstrapLatencyMs: perfRef.current.bootstrapLatencyMs,
@@ -322,14 +330,18 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
         });
         applyState(nextState, 'bootstrap');
       } catch (bootstrapError) {
-        if (bootstrapError instanceof Error && bootstrapError.name !== 'AbortError') {
-          setError((current) => current ?? bootstrapError.message);
+        if (!isMounted) {
+          return;
         }
+        setConnectionPhase('degraded');
+        setError(bootstrapError instanceof Error && bootstrapError.name !== 'AbortError'
+          ? bootstrapError.message
+          : 'Connection timed out. Retrying…');
         void postE2EProbe(effectiveBase, 'remote_bootstrap_failed', {
           error: bootstrapError instanceof Error ? bootstrapError.message : 'bootstrap failed',
         });
       } finally {
-        clearTimeout(timeoutId);
+        if (bootstrapTimeout) clearTimeout(bootstrapTimeout);
         connectSse(0);
       }
     };
@@ -338,6 +350,8 @@ export function useRemoteAppState(options: UseRemoteAppStateOptions = {}) {
 
     return () => {
       isMounted = false;
+      bootstrapController.abort();
+      if (bootstrapTimeout) clearTimeout(bootstrapTimeout);
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }

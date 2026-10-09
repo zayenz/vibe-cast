@@ -5112,6 +5112,7 @@ dependencies = [
  "cpal",
  "realfft",
  "tauri",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -5160,7 +5161,7 @@ dependencies = [
 
 [[package]]
 name = "vibe_cast"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "local-ip-address",
  "serde",

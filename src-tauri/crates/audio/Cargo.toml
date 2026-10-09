@@ -7,3 +7,4 @@ edition = "2021"
 tauri = { version = "2", features = ["protocol-asset"] }
 cpal = "0.15"
 realfft = "3.3"
+thiserror = "2"

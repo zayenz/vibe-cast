@@ -421,6 +421,7 @@ fn schedule_playback_timeout<R: Runtime>(
     state: AppState<R>,
     message_id: String,
     duration: Duration,
+    session_id: Option<String>,
 ) {
     let timeout_duration = duration + std::time::Duration::from_millis(500);
 
@@ -429,6 +430,7 @@ fn schedule_playback_timeout<R: Runtime>(
 
         let current_state = state.app_state_sync.get_playback_control();
         if current_state.is_playing
+            && current_state.session_id == session_id
             && current_state.current_message.as_ref().map(|m| &m.id) == Some(&message_id)
         {
             let advance_result =
@@ -480,6 +482,7 @@ fn start_message_with_side_effects<R: Runtime>(
         .app_state_sync
         .start_message_playback_with_message(msg.clone(), device_type);
 
+    let session_id = state.app_state_sync.get_playback_control().session_id;
     emit_playback_control_event(
         state,
         "MESSAGE_STARTED",
@@ -497,7 +500,7 @@ fn start_message_with_side_effects<R: Runtime>(
     }
 
     if let Some(duration) = state.app_state_sync.calculate_safety_timeout_duration(&msg) {
-        schedule_playback_timeout(state.clone(), message_id, duration);
+        schedule_playback_timeout(state.clone(), message_id, duration, session_id);
     }
 }
 
@@ -1207,11 +1210,17 @@ async fn handle_command<R: Runtime>(
                 };
 
                 if let Some(msg) = msg {
+                    if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                        *queue = None;
+                    }
                     start_message_with_side_effects(&state, msg, device_type.clone(), false);
                 }
             }
         }
         "stop-message" => {
+            if let Ok(mut queue) = state.app_state_sync.folder_playback_queue.lock() {
+                *queue = None;
+            }
             // Unified stop from any device — update playback_control and notify all views
             state
                 .app_state_sync
@@ -1358,12 +1367,14 @@ async fn handle_command<R: Runtime>(
             // Manual stop of a message - clear triggered message and handle queue
             if let Some(p) = &payload.payload {
                 if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    let playback_current_id = state
-                        .app_state_sync
-                        .get_playback_control()
+                    let playback = state.app_state_sync.get_playback_control();
+                    let playback_current_id = playback
                         .current_message
                         .as_ref()
                         .map(|message| message.id.clone());
+                    if !playback.is_playing || playback_current_id.as_deref() != Some(message_id) {
+                        return Json(serde_json::json!({ "status": "ok" })).into_response();
+                    }
                     let advance_result =
                         resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
                     let matched_current = advance_result.matched_current;
@@ -1399,12 +1410,14 @@ async fn handle_command<R: Runtime>(
             // This is the single source of truth for queue advancement
             if let Some(p) = &payload.payload {
                 if let Some(message_id) = p.get("messageId").and_then(|v| v.as_str()) {
-                    let playback_current_id = state
-                        .app_state_sync
-                        .get_playback_control()
+                    let playback = state.app_state_sync.get_playback_control();
+                    let playback_current_id = playback
                         .current_message
                         .as_ref()
                         .map(|message| message.id.clone());
+                    if !playback.is_playing || playback_current_id.as_deref() != Some(message_id) {
+                        return Json(serde_json::json!({ "status": "ok" })).into_response();
+                    }
                     let advance_result =
                         resolve_next_folder_message(state.app_state_sync.as_ref(), message_id);
                     let matched_current = advance_result.matched_current;
@@ -1581,13 +1594,13 @@ async fn handle_command<R: Runtime>(
                         }
                     }
                 }
-                if let Some(preset_id) = obj
-                    .get("activeVisualizationPreset")
-                    .and_then(|v| v.as_str())
+                if let Ok(mut active_preset) =
+                    state.app_state_sync.active_visualization_preset.lock()
                 {
-                    if let Ok(mut m) = state.app_state_sync.active_visualization_preset.lock() {
-                        *m = Some(preset_id.to_string());
-                    }
+                    *active_preset = obj
+                        .get("activeVisualizationPreset")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned);
                 }
                 if let Some(presets) = obj.get("textStylePresets") {
                     if let Ok(p) = serde_json::from_value::<Vec<TextStylePreset>>(presets.clone()) {
@@ -2024,7 +2037,6 @@ mod tests {
     use axum::body::to_bytes;
     use quickcheck::{Arbitrary, Gen, TestResult};
     use quickcheck_macros::quickcheck;
-    use serde_json;
     use std::sync::{Arc, Mutex};
     use tauri::Listener;
 
@@ -2064,6 +2076,173 @@ mod tests {
             "status": status.as_u16(),
             "body": value,
         })
+    }
+
+    fn test_command(command: &str, payload: serde_json::Value) -> RemoteCommand {
+        RemoteCommand {
+            command: command.to_owned(),
+            payload: Some(payload),
+            device_type: Some(DeviceType::ControlPlane),
+            session_id: None,
+            client_id: None,
+            client_label: None,
+            client_kind: None,
+        }
+    }
+
+    #[test]
+    fn old_timeout_does_not_stop_restarted_message() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_app, state) = test_app_state();
+        let message = test_message("message-1", "Restart me");
+        runtime.block_on(async {
+            state
+                .app_state_sync
+                .start_message_playback_with_message(message.clone(), DeviceType::System);
+            let old_session = state.app_state_sync.get_playback_control().session_id;
+            schedule_playback_timeout(
+                state.clone(),
+                message.id.clone(),
+                Duration::ZERO,
+                old_session,
+            );
+            state
+                .app_state_sync
+                .stop_message_playback(DeviceType::System);
+            state
+                .app_state_sync
+                .start_message_playback_with_message(message, DeviceType::System);
+            let new_session = state.app_state_sync.get_playback_control().session_id;
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            let playback = state.app_state_sync.get_playback_control();
+            assert!(playback.is_playing);
+            assert_eq!(playback.session_id, new_session);
+        });
+    }
+
+    #[test]
+    fn stopped_or_replaced_folder_ignores_stale_completion() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_app, state) = test_app_state();
+        let first = test_message("first", "First");
+        let next = test_message("next", "Next");
+        let replacement = test_message("replacement", "Replacement");
+        *state.app_state_sync.messages.lock().unwrap() = vec![first.clone(), next.clone()];
+        *state.app_state_sync.message_tree.lock().unwrap() = serde_json::json!([{
+            "type": "folder", "id": "folder", "name": "Folder", "children": [
+                { "type": "message", "id": first.id, "message": first },
+                { "type": "message", "id": next.id, "message": next }
+            ]
+        }]);
+        runtime.block_on(async {
+            for command in ["message-complete", "clear-active-message"] {
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        "play-folder",
+                        serde_json::json!({ "folderId": "folder" }),
+                    )),
+                )
+                .await;
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command("stop-message", serde_json::json!({}))),
+                )
+                .await;
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({ "messageId": "first" }),
+                    )),
+                )
+                .await;
+                assert!(!state.app_state_sync.get_playback_control().is_playing);
+                assert!(state
+                    .app_state_sync
+                    .folder_playback_queue
+                    .lock()
+                    .unwrap()
+                    .is_none());
+
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        "play-folder",
+                        serde_json::json!({ "folderId": "folder" }),
+                    )),
+                )
+                .await;
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        "trigger-message",
+                        serde_json::to_value(&replacement).unwrap(),
+                    )),
+                )
+                .await;
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command(
+                        command,
+                        serde_json::json!({ "messageId": "first" }),
+                    )),
+                )
+                .await;
+                assert_eq!(
+                    state
+                        .app_state_sync
+                        .get_playback_control()
+                        .current_message
+                        .unwrap()
+                        .id,
+                    "replacement"
+                );
+                assert!(state
+                    .app_state_sync
+                    .folder_playback_queue
+                    .lock()
+                    .unwrap()
+                    .is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn configuration_load_clears_absent_or_null_active_preset() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_app, state) = test_app_state();
+        runtime.block_on(async {
+            for config in [
+                serde_json::json!({}),
+                serde_json::json!({ "activeVisualizationPreset": null }),
+            ] {
+                *state
+                    .app_state_sync
+                    .active_visualization_preset
+                    .lock()
+                    .unwrap() = Some("old-preset".to_owned());
+                handle_command(
+                    State(state.clone()),
+                    Json(test_command("load-configuration", config)),
+                )
+                .await;
+                assert!(state
+                    .app_state_sync
+                    .get_state()
+                    .active_visualization_preset
+                    .is_none());
+            }
+        });
     }
 
     #[test]
@@ -2660,15 +2839,6 @@ mod tests {
                 "Network timeout",
             ];
 
-            let _codes = vec![
-                "BAD_REQUEST",
-                "NOT_FOUND",
-                "FORBIDDEN",
-                "INTERNAL_ERROR",
-                "FOLDER_NOT_FOUND",
-                "RESOURCE_RESOLUTION_ERROR",
-            ];
-
             let paths = vec![
                 "/invalid/path",
                 "/nonexistent/folder",
@@ -2952,18 +3122,16 @@ mod tests {
                 let video_extensions = ["mp4", "mov", "webm", "m4v", "avi", "mkv"];
                 let mut found_files = Vec::new();
 
-                for entry_result in entries {
-                    if let Ok(entry) = entry_result {
-                        let entry_path = entry.path();
-                        if entry_path.is_file() {
-                            if let Some(ext) = entry_path.extension() {
-                                let ext_str = ext.to_string_lossy().to_lowercase();
-                                if image_extensions.contains(&ext_str.as_str())
-                                    || video_extensions.contains(&ext_str.as_str())
-                                {
-                                    if let Some(path_str) = entry_path.to_str() {
-                                        found_files.push(path_str.to_string());
-                                    }
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_file() {
+                        if let Some(ext) = entry_path.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            if image_extensions.contains(&ext_str.as_str())
+                                || video_extensions.contains(&ext_str.as_str())
+                            {
+                                if let Some(path_str) = entry_path.to_str() {
+                                    found_files.push(path_str.to_string());
                                 }
                             }
                         }
@@ -2972,7 +3140,7 @@ mod tests {
 
                 // Verify that we found the expected number of files
                 // (should match the number of test files we created)
-                TestResult::from_bool(found_files.len() > 0)
+                TestResult::from_bool(!found_files.is_empty())
             }
             Err(_) => TestResult::failed(),
         }
@@ -3059,17 +3227,15 @@ mod tests {
 
         match std::fs::read_dir(path) {
             Ok(entries) => {
-                for entry_result in entries {
-                    if let Ok(entry) = entry_result {
-                        let entry_path = entry.path();
-                        if entry_path.is_file() {
-                            if let Some(ext) = entry_path.extension() {
-                                let ext_str = ext.to_string_lossy().to_lowercase();
-                                if image_extensions.contains(&ext_str.as_str())
-                                    || video_extensions.contains(&ext_str.as_str())
-                                {
-                                    found_media_files += 1;
-                                }
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_file() {
+                        if let Some(ext) = entry_path.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            if image_extensions.contains(&ext_str.as_str())
+                                || video_extensions.contains(&ext_str.as_str())
+                            {
+                                found_media_files += 1;
                             }
                         }
                     }

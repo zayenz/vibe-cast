@@ -48,6 +48,10 @@ interface E2EConfigResponse {
   activeSessionId?: string | null;
 }
 
+// The backend fixes this flag at startup. Retain explicit disabled responses
+// per server for this document's lifetime; URL-based test sessions still override it.
+const disabledE2EBases = new Set<string>();
+
 declare global {
   interface Window {
     __VIBECAST_E2E_CONTEXT__?: E2EClientContext | null;
@@ -141,6 +145,9 @@ export async function discoverE2EContext(
   if (!effectiveBase) {
     return null;
   }
+  if (disabledE2EBases.has(effectiveBase)) {
+    return null;
+  }
 
   try {
     const response = await fetch(`${effectiveBase}/api/e2e/config`, {
@@ -151,6 +158,10 @@ export async function discoverE2EContext(
     }
 
     const config = await response.json() as E2EConfigResponse;
+    if (config.enabled === false) {
+      disabledE2EBases.add(effectiveBase);
+      return null;
+    }
     if (!config.enabled || !config.activeSessionId) {
       return null;
     }
