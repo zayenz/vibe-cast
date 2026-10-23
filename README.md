@@ -52,6 +52,27 @@ Registered in `src/plugins/visualizations/registry.ts`:
 - Photo Slideshow
 - Transition Demo
 
+The immersive collection adds seven music-reactive scenes:
+
+| Scene | Variations |
+| --- | --- |
+| Forest Flight | Golden woodland, moonlit mycelium, emerald rainforest |
+| Dream Fractal | Botanical dream, liquid recursion, prismatic cathedral |
+| Spectral Lines | Glowing ribbons, resonance tunnel, aurora curtain |
+| Circuit Flight | Obsidian, copper, violet electronics flyovers |
+| Ocean Drift | Coral gardens, kelp cathedral, bioluminescent deep |
+| Cloud Flight | Golden hour, afternoon, rose dusk, moonlight |
+| Aurora Voyage | Midnight alpine, alien dunes, frozen violet |
+
+Each has speed, music response, world variation, and quality controls, plus scene-specific
+parameters. They animate without music; bass, mids, and treble add motion and light when audio
+is available. Existing saved configurations can add them through a new visualization preset
+in Settings. New configurations include all seven.
+
+For browser development, run `npm run dev` and open `/scene-lab` for a preview with simulated
+music. See [the scene renderer notes](src/plugins/visualizations/immersive/README.md) for the
+shader contract and browser checks.
+
 ## Message Text Styles
 
 Registered in `src/plugins/textStyles/registry.ts`:

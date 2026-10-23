@@ -130,6 +130,7 @@ const RangeControl: React.FC<RangeControlProps> = ({
       </div>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}
@@ -156,6 +157,7 @@ const ColorControl: React.FC<ColorControlProps> = ({ label, value, onChange }) =
       <div className="flex items-center gap-2">
         <input
           type="color"
+          aria-label={label}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="w-8 h-8 rounded-lg border border-zinc-700 cursor-pointer bg-transparent"
@@ -180,6 +182,7 @@ const SelectControl: React.FC<SelectControlProps> = ({ label, value, options, on
         {label}
       </label>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-orange-500 outline-none transition-colors"
@@ -207,6 +210,8 @@ const BooleanControl: React.FC<BooleanControlProps> = ({ label, value, onChange 
         {label}
       </label>
       <button
+        aria-label={label}
+        aria-pressed={value}
         onClick={() => onChange(!value)}
         className={`relative w-12 h-6 rounded-full transition-colors ${
           value ? 'bg-orange-500' : 'bg-zinc-700'

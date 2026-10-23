@@ -14,6 +14,13 @@ import { MushroomsPlugin } from './MushroomsPlugin';
 import { YouTubePlugin } from './YouTubePlugin';
 import { PhotoSlideshowPlugin } from './PhotoSlideshowPlugin';
 import { TransitionDemoPlugin } from './TransitionDemoPlugin';
+import { ForestFlightPlugin } from './ForestFlightPlugin';
+import { DreamFractalPlugin } from './DreamFractalPlugin';
+import { SpectralLinesPlugin } from './SpectralLinesPlugin';
+import { CircuitFlightPlugin } from './CircuitFlightPlugin';
+import { OceanDriftPlugin } from './OceanDriftPlugin';
+import { CloudFlightPlugin } from './CloudFlightPlugin';
+import { AuroraVoyagePlugin } from './AuroraVoyagePlugin';
 
 /**
  * All registered visualization plugins
@@ -24,6 +31,13 @@ export const visualizationRegistry: VisualizationPlugin[] = [
   WavesPlugin,
   ParticlesPlugin,
   MushroomsPlugin,
+  ForestFlightPlugin,
+  DreamFractalPlugin,
+  SpectralLinesPlugin,
+  CircuitFlightPlugin,
+  OceanDriftPlugin,
+  CloudFlightPlugin,
+  AuroraVoyagePlugin,
   YouTubePlugin,
   PhotoSlideshowPlugin,
   TransitionDemoPlugin,

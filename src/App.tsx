@@ -6,6 +6,7 @@ import "./App.css";
 const ControlPlaneRouter = lazy(() => import("./components/ControlPlaneRouter").then(module => ({ default: module.ControlPlaneRouter })));
 const VisualizerWindow = lazy(() => import("./components/VisualizerWindow").then(module => ({ default: module.VisualizerWindow })));
 const RemoteControl = lazy(() => import("./components/RemoteControl").then(module => ({ default: module.RemoteControl })));
+const SceneLab = import.meta.env.DEV ? lazy(() => import('./plugins/visualizations/immersive/SceneLab')) : null;
 
 function App() {
   const [view, setView] = useState<"loading" | "viz" | "control" | "remote">("loading");
@@ -47,6 +48,10 @@ function App() {
   );
 
   // Render based on the determined view
+  if (SceneLab && window.location.pathname === '/scene-lab') {
+    return <Suspense fallback={LoadingScreen}><SceneLab /></Suspense>;
+  }
+
   if (view === "loading") {
     return LoadingScreen;
   }

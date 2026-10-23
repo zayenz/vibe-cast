@@ -272,7 +272,28 @@ impl AppStateSync {
             }
         ]);
 
-        let default_viz_presets = vec![
+        let mut default_viz_presets: Vec<VisualizationPreset> = [
+            ("forest-flight", "Forest Flight", "TreePine"),
+            ("dream-fractal", "Dream Fractal", "Eye"),
+            ("spectral-lines", "Spectral Lines", "Radio"),
+            ("circuit-flight", "Circuit Flight", "Zap"),
+            ("ocean-drift", "Ocean Drift", "Waves"),
+            ("cloud-flight", "Cloud Flight", "Cloud"),
+            ("aurora-voyage", "Aurora Voyage", "Moon"),
+        ]
+        .into_iter()
+        .map(|(id, name, icon)| VisualizationPreset {
+            id: format!("{id}-default"),
+            name: name.to_string(),
+            visualization_id: id.to_string(),
+            // Scene schemas supply defaults; presets store only overrides.
+            settings: serde_json::json!({}),
+            enabled: Some(true),
+            order: None,
+            icon: Some(icon.to_string()),
+        })
+        .collect();
+        default_viz_presets.extend([
             VisualizationPreset {
                 id: "fireplace-default".to_string(),
                 name: "Fireplace".to_string(),
@@ -375,7 +396,7 @@ impl AppStateSync {
                 order: None,
                 icon: None,
             },
-        ];
+        ]);
 
         let default_text_style_presets = vec![TextStylePreset {
             id: "scrolling-capitals-centered".to_string(),

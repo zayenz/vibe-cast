@@ -1,6 +1,13 @@
 {
   "version": 1,
   "visualizationPresets": [
+    { "id": "forest-flight-default", "name": "Forest Flight", "visualizationId": "forest-flight", "settings": {}, "enabled": true, "icon": "TreePine" },
+    { "id": "dream-fractal-default", "name": "Dream Fractal", "visualizationId": "dream-fractal", "settings": {}, "enabled": true, "icon": "Eye" },
+    { "id": "spectral-lines-default", "name": "Spectral Lines", "visualizationId": "spectral-lines", "settings": {}, "enabled": true, "icon": "Radio" },
+    { "id": "circuit-flight-default", "name": "Circuit Flight", "visualizationId": "circuit-flight", "settings": {}, "enabled": true, "icon": "Zap" },
+    { "id": "ocean-drift-default", "name": "Ocean Drift", "visualizationId": "ocean-drift", "settings": {}, "enabled": true, "icon": "Waves" },
+    { "id": "cloud-flight-default", "name": "Cloud Flight", "visualizationId": "cloud-flight", "settings": {}, "enabled": true, "icon": "Cloud" },
+    { "id": "aurora-voyage-default", "name": "Aurora Voyage", "visualizationId": "aurora-voyage", "settings": {}, "enabled": true, "icon": "Moon" },
     {
       "id": "fireplace-default",
       "name": "Fireplace",
