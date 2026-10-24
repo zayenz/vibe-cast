@@ -72,8 +72,9 @@ vec3 scene(vec2 uv) {
       fade=exp(-abs(p.y)*3.0)*(1.0-smoothstep(height,height+0.12,p.y));
       lineLight+=pow(0.5+0.5*sin(p.y*14.0-t*4.0+phase),8.0);
     }
-    float width=max(0.00065,0.65/uResolution.y)*uThickness;
-    float core=exp(-distanceToLine*distanceToLine/(width*width));
+    float requestedWidth=max(0.00065,0.65/uResolution.y)*uThickness;
+    float width=max(requestedWidth,0.65/uResolution.y);
+    float core=exp(-distanceToLine*distanceToLine/(width*width))*requestedWidth/width;
     float halo=exp(-distanceToLine*90.0/uGlow)*0.06*uGlow;
     float haze=exp(-distanceToLine*18.0)*0.005*uGlow;
     vec3 pigment=spectralColor(f);

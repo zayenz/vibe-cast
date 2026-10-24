@@ -1,0 +1,536 @@
+{
+  "baseline": {
+    "revision": "e4b71d048610367cec949a83df651eb64d3b91cb",
+    "dirty": true,
+    "date": "2026-10-24T09:23:34.913Z",
+    "engine": "chromium",
+    "browser": "145.0.7632.6",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "quality": "medium",
+    "warmupSeconds": 3,
+    "sampleSeconds": 3,
+    "music": "SceneLab synthetic FFT",
+    "rounds": 1,
+    "results": [
+      {
+        "id": "forest-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 126,
+        "fps": 41.8702023726448,
+        "p50": 24.899999999999636,
+        "p95": 33,
+        "p99": 33.59999999999991,
+        "over25ms": 0.4126984126984127,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "dream-fractal",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 360,
+        "fps": 119.9760047990402,
+        "p50": 8.300000000000182,
+        "p95": 9.699999999999818,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "spectral-lines",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 360,
+        "fps": 119.96800853105837,
+        "p50": 8.300000000000182,
+        "p95": 9.800000000000182,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "circuit-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 360,
+        "fps": 119.98800119988,
+        "p50": 8.300000000000182,
+        "p95": 9.600000000000364,
+        "p99": 10.300000000000182,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "ocean-drift",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 189,
+        "fps": 62.8032165880242,
+        "p50": 16.699999999999818,
+        "p95": 25.399999999999636,
+        "p99": 33.100000000000364,
+        "over25ms": 0.08465608465608465,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "cloud-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 334,
+        "fps": 111.33333333333333,
+        "p50": 8.300000000000182,
+        "p95": 16.699999999999818,
+        "p99": 17,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "aurora-voyage",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 304,
+        "fps": 100.83253175893066,
+        "p50": 8.399999999999636,
+        "p95": 17,
+        "p99": 18.100000000000364,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      }
+    ],
+    "controlFps": 120.00796733393089,
+    "errors": []
+  },
+  "comparison": {
+    "revision": "e4b71d048610367cec949a83df651eb64d3b91cb",
+    "dirty": true,
+    "date": "2026-10-24T09:42:09.718Z",
+    "engine": "chromium",
+    "browser": "145.0.7632.6",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "quality": "medium",
+    "warmupSeconds": 3,
+    "sampleSeconds": 6,
+    "music": "SceneLab synthetic FFT",
+    "startTime": 0,
+    "rounds": 2,
+    "results": [
+      {
+        "id": "forest-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 377,
+        "fps": 62.83333333333334,
+        "p50": 16.600000000000364,
+        "p95": 18.100000000000364,
+        "p99": 24.700000000000273,
+        "over25ms": 0.007957559681697613,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "dream-fractal",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 120.01664585934247,
+        "p50": 8.300000000000182,
+        "p95": 9.800000000000182,
+        "p99": 10.200000000000728,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "spectral-lines",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 120.01664585934249,
+        "p50": 8.300000000000182,
+        "p95": 9.799999999999727,
+        "p99": 10.299999999999272,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "circuit-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 119.99467430016976,
+        "p50": 8.300000000000182,
+        "p95": 9.600000000000364,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "ocean-drift",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 554,
+        "fps": 92.20117831108743,
+        "p50": 8.699999999999818,
+        "p95": 17.300000000000182,
+        "p99": 18.099999999999454,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "cloud-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 674,
+        "fps": 112.18188778482383,
+        "p50": 8.300000000000182,
+        "p95": 16.399999999999636,
+        "p99": 17.5,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "aurora-voyage",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 474,
+        "fps": 78.88955462352706,
+        "p50": 14.800000000000182,
+        "p95": 18,
+        "p99": 24.699999999999818,
+        "over25ms": 0.006329113924050633,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "aurora-voyage",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 475,
+        "fps": 79.05335685517426,
+        "p50": 15,
+        "p95": 17.800000000000182,
+        "p99": 23.899999999999636,
+        "over25ms": 0.002105263157894737,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "cloud-flight",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 670,
+        "fps": 111.66108361248604,
+        "p50": 8.300000000001091,
+        "p95": 16.399999999999636,
+        "p99": 17.099999999999454,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "ocean-drift",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 553,
+        "fps": 92.02402942106403,
+        "p50": 8.5,
+        "p95": 17.100000000000364,
+        "p99": 18,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "circuit-flight",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 120.00665778961385,
+        "p50": 8.300000000000182,
+        "p95": 9.700000000000273,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "spectral-lines",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 120.00066574571842,
+        "p50": 8.300000000000182,
+        "p95": 9.599999999999909,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "dream-fractal",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 721,
+        "fps": 120.01065281800327,
+        "p50": 8.300000000000182,
+        "p95": 9.599999999999454,
+        "p99": 10.199999999999818,
+        "over25ms": 0,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "forest-flight",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 371,
+        "fps": 61.65965862819724,
+        "p50": 16.69999999999891,
+        "p95": 23.800000000000182,
+        "p99": 25.399999999999636,
+        "over25ms": 0.026954177897574125,
+        "glError": 0,
+        "visibility": "visible"
+      }
+    ],
+    "controlFps": 120.0199203187251,
+    "errors": []
+  },
+  "forestPixelTolerance": {
+    "revision": "e4b71d048610367cec949a83df651eb64d3b91cb",
+    "dirty": true,
+    "date": "2026-10-24T09:47:01.942Z",
+    "engine": "chromium",
+    "browser": "145.0.7632.6",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "quality": "medium",
+    "warmupSeconds": 3,
+    "sampleSeconds": 6,
+    "music": "SceneLab synthetic FFT",
+    "startTime": 0,
+    "rounds": 1,
+    "results": [
+      {
+        "id": "forest-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 394,
+        "fps": 65.66447785073831,
+        "p50": 16.5,
+        "p95": 18,
+        "p99": 24.099999999999454,
+        "over25ms": 0.0025380710659898475,
+        "glError": 0,
+        "visibility": "visible"
+      }
+    ],
+    "controlFps": 119.98800119987999,
+    "errors": []
+  },
+  "forestLaterTravel": {
+    "revision": "e4b71d048610367cec949a83df651eb64d3b91cb",
+    "dirty": true,
+    "date": "2026-10-24T09:47:29.924Z",
+    "engine": "chromium",
+    "browser": "145.0.7632.6",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "quality": "medium",
+    "warmupSeconds": 3,
+    "sampleSeconds": 6,
+    "music": "SceneLab synthetic FFT",
+    "startTime": 180,
+    "rounds": 2,
+    "results": [
+      {
+        "id": "forest-flight",
+        "round": 0,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 390,
+        "fps": 64.92533586375669,
+        "p50": 16.599999999999454,
+        "p95": 17.900000000000546,
+        "p99": 24.599999999999454,
+        "over25ms": 0.005128205128205128,
+        "glError": 0,
+        "visibility": "visible"
+      },
+      {
+        "id": "forest-flight",
+        "round": 1,
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 391,
+        "fps": 65.07772710628808,
+        "p50": 16.599999999999454,
+        "p95": 18.100000000000364,
+        "p99": 24.900000000000546,
+        "over25ms": 0.0076726342710997444,
+        "glError": 0,
+        "visibility": "visible"
+      }
+    ],
+    "controlFps": 120.00199173430266,
+    "errors": []
+  },
+  "webkitControl": {
+    "revision": "e4b71d048610367cec949a83df651eb64d3b91cb",
+    "dirty": true,
+    "date": "2026-10-24T09:35:08.617Z",
+    "engine": "webkit",
+    "browser": "26.0",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "quality": "medium",
+    "warmupSeconds": 3,
+    "sampleSeconds": 3,
+    "music": "SceneLab synthetic FFT",
+    "rounds": 1,
+    "results": [
+      {
+        "id": "ocean-drift",
+        "round": 0,
+        "renderer": "Apple GPU",
+        "renderSize": [
+          1193,
+          671
+        ],
+        "frames": 90,
+        "fps": 29.990003332222592,
+        "p50": 33,
+        "p95": 35,
+        "p99": 39,
+        "over25ms": 1,
+        "glError": 0,
+        "visibility": "visible"
+      }
+    ],
+    "controlFps": 29.940119760479043,
+    "errors": []
+  },
+  "notes": [
+    "Summary metrics; rerunning the profiling script produces raw frame intervals.",
+    "Baseline: three seconds per scene. Comparison: two six-second rounds in alternating order.",
+    "Comparison precedes the final forest pixel-footprint tolerance adjustment; its follow-up measurements are included separately.",
+    "WebKit headless is capped at 30 fps here, including on a blank page."
+  ]
+}

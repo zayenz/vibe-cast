@@ -75,12 +75,13 @@ vec3 scene(vec2 uv) {
     hit=circuitMap(samplePoint);
     if(hit.x<0.003+0.00012*t){found=true;break;}
     // Clip travel at cell edges without treating those edges as surfaces in lighting.
-    float boundary=1.6-max(abs(mod(samplePoint.x+1.6,3.2)-1.6),abs(mod(samplePoint.z+1.6,3.2)-1.6));
-    t+=max(0.012,min(hit.x,max(0.025,boundary+0.02))*0.85);
+    t+=min(max(0.008,hit.x*0.85),cellExit(samplePoint.xz,rd.xz,3.2));
   }
+  if(!found && rd.y<-0.01){t=-ro.y/rd.y;found=t<42.0;hit=vec2(0.0);}
   vec3 p=ro+rd*t;
   if(found && t<42.0) {
-    vec3 n=circuitNormal(p);
+    vec3 n=hit.y<0.5?vec3(0,1,0):circuitNormal(p);
+    float footprint=t/(uResolution.y*0.88*max(abs(dot(n,rd)),0.12));
     vec2 cell=floor((p.xz+1.6)/3.2);
     vec2 q=mod(p.xz+1.6,3.2)-1.6;
     float rnd=hash21(cell+uSeed*0.73);
@@ -101,11 +102,12 @@ vec3 scene(vec2 uv) {
       float horizontal=abs(fract((lane.y+step(0.8,lane.x)*0.12)*6.0)-0.5)/6.0;
       float vertical=abs(fract((lane.x+step(0.8,lane.y)*0.12)*6.0)-0.5)/6.0;
       float d=min(max(horizontal,0.94-lane.x),max(vertical,1.06-lane.y));
-      float trace=1.0-smoothstep(0.009,0.024,d);
+      float aa=max(0.007,footprint*0.7);
+      float trace=1.0-smoothstep(0.016-aa,0.016+aa,d);
       vec2 viaQ=mod(p.xz+0.08,0.4)-0.2;
       float via=abs(length(viaQ)-0.035);
-      float vias=(1.0-smoothstep(0.006,0.016,via))*step(1.12,max(lane.x,lane.y));
-      float grain=hash21(floor(p.xz*180.0));
+      float vias=(1.0-smoothstep(0.011-aa,0.011+aa,via))*smoothstep(1.10,1.14,max(lane.x,lane.y));
+      float grain=mix(hash21(floor(p.xz*180.0)),0.5,smoothstep(0.002,0.008,footprint));
       base=mix(vec3(0.003,0.008,0.009)*(0.8+grain*0.4),copper*0.07,max(trace,vias));
       emission=tint*(trace*0.3+exp(-max(0.0,d)*55.0)*0.10)*(0.06+pulse)*uTraceGlow;
       emission+=tint*vias*0.16*(0.3+uTreble);
@@ -118,6 +120,7 @@ vec3 scene(vec2 uv) {
         float edge=1.0-smoothstep(0.015,0.045,abs(max(abs(q.x)/0.73,abs(q.y)/0.84)-1.0));
         vec2 tile=abs(fract(q*8.0)-0.5);
         float etch=(1.0-smoothstep(0.02,0.06,min(tile.x,tile.y)))*step(max(abs(q.x),abs(q.y)),0.52);
+        etch=mix(etch,0.12*step(max(abs(q.x),abs(q.y)),0.52),smoothstep(0.008,0.035,footprint));
         base+=vec3(0.008)*etch*top;
         float chipPulse=0.22+uMid*0.65+uBass*0.25+uPulse*0.7;
         emission=tint*(edge*0.5+etch*0.035)*top*chipPulse*uTraceGlow;

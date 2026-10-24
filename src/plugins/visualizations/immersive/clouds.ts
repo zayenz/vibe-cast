@@ -4,17 +4,24 @@ import { cloudSettings } from '../CloudFlightPlugin';
 export const cloudScene: SceneDefinition = {
   id: 'cloud-flight', name: 'Cloud Flight', settings: cloudSettings,
   fragment: `
-float cloudDensity(vec3 p) {
+float cloudDensity(vec3 p,float footprint) {
   float envelope=smoothstep(1.6,2.8,p.y)*(1.0-smoothstep(5.0+uBillow*2.0,8.3+uBillow*2.0,p.y));
   if(envelope<0.001) return 0.0;
   vec3 q=p*vec3(0.19,0.32/uBillow,0.19)+vec3(uSeed*3.3,0.0,uTime*0.018);
   float broad=noise(q);
-  float shape=broad*0.62+noise(q*2.07+7.3)*0.25+noise(q*4.11+13.7)*0.13;
+  // Filter octaves smaller than the integration step. Shadows need only the broad shape.
+  float mediumDetail=1.0-smoothstep(0.20,0.75,footprint*0.8);
+  float fineDetail=1.0-smoothstep(0.20,0.75,footprint*1.65);
+  float mediumNoise=0.5;
+  if(mediumDetail>0.01) mediumNoise=mix(0.5,noise(q*4.11+13.7),mediumDetail);
+  float shape=broad*0.62+noise(q*2.07+7.3)*0.25+mediumNoise*0.13;
   float height=(p.y-4.3)/(2.5+uBillow);
   float d=shape-(0.64-uCoverage*0.27)-height*height*0.18;
   if(d<0.0) return 0.0;
-  d-=0.055*noise(q*8.4+uTime*0.025);
-  return smoothstep(0.005,0.18,d)*envelope*1.8;
+  float erosion=0.5;
+  if(fineDetail>0.01) erosion=mix(0.5,noise(q*8.4+uTime*0.025),fineDetail);
+  d-=0.055*erosion;
+  return smoothstep(0.005,0.21,d)*envelope*1.8;
 }
 
 vec3 scene(vec2 uv) {
@@ -56,9 +63,9 @@ vec3 scene(vec2 uv) {
     vec3 p=ro+rd*t;
     if(p.y<1.6 || p.y>top+0.1) break;
     float dt=(0.20+t*0.015)*(1.25-uQuality*0.15);
-    float density=cloudDensity(p)*(1.0-smoothstep(65.0,110.0,t));
+    float density=cloudDensity(p,max(dt*0.6,t/uResolution.y))*(1.0-smoothstep(65.0,110.0,t));
     if(density>0.005){
-      float lightDensity=cloudDensity(p+sunDir*1.0)+cloudDensity(p+sunDir*2.7)*0.6;
+      float lightDensity=cloudDensity(p+sunDir*1.0,1.2)+cloudDensity(p+sunDir*2.7,1.2)*0.6;
       float light=exp(-lightDensity*2.5);
       float rim=pow(1.0-clamp(density,0.0,1.0),3.0)*pow(sunDot,8.0)*uSilver;
       vec3 ambient=mix(vec3(0.045,0.065,0.13),vec3(0.13,0.18,0.29),smoothstep(2.0,9.0,p.y));

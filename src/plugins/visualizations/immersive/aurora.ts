@@ -66,33 +66,32 @@ vec3 scene(vec2 uv) {
   vec3 sky=auroraSky(rd,ro);
   vec3 color=sky;
   float t=0.1;
-  float d=10.0;
   bool found=false;
-  float limit=96.0+uQuality*16.0;
+  float limit=64.0+uQuality*16.0;
   if(rd.y<0.22) {
-    for(int i=0;i<128;i++) {
-      if(float(i)>=limit || t>90.0)break;
+    // A height field is not a distance field. Ordered samples bracket its first
+    // crossing, including upward rays grazing mountain peaks at the horizon.
+    float previousT=0.0;
+    for(int i=0;i<96;i++) {
+      if(float(i)>=limit)break;
+      float fraction=float(i)/(limit-1.0);
+      t=0.1+72.0*fraction*fraction;
       vec3 p=ro+rd*t;
-      d=p.y-terrain(p.xz);
-      if(d<0.018+0.0005*t){found=true;break;}
-      t+=max(0.025,d*0.45);
-    }
-    // Grazing rays can exhaust their march budget above a shallow valley. A bounded
-    // root solve against the height field closes those gaps without inventing a hit.
-    if(!found && rd.y<0.0) {
-      float lo=0.0;
-      float hi=min(160.0,(ro.y-0.1*uTerrainHeight)/(-rd.y));
-      if(ro.y+rd.y*hi-terrain((ro+rd*hi).xz)<0.0) {
-        for(int j=0;j<14;j++) {
+      if(p.y<=terrain(p.xz)) {
+        float lo=previousT;
+        float hi=t;
+        for(int j=0;j<8;j++) {
           float middle=(lo+hi)*0.5;
           vec3 point=ro+rd*middle;
           if(point.y>terrain(point.xz))lo=middle;else hi=middle;
         }
         t=(lo+hi)*0.5;
         found=true;
+        break;
       }
+      previousT=t;
     }
-    if(found && t<160.0) {
+    if(found) {
       vec3 p=ro+rd*t;
       vec3 n=terrainNormal(p);
       float moon=max(0.0,dot(n,normalize(vec3(-0.5,0.6,0.7))));
@@ -111,7 +110,7 @@ vec3 scene(vec2 uv) {
       color+=reflected*uCurtainIntensity*0.18*pow(1.0-max(dot(n,-rd),0.0),2.0);
       vec3 haze=vec3(0.005,0.009,0.022);
       color=mix(color,haze,1.0-exp(-t*0.025));
-      color=mix(color,sky,smoothstep(48.0,82.0,t));
+      color=mix(color,sky,smoothstep(48.0,68.0,t));
     }
   }
   return color;

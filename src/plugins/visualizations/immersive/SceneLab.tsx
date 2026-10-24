@@ -10,7 +10,8 @@ export default function SceneLab() {
   const initial = new URLSearchParams(window.location.search).get('scene');
   const [id, setId] = useState(initial || scenes[0].id);
   const plugin = scenes.find(scene => scene.id === id) || scenes[0];
-  const [settings, setSettings] = useState(() => getDefaultsFromSchema(plugin.settingsSchema));
+  const [settings, setSettings] = useState(() => ({ ...getDefaultsFromSchema(plugin.settingsSchema),
+    __previewTime: Number(new URLSearchParams(window.location.search).get('time')) || 0 } as Record<string, unknown>));
   const [music, setMusic] = useState(false);
   const [dim, setDim] = useState(1);
   const [audio, setAudio] = useState<number[]>([]);
@@ -45,6 +46,7 @@ export default function SceneLab() {
       <p style={{ fontSize: 13, marginBottom: 16 }}>{plugin.description}</p>
       <label style={{ display: 'block', marginBottom: 16 }}><input type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Simulated music</label>
       <label style={{ display: 'block', marginBottom: 16 }}>Brightness <input aria-label="Brightness" type="range" min="0" max="1" step="0.05" value={dim} onChange={event => setDim(Number(event.target.value))} /></label>
+      <label style={{ display: 'block', marginBottom: 16 }}>Jump ahead · {String(settings.__previewTime ?? 0)} s <input aria-label="Preview time" type="range" min="0" max="600" step="1" value={Number(settings.__previewTime ?? 0)} onChange={event => setSettings(previous => ({ ...previous, __previewTime: Number(event.target.value) }))} /></label>
       <SettingsRenderer schema={plugin.settingsSchema} values={settings} onChange={(key, value) => setSettings(previous => ({ ...previous, [key]: value }))} />
     </aside>}
   </main>;

@@ -12,6 +12,21 @@ uniform float uPulse;
 uniform float uSpectrum[32];
 uniform float uDim;
 const float PI = 3.14159265359;
+float filterWidth(float value) {
+#ifdef HAS_DERIVATIVES
+  return max(fwidth(value),0.0001);
+#else
+  return 2.0/uResolution.y;
+#endif
+}
+// Distance along a ray to the next repeated-cell boundary. This is a traversal
+// limit, never a surface distance: keep it out of normals and occlusion queries.
+float cellExit(vec2 p, vec2 direction, float size) {
+  vec2 local=mod(p+size*0.5,size);
+  vec2 edge=mix(local,size-local,step(vec2(0.0),direction));
+  vec2 crossing=edge/max(abs(direction),vec2(0.00001));
+  return min(crossing.x,crossing.y)+0.002;
+}
 mat2 rot(float a) { float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
 float hash11(float n) { return fract(sin(n*127.1)*43758.5453123); }
 float hash21(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123); }

@@ -53,9 +53,14 @@ vec3 scene(vec2 uv) {
     float irisAngle=atan(cell.y,cell.x);
     float ribPhase=chamber*(20.0+fi*2.2)+sin(irisAngle*(8.0+fi))*0.65;
     float ribs=pow(0.5+0.5*sin(ribPhase-phase*2.0),7.0);
-    float lace=pow(0.5+0.5*sin(irisAngle*(18.0+fi*4.0)+chamber*16.0+phase),10.0);
+    float lacePhase=irisAngle*(18.0+fi*4.0)+chamber*16.0+phase;
+    float lace=pow(0.5+0.5*sin(lacePhase),10.0);
+    // Integrate subpixel ribs toward their mean instead of letting them sparkle.
+    ribs=mix(ribs,0.2095,smoothstep(0.7,2.5,filterWidth(ribPhase)));
+    lace=mix(lace,0.1762,smoothstep(0.7,2.5,filterWidth(lacePhase)));
     float eyeRadius=0.28+0.07*sin(phase+petal*1.5)+0.025*uBass;
-    float rim=exp(-abs(chamber-eyeRadius)*26.0);
+    float ridgeWidth=max(1.0/26.0,filterWidth(chamber-eyeRadius)*0.65);
+    float rim=exp(-abs(chamber-eyeRadius)/ridgeWidth)*(1.0/26.0)/ridgeWidth;
     float membrane=exp(-abs(chamber-eyeRadius-0.12)*8.0);
     float pupil=1.0-smoothstep(0.055,0.16,chamber);
     float hue=fi*0.17+radius*0.13+chamber*0.26+morph*0.08+seed*0.03;

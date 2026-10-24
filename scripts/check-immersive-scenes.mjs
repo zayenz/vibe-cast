@@ -51,6 +51,15 @@ try {
     const muted = await sample();
     assert.equal(muted.energy, 0, `${id}: zero music response must suppress audio`);
     await page.getByRole('checkbox', { name: 'Simulated music' }).uncheck();
+    // Exercise distant procedural cells, not just the opening camera position.
+    for (const time of [60, 180, 600]) {
+      await page.getByRole('slider', { name: 'Preview time', exact: true }).fill(String(time));
+      await sample();
+      const frame = await sample();
+      assert.equal(frame.time, time, `${id}: preview time did not reach shader`);
+      assert.equal(frame.error, 0, `${id}/${time}s: WebGL error`);
+      assert.ok(frame.max > 20 && frame.max - frame.min > 15, `${id}/${time}s: blank or flat image`);
+    }
     // All palettes/habitats/formations should render, including each quality level.
     const selects = page.locator('aside select').filter({ hasNot: page.locator('option[value="forest-flight"]') });
     for (const select of await selects.all()) {
@@ -73,7 +82,7 @@ try {
     assert.ok((await sample()).pixels <= 361000, `${id}: low-quality pixel budget exceeded`);
     await page.setViewportSize({ width: 480, height: 320 });
     assert.equal(await page.getByRole('alert').count(), 0, `${id}: renderer error overlay`);
-    console.log(`${id}: render, variations, audio, dim, pause, resize passed`);
+    console.log(`${id}: render, travel positions, variations, audio, dim, pause, resize passed`);
   }
 
   // Force actual GPU context loss and restoration on the final mounted scene.
